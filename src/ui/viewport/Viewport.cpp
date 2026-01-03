@@ -4,6 +4,7 @@
 #include "../../core/sketch/SketchRenderer.h"
 #include "../../core/sketch/Sketch.h"
 #include "../../core/sketch/tools/SketchToolManager.h"
+#include "../../app/document/Document.h"
 #include "../viewcube/ViewCube.h"
 #include "../theme/ThemeManager.h"
 
@@ -158,42 +159,44 @@ void Viewport::paintGL() {
     // Ensure viewport is set correctly with correct device pixel ratio
     const qreal ratio = devicePixelRatio();
     glViewport(0, 0, static_cast<GLsizei>(m_width * ratio), static_cast<GLsizei>(m_height * ratio));
-    
+
     // Clear to background color
     glClearColor(m_backgroundColor.redF(), m_backgroundColor.greenF(), m_backgroundColor.blueF(), m_backgroundColor.alphaF());
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
-    
+
     // Reset depth test state
     glEnable(GL_DEPTH_TEST);
     glDepthFunc(GL_LESS);
-    
+
     float aspectRatio = static_cast<float>(m_width) / static_cast<float>(m_height);
     QMatrix4x4 projection = m_camera->projectionMatrix(aspectRatio);
     QMatrix4x4 view = m_camera->viewMatrix();
     QMatrix4x4 viewProjection = projection * view;
-    
+
     // Render grid
     m_grid->render(viewProjection, m_camera->distance(), m_camera->position());
 
-    // Render sketch if in sketch mode
+    // Calculate pixel scale for sketch rendering
+    double pixelScale = 1.0;
+    float dist = m_camera->distance();
+    float fov = m_camera->fov();
+
+    if (m_camera->projectionType() == render::Camera3D::ProjectionType::Orthographic) {
+        double worldHeight = static_cast<double>(m_camera->orthoScale());
+        pixelScale = worldHeight / (static_cast<double>(m_height) * ratio);
+    } else {
+        double halfFov = qDegreesToRadians(fov * 0.5f);
+        double worldHeight = 2.0 * static_cast<double>(dist) * std::tan(halfFov);
+        pixelScale = worldHeight / (static_cast<double>(m_height) * ratio);
+    }
+
+    if (pixelScale <= 0.0) {
+        pixelScale = 1.0;
+    }
+
+    // Render sketch(es)
     if (m_inSketchMode && m_activeSketch && m_sketchRenderer) {
-        double pixelScale = 1.0;
-        float dist = m_camera->distance();
-        float fov = m_camera->fov();
-
-        if (m_camera->projectionType() == render::Camera3D::ProjectionType::Orthographic) {
-            double worldHeight = static_cast<double>(m_camera->orthoScale());
-            pixelScale = worldHeight / (static_cast<double>(m_height) * ratio);
-        } else {
-            double halfFov = qDegreesToRadians(fov * 0.5f);
-            double worldHeight = 2.0 * static_cast<double>(dist) * std::tan(halfFov);
-            pixelScale = worldHeight / (static_cast<double>(m_height) * ratio);
-        }
-
-        if (pixelScale <= 0.0) {
-            pixelScale = 1.0;
-        }
-
+        // In sketch mode: render only the active sketch with tool preview
         const auto& plane = m_activeSketch->getPlane();
         QVector3D target = m_camera->target();
         sketch::Vec3d target3d{target.x(), target.y(), target.z()};
@@ -215,6 +218,44 @@ void Viewport::paintGL() {
         }
 
         m_sketchRenderer->render(view, projection);
+    } else if (m_document && m_sketchRenderer) {
+        // Not in sketch mode: render all sketches from document
+        auto sketchIds = m_document->getSketchIds();
+        for (const auto& id : sketchIds) {
+            sketch::Sketch* sketch = m_document->getSketch(id);
+            if (!sketch) continue;
+
+            // Bind this sketch to the renderer temporarily
+            m_sketchRenderer->setSketch(sketch);
+
+            // Only rebuild geometry when dirty (not every frame)
+            if (m_documentSketchesDirty) {
+                m_sketchRenderer->updateGeometry();
+            }
+
+            const auto& plane = sketch->getPlane();
+            QVector3D target = m_camera->target();
+            sketch::Vec3d target3d{target.x(), target.y(), target.z()};
+            sketch::Vec2d center = plane.toSketch(target3d);
+
+            sketch::Viewport sketchViewport;
+            sketchViewport.center = center;
+            sketchViewport.size = {
+                static_cast<double>(m_width) * ratio * pixelScale,
+                static_cast<double>(m_height) * ratio * pixelScale
+            };
+            sketchViewport.zoom = pixelScale > 0.0 ? 1.0 / pixelScale : 1.0;
+            m_sketchRenderer->setViewport(sketchViewport);
+            m_sketchRenderer->setPixelScale(pixelScale);
+
+            m_sketchRenderer->render(view, projection);
+        }
+
+        // Clear dirty flag after processing all sketches
+        m_documentSketchesDirty = false;
+
+        // Unbind sketch after rendering
+        m_sketchRenderer->setSketch(nullptr);
     }
 }
 
@@ -538,6 +579,9 @@ void Viewport::exitSketchMode() {
         m_sketchRenderer->setSketch(nullptr);
     }
 
+    // Mark document sketches dirty for rebuild
+    m_documentSketchesDirty = true;
+
     // Restore camera to previous state
     m_camera->setPosition(m_savedCameraPosition);
     m_camera->setTarget(m_savedCameraTarget);
@@ -709,6 +753,25 @@ void Viewport::deactivateTool() {
     if (m_toolManager) {
         m_toolManager->deactivateTool();
     }
+}
+
+void Viewport::setDocument(app::Document* document) {
+    m_document = document;
+    m_documentSketchesDirty = true;
+
+    // Connect to document signals to mark geometry dirty
+    if (m_document) {
+        connect(m_document, &app::Document::sketchAdded, this, [this]() {
+            m_documentSketchesDirty = true;
+            update();
+        });
+        connect(m_document, &app::Document::sketchRemoved, this, [this]() {
+            m_documentSketchesDirty = true;
+            update();
+        });
+    }
+
+    update();
 }
 
 } // namespace ui

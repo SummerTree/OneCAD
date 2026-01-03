@@ -3,12 +3,16 @@
 
 #include <QMainWindow>
 #include <memory>
+#include <string>
 
 class QLabel;
 class QSlider;
 class QEvent;
 
 namespace onecad {
+namespace app {
+    class Document;
+}
 namespace core::sketch {
     class Sketch;
 }
@@ -58,8 +62,11 @@ private:
     ModelNavigator* m_navigator = nullptr;
     ContextToolbar* m_toolbar = nullptr;
 
-    // Sketch state
-    std::unique_ptr<core::sketch::Sketch> m_currentSketch;
+    // Document model (owns all sketches)
+    std::unique_ptr<app::Document> m_document;
+
+    // Active editing state
+    std::string m_activeSketchId;  // Currently editing sketch ID (empty if not in sketch mode)
     
     // Status bar labels
     QLabel* m_toolStatus = nullptr;

@@ -3,6 +3,7 @@
 #include "../viewport/Viewport.h"
 #include "../../render/Camera3D.h"
 #include "../../core/sketch/Sketch.h"
+#include "../../app/document/Document.h"
 #include "../navigator/ModelNavigator.h"
 #include "../toolbar/ContextToolbar.h"
 
@@ -18,6 +19,7 @@
 #include <QHBoxLayout>
 #include <QWidget>
 #include <QEvent>
+#include <QInputDialog>
 
 namespace onecad {
 namespace ui {
@@ -29,12 +31,23 @@ MainWindow::MainWindow(QWidget* parent)
     resize(1280, 800);
     setMinimumSize(800, 600);
 
+    // Create document model (no Qt parent - unique_ptr manages lifetime)
+    m_document = std::make_unique<app::Document>();
+
     applyTheme();
     setupMenuBar();
     setupToolBar();
     setupViewport();
     setupNavigatorOverlay();
     setupStatusBar();
+
+    // Connect document signals to navigator
+    connect(m_document.get(), &app::Document::sketchAdded,
+            m_navigator, &ModelNavigator::onSketchAdded);
+    connect(m_document.get(), &app::Document::sketchRemoved,
+            m_navigator, &ModelNavigator::onSketchRemoved);
+    connect(m_document.get(), &app::Document::sketchRenamed,
+            m_navigator, &ModelNavigator::onSketchRenamed);
 
     loadSettings();
 }
@@ -168,6 +181,9 @@ void MainWindow::setupViewport() {
     m_viewport = new Viewport(this);
     setCentralWidget(m_viewport);
 
+    // Set document for rendering sketches in 3D mode
+    m_viewport->setDocument(m_document.get());
+
     connect(m_viewport, &Viewport::mousePositionChanged,
             this, &MainWindow::onMousePositionChanged);
     connect(m_viewport, &Viewport::sketchModeChanged,
@@ -268,12 +284,62 @@ void MainWindow::onNewSketch() {
         onExitSketch();
     }
 
-    // Create new sketch on XY plane (default)
-    m_currentSketch = std::make_unique<core::sketch::Sketch>();
+    // Show plane selection dialog
+    QStringList planes;
+    planes << tr("XY Plane (Top)") << tr("XZ Plane (Front)") << tr("YZ Plane (Right)");
+
+    bool ok;
+    int selectedIndex = 0;
+    QString selectedPlane = QInputDialog::getItem(this,
+        tr("Select Sketch Plane"),
+        tr("Choose a plane for the new sketch:"),
+        planes, 0, false, &ok);
+
+    if (!ok) {
+        return; // User cancelled
+    }
+
+    // Find selected index (avoids comparing translated strings)
+    selectedIndex = planes.indexOf(selectedPlane);
+    if (selectedIndex < 0) {
+        selectedIndex = 0; // Default to XY if not found
+    }
+
+    // Determine which plane was selected by index
+    core::sketch::SketchPlane plane;
+    QString planeName;
+    switch (selectedIndex) {
+        case 0:
+            plane = core::sketch::SketchPlane::XY();
+            planeName = "XY";
+            break;
+        case 1:
+            plane = core::sketch::SketchPlane::XZ();
+            planeName = "XZ";
+            break;
+        case 2:
+        default:
+            plane = core::sketch::SketchPlane::YZ();
+            planeName = "YZ";
+            break;
+    }
+
+    // Create new sketch on selected plane
+    auto sketch = std::make_unique<core::sketch::Sketch>(plane);
+
+    // Add to document (document takes ownership)
+    m_activeSketchId = m_document->addSketch(std::move(sketch));
+
+    // Get pointer to sketch for editing
+    core::sketch::Sketch* sketchPtr = m_document->getSketch(m_activeSketchId);
+    if (!sketchPtr) {
+        m_activeSketchId.clear();
+        return;
+    }
 
     // Enter sketch mode
-    m_viewport->enterSketchMode(m_currentSketch.get());
-    m_toolStatus->setText(tr("Sketch Mode - XY Plane"));
+    m_viewport->enterSketchMode(sketchPtr);
+    m_toolStatus->setText(tr("Sketch Mode - %1 Plane").arg(planeName));
 
     // Update toolbar context
     m_toolbar->setContext(ContextToolbar::Context::Sketch);
@@ -282,17 +348,28 @@ void MainWindow::onNewSketch() {
 void MainWindow::onExitSketch() {
     if (!m_viewport->isInSketchMode()) return;
 
+    // Exit sketch mode but keep sketch in document
     m_viewport->exitSketchMode();
-    m_currentSketch.reset();
+
+    // Clear active sketch ID (we're no longer editing)
+    m_activeSketchId.clear();
 
     m_toolStatus->setText(tr("Ready"));
     m_toolbar->setContext(ContextToolbar::Context::Default);
+
+    // Trigger viewport update to show sketch in 3D view
+    m_viewport->update();
 }
 
 void MainWindow::onSketchModeChanged(bool inSketchMode) {
-    if (inSketchMode && m_currentSketch) {
+    core::sketch::Sketch* activeSketch = nullptr;
+    if (!m_activeSketchId.empty()) {
+        activeSketch = m_document->getSketch(m_activeSketchId);
+    }
+
+    if (inSketchMode && activeSketch) {
         // Update DOF display
-        int dof = m_currentSketch->getDegreesOfFreedom();
+        int dof = activeSketch->getDegreesOfFreedom();
         m_dofStatus->setText(tr("DOF: %1").arg(dof));
 
         // Color code DOF

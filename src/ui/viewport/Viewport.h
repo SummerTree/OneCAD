@@ -9,6 +9,9 @@
 #include <memory>
 
 namespace onecad {
+namespace app {
+    class Document;
+}
 namespace render {
     class Camera3D;
     class Grid3D;
@@ -51,6 +54,9 @@ public:
     // Tool management
     core::sketch::tools::SketchToolManager* toolManager() const;
     core::sketch::Vec2d screenToSketch(const QPoint& screenPos) const;
+
+    // Document access (for rendering all sketches in 3D mode)
+    void setDocument(app::Document* document);
 
 signals:
     void mousePositionChanged(double x, double y, double z);
@@ -113,6 +119,10 @@ private:
     // Sketch mode
     core::sketch::Sketch* m_activeSketch = nullptr;
     bool m_inSketchMode = false;
+
+    // Document for rendering all sketches
+    app::Document* m_document = nullptr;
+    bool m_documentSketchesDirty = true;  // Track when geometry needs rebuild
     float m_savedCameraAngle = 45.0f;  // Store camera angle before sketch mode
     QVector3D m_savedCameraPosition;
     QVector3D m_savedCameraTarget;

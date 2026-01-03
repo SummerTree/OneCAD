@@ -2,6 +2,9 @@
 #define ONECAD_UI_NAVIGATOR_MODELNAVIGATOR_H
 
 #include <QWidget>
+#include <QString>
+#include <unordered_map>
+#include <string>
 
 class QTreeWidget;
 class QTreeWidgetItem;
@@ -32,6 +35,13 @@ public:
 signals:
     void itemSelected(const QString& itemId);
     void itemDoubleClicked(const QString& itemId);
+    void editSketchRequested(const QString& sketchId);
+
+public slots:
+    // Document model integration
+    void onSketchAdded(const QString& id);
+    void onSketchRemoved(const QString& id);
+    void onSketchRenamed(const QString& id, const QString& newName);
 
 private slots:
     void onItemClicked(QTreeWidgetItem* item, int column);
@@ -51,6 +61,12 @@ private:
     QTreeWidgetItem* m_bodiesRoot = nullptr;
     QTreeWidgetItem* m_sketchesRoot = nullptr;
     bool m_collapsed = false;
+
+    // Map sketch IDs to tree items
+    std::unordered_map<std::string, QTreeWidgetItem*> m_sketchItems;
+
+    // Counter for unique sketch naming
+    unsigned int m_sketchCounter = 0;
 };
 
 } // namespace ui

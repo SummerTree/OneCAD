@@ -162,7 +162,64 @@ void ModelNavigator::onItemClicked(QTreeWidgetItem* item, int column) {
 void ModelNavigator::onItemDoubleClicked(QTreeWidgetItem* item, int column) {
     Q_UNUSED(column);
     if (item && item != m_bodiesRoot && item != m_sketchesRoot) {
-        emit itemDoubleClicked(item->data(0, Qt::UserRole).toString());
+        QString itemId = item->data(0, Qt::UserRole).toString();
+        emit itemDoubleClicked(itemId);
+
+        // Direct lookup instead of linear iteration
+        std::string stdId = itemId.toStdString();
+        auto it = m_sketchItems.find(stdId);
+        if (it != m_sketchItems.end() && it->second == item) {
+            emit editSketchRequested(itemId);
+        }
+    }
+}
+
+void ModelNavigator::onSketchAdded(const QString& id) {
+    std::string stdId = id.toStdString();
+
+    // Remove placeholder if this is the first sketch
+    if (m_sketchItems.empty() && m_sketchesRoot->childCount() > 0) {
+        QTreeWidgetItem* firstChild = m_sketchesRoot->child(0);
+        if (firstChild && !(firstChild->flags() & Qt::ItemIsSelectable)) {
+            delete firstChild;
+        }
+    }
+
+    // Use monotonically increasing counter for unique naming
+    ++m_sketchCounter;
+
+    // Create new tree item for this sketch
+    auto* item = new QTreeWidgetItem(m_sketchesRoot);
+    item->setText(0, QString("Sketch %1").arg(m_sketchCounter));
+    item->setData(0, Qt::UserRole, id);
+    item->setFlags(item->flags() | Qt::ItemIsSelectable);
+
+    m_sketchItems[stdId] = item;
+    m_sketchesRoot->setExpanded(true);
+}
+
+void ModelNavigator::onSketchRemoved(const QString& id) {
+    std::string stdId = id.toStdString();
+    auto it = m_sketchItems.find(stdId);
+    if (it != m_sketchItems.end()) {
+        delete it->second;
+        m_sketchItems.erase(it);
+    }
+
+    // Add placeholder back if no sketches left
+    if (m_sketchItems.empty()) {
+        auto* placeholder = new QTreeWidgetItem(m_sketchesRoot);
+        placeholder->setText(0, tr("(No sketches)"));
+        placeholder->setFlags(placeholder->flags() & ~Qt::ItemIsSelectable);
+        placeholder->setForeground(0, QColor(128, 128, 128));
+    }
+}
+
+void ModelNavigator::onSketchRenamed(const QString& id, const QString& newName) {
+    std::string stdId = id.toStdString();
+    auto it = m_sketchItems.find(stdId);
+    if (it != m_sketchItems.end()) {
+        it->second->setText(0, newName);
     }
 }
 
