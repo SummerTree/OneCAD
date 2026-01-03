@@ -141,6 +141,16 @@ const QString& ThemeManager::getDarkStyleSheet() {
             background-color: #1e1e1e;
             color: #cccccc;
         }
+        QWidget#NavigatorPanel {
+            background-color: #2d2d30;
+        }
+        QDockWidget,
+        QWidget#ContextToolbar,
+        QWidget#inspectorContainer {
+            background-color: #2d2d30;
+            border: 1px solid #3e3e42;
+            border-radius: 12px;
+        }
         QMenuBar {
             background-color: #2d2d30;
             color: #cccccc;
@@ -176,19 +186,19 @@ const QString& ThemeManager::getDarkStyleSheet() {
         QDockWidget {
             color: #cccccc;
             titlebar-close-icon: none;
-            border: 1px solid #3e3e42;
         }
         QDockWidget::title {
             background-color: #2d2d30;
             padding: 6px;
             border-bottom: 1px solid #3e3e42;
+            border-top-left-radius: 12px;
+            border-top-right-radius: 12px;
         }
         
         /* TreeWidget (Navigator) */
         QTreeWidget {
             background-color: #2d2d30;
             color: #cccccc;
-            border: none;
         }
         QTreeWidget::item:hover {
             background-color: #3e3e42;
@@ -196,15 +206,22 @@ const QString& ThemeManager::getDarkStyleSheet() {
         QTreeWidget::item:selected {
             background-color: #094771;
         }
-        QToolButton#navigatorOverlayButton {
-            background-color: rgba(0, 0, 0, 0.55);
+        QToolButton[sidebarButton="true"] {
+            background-color: #2d2d30;
             color: #f5f5f5;
-            border: 1px solid rgba(255, 255, 255, 0.35);
-            border-radius: 6px;
+            border: 1px solid #3e3e42;
+            border-radius: 10px;
             padding: 0px;
+            min-width: 42px;
+            min-height: 42px;
         }
-        QToolButton#navigatorOverlayButton:hover {
-            background-color: rgba(0, 0, 0, 0.75);
+        QToolButton[sidebarButton="true"]:hover {
+            background-color: #38383d;
+            border: 1px solid #5a5a60;
+        }
+        QToolButton[sidebarButton="true"]:pressed {
+            background-color: #007acc;
+            border: 1px solid #007acc;
         }
 
         /* Inspector */
@@ -246,26 +263,24 @@ const QString& ThemeManager::getDarkStyleSheet() {
         }
 
         /* Toolbar */
-        QToolBar {
-            background-color: #2d2d30;
-            border-bottom: 1px solid #3e3e42;
-            spacing: 4px;
-            padding: 4px;
+        QWidget#ContextToolbar {
+            padding: 0px;
         }
         QToolButton {
-            background-color: transparent;
-            border: 1px solid transparent;
-            border-radius: 4px;
+            background-color: #2d2d30;
+            border: 1px solid #3e3e42;
+            border-radius: 10px;
             padding: 6px 12px;
             color: #cccccc;
             min-width: 60px;
         }
         QToolButton:hover {
-            background-color: #3e3e42;
-            border: 1px solid #555555;
+            background-color: #38383d;
+            border: 1px solid #5a5a60;
         }
         QToolButton:pressed {
             background-color: #007acc;
+            border: 1px solid #007acc;
         }
         /* Scrollbars */
         QScrollBar:vertical {
@@ -319,6 +334,16 @@ const QString& ThemeManager::getLightStyleSheet() {
             background-color: #f3f3f3;
             color: #333333;
         }
+        QWidget#NavigatorPanel {
+            background-color: #f6f6f6;
+        }
+        QDockWidget,
+        QWidget#ContextToolbar,
+        QWidget#inspectorContainer {
+            background-color: #f6f6f6;
+            border: 1px solid #cccccc;
+            border-radius: 12px;
+        }
         QMenuBar {
             background-color: #eeeeee;
             color: #333333;
@@ -356,19 +381,19 @@ const QString& ThemeManager::getLightStyleSheet() {
         QDockWidget {
             color: #333333;
             titlebar-close-icon: none;
-            border: 1px solid #cccccc;
         }
         QDockWidget::title {
             background-color: #eeeeee;
             padding: 6px;
             border-bottom: 1px solid #cccccc;
+            border-top-left-radius: 12px;
+            border-top-right-radius: 12px;
         }
 
         /* TreeWidget (Navigator) */
         QTreeWidget {
             background-color: #ffffff;
             color: #333333;
-            border: none;
         }
         QTreeWidget::item:hover {
             background-color: #f0f0f0;
@@ -377,16 +402,22 @@ const QString& ThemeManager::getLightStyleSheet() {
             background-color: #cce8ff;
             color: #000000;
         }
-        QToolButton#navigatorOverlayButton {
-            background-color: rgba(255, 255, 255, 0.85);
+        QToolButton[sidebarButton="true"] {
+            background-color: #f6f6f6;
             color: #222222;
-            border: 1px solid rgba(0, 0, 0, 0.2);
-            border-radius: 6px;
+            border: 1px solid #cccccc;
+            border-radius: 10px;
             padding: 0px;
+            min-width: 42px;
+            min-height: 42px;
         }
-        QToolButton#navigatorOverlayButton:hover {
-            background-color: rgba(255, 255, 255, 1.0);
-            border: 1px solid rgba(0, 0, 0, 0.35);
+        QToolButton[sidebarButton="true"]:hover {
+            background-color: #ffffff;
+            border: 1px solid #bbbbbb;
+        }
+        QToolButton[sidebarButton="true"]:pressed {
+            background-color: #cce8ff;
+            border: 1px solid #cce8ff;
         }
 
         /* Inspector */
@@ -428,16 +459,13 @@ const QString& ThemeManager::getLightStyleSheet() {
         }
 
         /* Toolbar */
-        QToolBar {
-            background-color: #eeeeee;
-            border-bottom: 1px solid #cccccc;
-            spacing: 4px;
-            padding: 4px;
+        QWidget#ContextToolbar {
+            padding: 0px;
         }
         QToolButton {
-            background-color: transparent;
-            border: 1px solid transparent;
-            border-radius: 4px;
+            background-color: #f6f6f6;
+            border: 1px solid #cccccc;
+            border-radius: 10px;
             padding: 6px 12px;
             color: #333333;
             min-width: 60px;
@@ -448,6 +476,7 @@ const QString& ThemeManager::getLightStyleSheet() {
         }
         QToolButton:pressed {
             background-color: #cce8ff;
+            border: 1px solid #cce8ff;
         }
         /* Scrollbars */
         QScrollBar:vertical {

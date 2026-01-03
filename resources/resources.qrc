@@ -1,0 +1,7 @@
+<!DOCTYPE RCC>
+<RCC version="1.0">
+    <qresource prefix="/icons">
+        <file alias="stack.svg">icons/stack.svg</file>
+        <file alias="paper_pencil.svg">icons/paper_pencil.svg</file>
+    </qresource>
+</RCC>

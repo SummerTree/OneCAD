@@ -1,87 +1,103 @@
 #include "ContextToolbar.h"
-#include <QAction>
+#include "../components/SidebarToolButton.h"
+
+#include <QVBoxLayout>
+#include <QSizePolicy>
 
 namespace onecad {
 namespace ui {
 
 ContextToolbar::ContextToolbar(QWidget* parent)
-    : QToolBar(tr("Tools"), parent) {
-    setMovable(false);
-    setIconSize(QSize(24, 24));
-    setToolButtonStyle(Qt::ToolButtonTextUnderIcon);
-    
-    setupDefaultActions();
-    setupSketchActions();
-    updateVisibleActions();
-}
-
-void ContextToolbar::setupDefaultActions() {
-    m_newSketchAction = new QAction(tr("✏️ New Sketch"), this);
-    m_newSketchAction->setToolTip(tr("Create a new sketch (S)"));
-    connect(m_newSketchAction, &QAction::triggered, 
-            this, &ContextToolbar::newSketchRequested);
-    addAction(m_newSketchAction);
-    
-    m_importAction = new QAction(tr("📂 Import"), this);
-    m_importAction->setToolTip(tr("Import STEP file"));
-    connect(m_importAction, &QAction::triggered,
-            this, &ContextToolbar::importRequested);
-    addAction(m_importAction);
-}
-
-void ContextToolbar::setupSketchActions() {
-    addSeparator();
-
-    m_exitSketchAction = new QAction(tr("✓ Done"), this);
-    m_exitSketchAction->setToolTip(tr("Exit sketch mode (Escape)"));
-    connect(m_exitSketchAction, &QAction::triggered,
-            this, &ContextToolbar::exitSketchRequested);
-    addAction(m_exitSketchAction);
-
-    addSeparator();
-
-    m_lineAction = new QAction(tr("📏 Line"), this);
-    m_lineAction->setToolTip(tr("Draw line (L)"));
-    connect(m_lineAction, &QAction::triggered,
-            this, &ContextToolbar::lineToolActivated);
-    addAction(m_lineAction);
-    
-    m_rectangleAction = new QAction(tr("⬜ Rectangle"), this);
-    m_rectangleAction->setToolTip(tr("Draw rectangle (R)"));
-    connect(m_rectangleAction, &QAction::triggered,
-            this, &ContextToolbar::rectangleToolActivated);
-    addAction(m_rectangleAction);
-    
-    m_circleAction = new QAction(tr("⭕ Circle"), this);
-    m_circleAction->setToolTip(tr("Draw circle (C)"));
-    connect(m_circleAction, &QAction::triggered,
-            this, &ContextToolbar::circleToolActivated);
-    addAction(m_circleAction);
-    
-    m_arcAction = new QAction(tr("◠ Arc"), this);
-    m_arcAction->setToolTip(tr("Draw arc (A)"));
-    addAction(m_arcAction);
+    : QWidget(parent) {
+    setObjectName("ContextToolbar");
+    setAttribute(Qt::WA_StyledBackground, true);
+    setFixedWidth(64);
+    // Use Preferred size policy to allow layout to calculate proper height
+    setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Preferred);
+    setupUi();
+    setContext(Context::Default);
 }
 
 void ContextToolbar::setContext(Context context) {
-    if (m_currentContext == context) return;
+    if (m_currentContext == context) {
+        return;
+    }
+
     m_currentContext = context;
-    updateVisibleActions();
+    updateVisibleButtons();
+    emit contextChanged();
 }
 
-void ContextToolbar::updateVisibleActions() {
-    bool inSketch = (m_currentContext == Context::Sketch);
+void ContextToolbar::setupUi() {
+    m_layout = new QVBoxLayout(this);
+    m_layout->setContentsMargins(8, 12, 8, 12);  // Better padding
+    m_layout->setSpacing(8);  // Clearer visual separation
+    m_layout->setAlignment(Qt::AlignHCenter);  // Center buttons horizontally
 
-    // Default actions - hide New Sketch button when in sketch mode
-    m_newSketchAction->setVisible(!inSketch);
-    m_importAction->setVisible(m_currentContext == Context::Default);
+    m_layout->addStretch();
 
-    // Sketch actions only in sketch mode
-    m_exitSketchAction->setVisible(inSketch);
-    m_lineAction->setVisible(inSketch);
-    m_rectangleAction->setVisible(inSketch);
-    m_circleAction->setVisible(inSketch);
-    m_arcAction->setVisible(inSketch);
+    m_newSketchButton = SidebarToolButton::fromSvgIcon(":/icons/paper_pencil.svg", tr("Create a new sketch (S)"), this);
+    connect(m_newSketchButton, &SidebarToolButton::clicked, this, &ContextToolbar::newSketchRequested);
+
+    m_importButton = new SidebarToolButton("📂", tr("Import STEP file"), this);
+    connect(m_importButton, &SidebarToolButton::clicked, this, &ContextToolbar::importRequested);
+
+    m_exitSketchButton = new SidebarToolButton("✓", tr("Exit sketch mode (Esc)"), this);
+    connect(m_exitSketchButton, &SidebarToolButton::clicked, this, &ContextToolbar::exitSketchRequested);
+
+    m_lineButton = new SidebarToolButton("📏", tr("Draw line (L)"), this);
+    connect(m_lineButton, &SidebarToolButton::clicked, this, &ContextToolbar::lineToolActivated);
+
+    m_rectangleButton = new SidebarToolButton("⬜", tr("Draw rectangle (R)"), this);
+    connect(m_rectangleButton, &SidebarToolButton::clicked, this, &ContextToolbar::rectangleToolActivated);
+
+    m_circleButton = new SidebarToolButton("⭕", tr("Draw circle (C)"), this);
+    connect(m_circleButton, &SidebarToolButton::clicked, this, &ContextToolbar::circleToolActivated);
+
+    m_arcButton = new SidebarToolButton("◠", tr("Draw arc (A)"), this);
+
+    m_layout->addWidget(m_newSketchButton);
+    m_layout->addWidget(m_importButton);
+    m_layout->addWidget(m_exitSketchButton);
+    m_layout->addWidget(m_lineButton);
+    m_layout->addWidget(m_rectangleButton);
+    m_layout->addWidget(m_circleButton);
+    m_layout->addWidget(m_arcButton);
+    m_layout->addStretch();
+
+    updateVisibleButtons();
+    
+    // Force size recalculation based on layout and content
+    adjustSize();
+}
+
+void ContextToolbar::updateVisibleButtons() {
+    const bool inSketch = (m_currentContext == Context::Sketch);
+
+    if (m_newSketchButton) {
+        m_newSketchButton->setVisible(!inSketch);
+    }
+    if (m_importButton) {
+        m_importButton->setVisible(m_currentContext == Context::Default);
+    }
+    if (m_exitSketchButton) {
+        m_exitSketchButton->setVisible(inSketch);
+    }
+    if (m_lineButton) {
+        m_lineButton->setVisible(inSketch);
+    }
+    if (m_rectangleButton) {
+        m_rectangleButton->setVisible(inSketch);
+    }
+    if (m_circleButton) {
+        m_circleButton->setVisible(inSketch);
+    }
+    if (m_arcButton) {
+        m_arcButton->setVisible(inSketch);
+    }
+    
+    // Recalculate size when button visibility changes
+    adjustSize();
 }
 
 } // namespace ui

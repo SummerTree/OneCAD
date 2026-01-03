@@ -18,8 +18,11 @@
 #include <QSettings>
 #include <QHBoxLayout>
 #include <QWidget>
+#include <QSizePolicy>
 #include <QEvent>
 #include <QInputDialog>
+
+#include "../components/SidebarToolButton.h"
 
 namespace onecad {
 namespace ui {
@@ -36,9 +39,8 @@ MainWindow::MainWindow(QWidget* parent)
 
     applyTheme();
     setupMenuBar();
-    setupToolBar();
     setupViewport();
-    setupNavigatorOverlay();
+    setupToolBar();
     setupStatusBar();
 
     // Connect document signals to navigator
@@ -163,8 +165,14 @@ void MainWindow::setupMenuBar() {
 }
 
 void MainWindow::setupToolBar() {
-    m_toolbar = new ContextToolbar(this);
-    addToolBar(Qt::TopToolBarArea, m_toolbar);
+    if (!m_viewport) {
+        return;
+    }
+
+    m_toolbar = new ContextToolbar(m_viewport);
+    m_toolbar->setContext(ContextToolbar::Context::Default);
+    m_toolbar->show();
+    positionToolbarOverlay();
 
     connect(m_toolbar, &ContextToolbar::newSketchRequested,
             this, &MainWindow::onNewSketch);
@@ -173,13 +181,81 @@ void MainWindow::setupToolBar() {
     connect(m_toolbar, &ContextToolbar::importRequested,
             this, &MainWindow::onImport);
 
+    if (m_viewport) {
+        connect(m_toolbar, &ContextToolbar::lineToolActivated,
+                m_viewport, &Viewport::activateLineTool);
+        connect(m_toolbar, &ContextToolbar::circleToolActivated,
+                m_viewport, &Viewport::activateCircleTool);
+        connect(m_toolbar, &ContextToolbar::rectangleToolActivated,
+                m_viewport, &Viewport::activateRectangleTool);
+    }
+
+    // Reposition toolbar when context changes (button visibility affects height)
+    connect(m_toolbar, &ContextToolbar::contextChanged,
+            this, &MainWindow::positionToolbarOverlay);
+
     // Tool activation signals - connect after m_viewport is created
     // These are connected in setupViewport() after viewport exists
 }
 
+void MainWindow::setupNavigatorOverlayButton() {
+    if (!m_viewport || !m_navigator) {
+        return;
+    }
+
+    m_navigatorOverlayButton = SidebarToolButton::fromSvgIcon(
+        ":/icons/stack.svg", 
+        tr("Toggle navigator"), 
+        m_viewport
+    );
+    m_navigatorOverlayButton->setFixedSize(42, 42);
+
+    connect(m_navigatorOverlayButton, &SidebarToolButton::clicked, this, [this]() {
+        if (m_navigator) {
+            m_navigator->setCollapsed(!m_navigator->isCollapsed());
+        }
+    });
+
+    connect(m_navigator, &ModelNavigator::collapsedChanged, this, [this](bool collapsed) {
+        if (m_navigatorOverlayButton) {
+            positionNavigatorOverlayButton();
+            m_navigatorOverlayButton->setToolTip(collapsed ? tr("Show navigator")
+                                                          : tr("Hide navigator"));
+        }
+    });
+
+    m_navigatorOverlayButton->setVisible(true);
+    m_navigatorOverlayButton->setToolTip(m_navigator->isCollapsed()
+        ? tr("Show navigator")
+        : tr("Hide navigator"));
+    positionNavigatorOverlayButton();
+}
+
+void MainWindow::positionNavigatorOverlayButton() {
+    if (!m_viewport || !m_navigatorOverlayButton) {
+        return;
+    }
+
+    const int margin = 20;
+    m_navigatorOverlayButton->move(margin, margin);
+    m_navigatorOverlayButton->raise();
+}
+
 void MainWindow::setupViewport() {
-    m_viewport = new Viewport(this);
-    setCentralWidget(m_viewport);
+    QWidget* central = new QWidget(this);
+    QHBoxLayout* layout = new QHBoxLayout(central);
+    layout->setContentsMargins(0, 0, 0, 0);
+    layout->setSpacing(0);
+
+    m_navigator = new ModelNavigator(central);
+    m_navigator->setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Expanding);
+
+    m_viewport = new Viewport(central);
+    m_viewport->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
+
+    layout->addWidget(m_navigator);
+    layout->addWidget(m_viewport, 1);
+    setCentralWidget(central);
 
     // Set document for rendering sketches in 3D mode
     m_viewport->setDocument(m_document.get());
@@ -189,36 +265,30 @@ void MainWindow::setupViewport() {
     connect(m_viewport, &Viewport::sketchModeChanged,
             this, &MainWindow::onSketchModeChanged);
 
-    // Connect toolbar tool signals to viewport
-    connect(m_toolbar, &ContextToolbar::lineToolActivated,
-            m_viewport, &Viewport::activateLineTool);
-    connect(m_toolbar, &ContextToolbar::circleToolActivated,
-            m_viewport, &Viewport::activateCircleTool);
-    connect(m_toolbar, &ContextToolbar::rectangleToolActivated,
-            m_viewport, &Viewport::activateRectangleTool);
+    setupNavigatorOverlayButton();
 
     m_viewport->installEventFilter(this);
 }
 
-void MainWindow::setupNavigatorOverlay() {
-    m_navigator = new ModelNavigator(m_viewport);
-    m_navigator->show();
-    m_navigator->raise();
-    positionNavigatorOverlay();
-}
-
-void MainWindow::positionNavigatorOverlay() {
-    if (!m_viewport || !m_navigator) {
+void MainWindow::positionToolbarOverlay() {
+    if (!m_viewport || !m_toolbar) {
         return;
     }
 
     const int margin = 20;
-    m_navigator->move(margin, margin);
+    const int xOffset = margin;
+    const int availableHeight = m_viewport->height();
+    const int toolbarHeight = m_toolbar->height();
+    int yOffset = qMax(margin, (availableHeight - toolbarHeight) / 2);
+
+    m_toolbar->move(xOffset, yOffset);
+    m_toolbar->raise();
 }
 
 bool MainWindow::eventFilter(QObject* obj, QEvent* event) {
     if (obj == m_viewport && event->type() == QEvent::Resize) {
-        positionNavigatorOverlay();
+        positionToolbarOverlay();
+        positionNavigatorOverlayButton();
     }
 
     return QMainWindow::eventFilter(obj, event);

@@ -8,9 +8,8 @@
 
 class QTreeWidget;
 class QTreeWidgetItem;
-class QStackedLayout;
-class QToolButton;
 class QFrame;
+class QPropertyAnimation;
 
 namespace onecad {
 namespace ui {
@@ -36,6 +35,7 @@ signals:
     void itemSelected(const QString& itemId);
     void itemDoubleClicked(const QString& itemId);
     void editSketchRequested(const QString& sketchId);
+    void collapsedChanged(bool collapsed);
 
 public slots:
     // Document model integration
@@ -50,17 +50,16 @@ private slots:
 private:
     void setupUi();
     void createPlaceholderItems();
-    void applyCollapseState();
-    void updateOverlayButtonIcon();
+    void applyCollapseState(bool animate);
 
-    QStackedLayout* m_stack = nullptr;
     QFrame* m_panel = nullptr;
-    QToolButton* m_collapseButton = nullptr;
-    QToolButton* m_expandButton = nullptr;
     QTreeWidget* m_treeWidget = nullptr;
     QTreeWidgetItem* m_bodiesRoot = nullptr;
     QTreeWidgetItem* m_sketchesRoot = nullptr;
     bool m_collapsed = false;
+    QPropertyAnimation* m_widthAnimation = nullptr;
+    int m_expandedWidth = 260;
+    int m_collapsedWidth = 0;
 
     // Map sketch IDs to tree items
     std::unordered_map<std::string, QTreeWidgetItem*> m_sketchItems;

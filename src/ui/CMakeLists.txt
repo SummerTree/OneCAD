@@ -1,5 +1,6 @@
 # UI module - Qt Widgets UI components
 add_library(onecad_ui STATIC
+    components/SidebarToolButton.cpp
     mainwindow/MainWindow.cpp
     theme/ThemeManager.cpp
     viewport/Viewport.cpp
@@ -18,4 +19,5 @@ target_link_libraries(onecad_ui
     Qt6::Gui
     Qt6::Widgets
     Qt6::OpenGLWidgets
+    Qt6::Svg
 )

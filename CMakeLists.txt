@@ -13,7 +13,7 @@ set(CMAKE_AUTOUIC ON)
 # Hint for Homebrew Qt6
 set(CMAKE_PREFIX_PATH "/opt/homebrew/opt/qt" ${CMAKE_PREFIX_PATH})
 
-find_package(Qt6 COMPONENTS Core Gui Widgets OpenGLWidgets REQUIRED)
+find_package(Qt6 COMPONENTS Core Gui Widgets OpenGLWidgets Svg REQUIRED)
 
 # --- Dependencies ---
 
@@ -60,6 +60,7 @@ add_subdirectory(tests)
 
 add_executable(OneCAD 
     src/main.cpp
+    resources/resources.qrc
 )
 
 # --- Linking ---
@@ -72,6 +73,7 @@ target_link_libraries(OneCAD
     Qt6::Gui 
     Qt6::Widgets
     Qt6::OpenGLWidgets
+    Qt6::Svg
     Eigen3::Eigen
     ${OpenCASCADE_LIBRARIES}
 )

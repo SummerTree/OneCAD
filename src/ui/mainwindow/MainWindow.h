@@ -8,6 +8,11 @@
 class QLabel;
 class QSlider;
 class QEvent;
+namespace onecad {
+namespace ui {
+class SidebarToolButton;
+}
+}
 
 namespace onecad {
 namespace app {
@@ -26,8 +31,8 @@ class ContextToolbar;
  * @brief Main application window for OneCAD.
  * 
  * Layout per specification:
- * - Top: Menu bar + Context toolbar
- * - Left: Model navigator (collapsible dock)
+ * - Top: Menu bar
+ * - Left: Docked navigator with floating action sidebar on the viewport
  * - Center: 3D Viewport
  * - Right: Property inspector (collapsible dock)
  * - Bottom: Status bar
@@ -50,10 +55,11 @@ private:
     void setupMenuBar();
     void setupToolBar();
     void setupViewport();
-    void setupNavigatorOverlay();
     void setupStatusBar();
     void applyTheme();
-    void positionNavigatorOverlay();
+    void positionToolbarOverlay();
+    void setupNavigatorOverlayButton();
+    void positionNavigatorOverlayButton();
 
     bool eventFilter(QObject* obj, QEvent* event) override;
 
@@ -61,6 +67,7 @@ private:
     Viewport* m_viewport = nullptr;
     ModelNavigator* m_navigator = nullptr;
     ContextToolbar* m_toolbar = nullptr;
+    SidebarToolButton* m_navigatorOverlayButton = nullptr;
 
     // Document model (owns all sketches)
     std::unique_ptr<app::Document> m_document;

@@ -1,15 +1,13 @@
 #include "ModelNavigator.h"
 #include <QTreeWidget>
 #include <QVBoxLayout>
-#include <QHBoxLayout>
+
 #include <QHeaderView>
-#include <QStackedLayout>
-#include <QToolButton>
 #include <QFrame>
-#include <QLabel>
-#include <QPainter>
-#include <QPixmap>
-#include "../theme/ThemeManager.h"
+
+#include <QSizePolicy>
+#include <QPropertyAnimation>
+#include <QEasingCurve>
 
 namespace onecad {
 namespace ui {
@@ -18,41 +16,24 @@ ModelNavigator::ModelNavigator(QWidget* parent)
     : QWidget(parent) {
     setupUi();
     createPlaceholderItems();
-    updateOverlayButtonIcon();
-    connect(&ThemeManager::instance(), &ThemeManager::themeChanged,
-            this, &ModelNavigator::updateOverlayButtonIcon, Qt::UniqueConnection);
-    applyCollapseState();
+    applyCollapseState(false);
 }
 
 void ModelNavigator::setupUi() {
-    m_stack = new QStackedLayout(this);
-    m_stack->setContentsMargins(0, 0, 0, 0);
+    setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Expanding);
+
+    QVBoxLayout* layout = new QVBoxLayout(this);
+    layout->setContentsMargins(0, 0, 0, 0);
+    layout->setSpacing(0);
 
     m_panel = new QFrame(this);
     m_panel->setObjectName("NavigatorPanel");
-    m_panel->setFrameShape(QFrame::StyledPanel);
-    m_panel->setFrameShadow(QFrame::Raised);
+    m_panel->setFrameShape(QFrame::NoFrame);
+    m_panel->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Expanding);
 
     QVBoxLayout* panelLayout = new QVBoxLayout(m_panel);
     panelLayout->setContentsMargins(10, 10, 10, 10);
     panelLayout->setSpacing(8);
-
-    QWidget* header = new QWidget(m_panel);
-    QHBoxLayout* headerLayout = new QHBoxLayout(header);
-    headerLayout->setContentsMargins(0, 0, 0, 0);
-    headerLayout->setSpacing(6);
-
-    QLabel* title = new QLabel(tr("Navigator"), header);
-    title->setObjectName("NavigatorTitle");
-
-    m_collapseButton = new QToolButton(header);
-    m_collapseButton->setText(tr("Hide"));
-    m_collapseButton->setAutoRaise(true);
-    m_collapseButton->setToolTip(tr("Collapse navigator"));
-
-    headerLayout->addWidget(title);
-    headerLayout->addStretch();
-    headerLayout->addWidget(m_collapseButton);
 
     m_treeWidget = new QTreeWidget(m_panel);
     m_treeWidget->setHeaderHidden(true);
@@ -65,39 +46,20 @@ void ModelNavigator::setupUi() {
     connect(m_treeWidget, &QTreeWidget::itemDoubleClicked,
             this, &ModelNavigator::onItemDoubleClicked);
 
-    panelLayout->addWidget(header);
     panelLayout->addWidget(m_treeWidget, 1);
 
-    m_expandButton = new QToolButton(this);
-    m_expandButton->setObjectName("navigatorOverlayButton");
-    m_expandButton->setText(QString());
-    m_expandButton->setToolTip(tr("Expand navigator"));
-    m_expandButton->setAutoRaise(false);
-    m_expandButton->setToolButtonStyle(Qt::ToolButtonIconOnly);
-    m_expandButton->setFixedSize(36, 36);
-    m_expandButton->setIconSize(QSize(18, 18));
-
-    connect(m_collapseButton, &QToolButton::clicked, this, [this]() {
-        setCollapsed(true);
-    });
-    connect(m_expandButton, &QToolButton::clicked, this, [this]() {
-        setCollapsed(false);
-    });
-
-    m_stack->addWidget(m_panel);
-    m_stack->addWidget(m_expandButton);
-    m_stack->setCurrentWidget(m_panel);
+    layout->addWidget(m_panel);
 }
 
 void ModelNavigator::createPlaceholderItems() {
     // Bodies section
     m_bodiesRoot = new QTreeWidgetItem(m_treeWidget);
-    m_bodiesRoot->setText(0, tr("📦 Bodies"));
+    m_bodiesRoot->setText(0, tr("Bodies"));
     m_bodiesRoot->setExpanded(true);
     
     // Sketches section
     m_sketchesRoot = new QTreeWidgetItem(m_treeWidget);
-    m_sketchesRoot->setText(0, tr("✏️ Sketches"));
+    m_sketchesRoot->setText(0, tr("Sketches"));
     m_sketchesRoot->setExpanded(true);
     
     // Placeholder items (will be populated dynamically later)
@@ -118,38 +80,46 @@ void ModelNavigator::setCollapsed(bool collapsed) {
     }
 
     m_collapsed = collapsed;
-    applyCollapseState();
+    applyCollapseState(true);
+    emit collapsedChanged(m_collapsed);
 }
 
-void ModelNavigator::applyCollapseState() {
-    if (m_collapsed) {
-        m_stack->setCurrentWidget(m_expandButton);
-        setFixedSize(m_expandButton->size());
-    } else {
-        m_stack->setCurrentWidget(m_panel);
-        setFixedSize(260, 320);
+void ModelNavigator::applyCollapseState(bool animate) {
+    const int targetWidth = m_collapsed ? m_collapsedWidth : m_expandedWidth;
+
+    if (!animate) {
+        m_panel->setVisible(!m_collapsed);
+        setMinimumWidth(targetWidth);
+        setMaximumWidth(targetWidth);
+        return;
     }
-}
 
-void ModelNavigator::updateOverlayButtonIcon() {
-    const bool isDark = ThemeManager::instance().isDark();
-    const QColor strokeColor = isDark ? QColor(245, 245, 245) : QColor(34, 34, 34);
+    if (!m_collapsed) {
+        m_panel->setVisible(true);
+    }
 
-    QPixmap pixmap(18, 18);
-    pixmap.fill(Qt::transparent);
+    setMinimumWidth(0);
 
-    QPainter painter(&pixmap);
-    painter.setRenderHint(QPainter::Antialiasing, true);
-    QPen pen(strokeColor, 2, Qt::SolidLine, Qt::RoundCap);
-    painter.setPen(pen);
+    if (m_widthAnimation) {
+        m_widthAnimation->stop();
+        m_widthAnimation->deleteLater();
+    }
 
-    painter.drawLine(QPointF(3, 5), QPointF(15, 5));
-    painter.drawLine(QPointF(3, 9), QPointF(15, 9));
-    painter.drawLine(QPointF(3, 13), QPointF(15, 13));
+    m_widthAnimation = new QPropertyAnimation(this, "maximumWidth", this);
+    m_widthAnimation->setDuration(180);
+    m_widthAnimation->setEasingCurve(QEasingCurve::InOutCubic);
+    m_widthAnimation->setStartValue(width());
+    m_widthAnimation->setEndValue(targetWidth);
 
-    painter.end();
+    connect(m_widthAnimation, &QPropertyAnimation::finished, this, [this, targetWidth]() {
+        if (m_collapsed) {
+            m_panel->setVisible(false);
+        }
+        setMaximumWidth(targetWidth);
+        setMinimumWidth(targetWidth);
+    });
 
-    m_expandButton->setIcon(QIcon(pixmap));
+    m_widthAnimation->start();
 }
 
 void ModelNavigator::onItemClicked(QTreeWidgetItem* item, int column) {

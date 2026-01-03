@@ -1,22 +1,19 @@
 #ifndef ONECAD_UI_TOOLBAR_CONTEXTTOOLBAR_H
 #define ONECAD_UI_TOOLBAR_CONTEXTTOOLBAR_H
 
-#include <QToolBar>
+#include <QWidget>
 
-class QAction;
+class QVBoxLayout;
+namespace onecad {
+namespace ui {
+class SidebarToolButton;
+} // namespace ui
+} // namespace onecad
 
 namespace onecad {
 namespace ui {
 
-/**
- * @brief Context-sensitive toolbar that changes based on selection.
- * 
- * Shows different tools depending on current state:
- * - Nothing selected: New Sketch, Import
- * - In sketch mode: Line, Rectangle, Circle, etc.
- * - Bodies selected: Boolean operations
- */
-class ContextToolbar : public QToolBar {
+class ContextToolbar : public QWidget {
     Q_OBJECT
 
 public:
@@ -35,6 +32,7 @@ public slots:
     void setContext(Context context);
 
 signals:
+    void contextChanged();
     void newSketchRequested();
     void exitSketchRequested();
     void importRequested();
@@ -43,22 +41,18 @@ signals:
     void circleToolActivated();
 
 private:
-    void setupDefaultActions();
-    void setupSketchActions();
-    void updateVisibleActions();
+    void setupUi();
+    void updateVisibleButtons();
 
     Context m_currentContext = Context::Default;
-    
-    // Default context actions
-    QAction* m_newSketchAction = nullptr;
-    QAction* m_importAction = nullptr;
-    
-    // Sketch context actions
-    QAction* m_exitSketchAction = nullptr;
-    QAction* m_lineAction = nullptr;
-    QAction* m_rectangleAction = nullptr;
-    QAction* m_circleAction = nullptr;
-    QAction* m_arcAction = nullptr;
+    QVBoxLayout* m_layout = nullptr;
+    SidebarToolButton* m_newSketchButton = nullptr;
+    SidebarToolButton* m_importButton = nullptr;
+    SidebarToolButton* m_exitSketchButton = nullptr;
+    SidebarToolButton* m_lineButton = nullptr;
+    SidebarToolButton* m_rectangleButton = nullptr;
+    SidebarToolButton* m_circleButton = nullptr;
+    SidebarToolButton* m_arcButton = nullptr;
 };
 
 } // namespace ui
