@@ -166,12 +166,12 @@ const QString& ThemeManager::getDarkStyleSheet() {
             margin: 4px 0px;
         }
         QStatusBar {
-            background-color: #007acc;
-            color: white;
+            background-color: #1f1f1f;
+            color: #ffffff;
             border-top: 1px solid #3e3e42;
         }
         QStatusBar QLabel {
-            color: white;
+            color: #ffffff;
         }
         QDockWidget {
             color: #cccccc;
@@ -346,12 +346,12 @@ const QString& ThemeManager::getLightStyleSheet() {
             margin: 4px 0px;
         }
         QStatusBar {
-            background-color: #007acc;
-            color: white;
+            background-color: #f3f3f3;
+            color: #111111;
             border-top: 1px solid #cccccc;
         }
         QStatusBar QLabel {
-            color: white;
+            color: #111111;
         }
         QDockWidget {
             color: #333333;
