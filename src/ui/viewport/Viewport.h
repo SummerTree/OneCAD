@@ -16,6 +16,7 @@ namespace render {
 
 namespace onecad {
 namespace ui {
+    class ViewCube; // Forward declaration
 
 /**
  * @brief OpenGL 3D viewport with Shapr3D-style navigation.
@@ -59,6 +60,7 @@ protected:
     void mouseMoveEvent(QMouseEvent* event) override;
     void mouseReleaseEvent(QMouseEvent* event) override;
     void wheelEvent(QWheelEvent* event) override;
+    void resizeEvent(QResizeEvent* event) override;
     
     // Touch/gesture events (for trackpad)
     bool event(QEvent* event) override;
@@ -71,6 +73,7 @@ private:
 
     std::unique_ptr<render::Camera3D> m_camera;
     std::unique_ptr<render::Grid3D> m_grid;
+    ViewCube* m_viewCube = nullptr;
     
     // Mouse state
     QPoint m_lastMousePos;

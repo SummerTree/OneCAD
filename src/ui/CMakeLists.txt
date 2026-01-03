@@ -2,6 +2,7 @@
 add_library(onecad_ui STATIC
     mainwindow/MainWindow.cpp
     viewport/Viewport.cpp
+    viewcube/ViewCube.cpp
     navigator/ModelNavigator.cpp
     inspector/PropertyInspector.cpp
     toolbar/ContextToolbar.cpp

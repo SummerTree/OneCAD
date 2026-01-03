@@ -1,6 +1,7 @@
 #include "Viewport.h"
 #include "../../render/Camera3D.h"
 #include "../../render/Grid3D.h"
+#include "../viewcube/ViewCube.h"
 
 #include <QMouseEvent>
 #include <QWheelEvent>
@@ -46,6 +47,19 @@ Viewport::Viewport(QWidget* parent)
 
     m_nativeZoomTimer.start();
     
+    // Setup ViewCube
+    m_viewCube = new ViewCube(this);
+    m_viewCube->setCamera(m_camera.get());
+    
+    // Connect ViewCube -> Viewport
+    connect(m_viewCube, &ViewCube::viewChanged, this, [this]() {
+        update(); // Redraw 3D scene
+        emit cameraChanged(); // Notify others
+    });
+    
+    // Connect Viewport -> ViewCube
+    connect(this, &Viewport::cameraChanged, m_viewCube, &ViewCube::updateRotation);
+    
     // Note: QSurfaceFormat is now set globally in main.cpp
     // This ensures the format is applied BEFORE context creation
 }
@@ -86,6 +100,14 @@ void Viewport::resizeGL(int w, int h) {
     // Handle Retina/High-DPI displays
     const qreal ratio = devicePixelRatio();
     glViewport(0, 0, static_cast<GLsizei>(m_width * ratio), static_cast<GLsizei>(m_height * ratio));
+}
+
+void Viewport::resizeEvent(QResizeEvent* event) {
+    QOpenGLWidget::resizeEvent(event);
+    if (m_viewCube) {
+        // Position top-right with margin
+        m_viewCube->move(width() - m_viewCube->width() - 20, 20);
+    }
 }
 
 void Viewport::paintGL() {
