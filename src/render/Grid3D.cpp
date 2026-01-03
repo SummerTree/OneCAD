@@ -102,16 +102,9 @@ void Grid3D::cleanup() {
 }
 
 float Grid3D::calculateSpacing(float cameraDistance) const {
-    // Per specification section 7.2 - adaptive spacing tiers
-    // Target ~30-50 grid lines visible
-    
-    if (cameraDistance < 20.0f) return 0.1f;
-    if (cameraDistance < 100.0f) return 0.5f;
-    if (cameraDistance < 200.0f) return 1.0f;
-    if (cameraDistance < 1000.0f) return 5.0f;
-    if (cameraDistance < 2000.0f) return 10.0f;
-    if (cameraDistance < 10000.0f) return 50.0f;
-    return 100.0f;
+    // Fixed 10mm grid spacing (per user requirement)
+    (void)cameraDistance; // Unused, kept for API compatibility
+    return 10.0f;
 }
 
 void Grid3D::buildGrid(float spacing, float extent) {
@@ -214,12 +207,13 @@ void Grid3D::buildGrid(float spacing, float extent) {
 
 void Grid3D::render(const QMatrix4x4& viewProjection, float cameraDistance) {
     if (!m_visible || !m_initialized || m_lineCount == 0) return;
-    
-    // Rebuild grid if spacing changed
-    float newSpacing = calculateSpacing(cameraDistance);
-    if (qAbs(newSpacing - m_lastSpacing) > 0.001f) {
-        float extent = cameraDistance * 3.0f;
-        buildGrid(newSpacing, extent);
+
+    // Fixed 10mm spacing - rebuild only if forced (color change)
+    // Extent scales with camera for performance (cull distant lines)
+    float spacing = 10.0f;
+    if (m_lastSpacing < 0.0f) {  // Force rebuild flag
+        float extent = qMax(1000.0f, cameraDistance * 3.0f);
+        buildGrid(spacing, extent);
     }
     
     m_shader->bind();

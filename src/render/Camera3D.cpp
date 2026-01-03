@@ -6,6 +6,11 @@ namespace render {
 
 Camera3D::Camera3D() {
     reset();
+
+    // Initialize ortho scale based on initial perspective state
+    // This ensures first transition to ortho preserves current view scale
+    float halfFovRad = qDegreesToRadians(m_fov * 0.5f);
+    m_orthoScale = distance() * qTan(halfFovRad);
 }
 
 void Camera3D::setPosition(const QVector3D& pos) {
@@ -148,9 +153,93 @@ QMatrix4x4 Camera3D::viewMatrix() const {
     return view;
 }
 
+void Camera3D::setCameraAngle(float degrees) {
+    // Clamp to valid range [0, 120]
+    degrees = qBound(0.0f, degrees, MAX_PERSPECTIVE_FOV);
+
+    // Determine target projection type
+    ProjectionType targetProjection = (degrees < 0.01f) ?
+        ProjectionType::Orthographic :
+        ProjectionType::Perspective;
+
+    // Preserve apparent scale when changing projection or FOV
+    if (targetProjection != m_projectionType) {
+        // === PROJECTION TYPE CHANGE ===
+        float currentDistance = distance();
+
+        if (targetProjection == ProjectionType::Perspective) {
+            // Ortho → Perspective transition
+            // Compute new distance to preserve scale at matching plane
+            // Formula: D_new = S_ortho / tan(θ/2)
+            float targetFov = qMax(degrees, MIN_PERSPECTIVE_FOV);
+            float halfFovRad = qDegreesToRadians(targetFov * 0.5f);
+            float newDistance = m_orthoScale / qTan(halfFovRad);
+
+            // Clamp to safe range
+            newDistance = qBound(MIN_DISTANCE, newDistance, MAX_DISTANCE);
+
+            // Move camera to new distance while keeping target fixed
+            QVector3D dir = forward();
+            m_position = m_target - dir * newDistance;
+
+            m_fov = targetFov;
+        } else {
+            // Perspective → Ortho transition
+            // Compute new ortho scale to preserve apparent size
+            // Formula: S_new = D_curr * tan(θ/2)
+            float halfFovRad = qDegreesToRadians(m_fov * 0.5f);
+            m_orthoScale = currentDistance * qTan(halfFovRad);
+        }
+
+        m_projectionType = targetProjection;
+    } else if (m_projectionType == ProjectionType::Perspective) {
+        // === WITHIN PERSPECTIVE MODE: FOV CHANGE ===
+        // CRITICAL: Must adjust distance to preserve apparent size!
+        // Formula: D₂ = D₁ * tan(θ₁/2) / tan(θ₂/2)
+        // This keeps H_world constant: 2*D*tan(θ/2) = constant
+
+        float targetFov = qMax(degrees, MIN_PERSPECTIVE_FOV);
+
+        if (qAbs(targetFov - m_fov) > 0.01f) {  // Only adjust if FOV actually changed
+            float currentDistance = distance();
+            float oldHalfFovRad = qDegreesToRadians(m_fov * 0.5f);
+            float newHalfFovRad = qDegreesToRadians(targetFov * 0.5f);
+
+            // Compute new distance to keep same visible world height
+            float newDistance = currentDistance * qTan(oldHalfFovRad) / qTan(newHalfFovRad);
+
+            // Clamp to safe range
+            newDistance = qBound(MIN_DISTANCE, newDistance, MAX_DISTANCE);
+
+            // Move camera along view direction
+            QVector3D dir = forward();
+            m_position = m_target - dir * newDistance;
+        }
+
+        m_fov = targetFov;
+    }
+    // Note: Ortho mode has no FOV, so no action needed when staying in ortho
+
+    m_cameraAngle = degrees;
+}
+
 QMatrix4x4 Camera3D::projectionMatrix(float aspectRatio) const {
     QMatrix4x4 projection;
-    projection.perspective(m_fov, aspectRatio, m_nearPlane, m_farPlane);
+
+    if (m_projectionType == ProjectionType::Orthographic) {
+        // Orthographic projection
+        // Scale defines world units per viewport height
+        float halfHeight = m_orthoScale * 0.5f;
+        float halfWidth = halfHeight * aspectRatio;
+
+        projection.ortho(-halfWidth, halfWidth,
+                         -halfHeight, halfHeight,
+                         m_nearPlane, m_farPlane);
+    } else {
+        // Perspective projection
+        projection.perspective(m_fov, aspectRatio, m_nearPlane, m_farPlane);
+    }
+
     return projection;
 }
 

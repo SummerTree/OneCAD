@@ -9,14 +9,24 @@ namespace render {
 
 /**
  * @brief Orbit camera for 3D viewport navigation.
- * 
+ *
  * Uses target/position/up vectors for intuitive control:
  * - Orbit: rotate camera position around target
  * - Pan: move both camera and target in screen space
  * - Zoom: change distance from camera to target
+ *
+ * Supports both orthographic and perspective projection:
+ * - Camera angle 0° = orthographic
+ * - Camera angle >0° = perspective with FOV = angle
+ * - Seamless transitions preserve apparent scale (Shapr3D style)
  */
 class Camera3D {
 public:
+    enum class ProjectionType {
+        Orthographic,
+        Perspective
+    };
+
     Camera3D();
 
     // Position and orientation
@@ -54,10 +64,18 @@ public:
     void setFov(float fov) { m_fov = fov; }
     void setNearPlane(float near) { m_nearPlane = near; }
     void setFarPlane(float far) { m_farPlane = far; }
-    
+
     float fov() const { return m_fov; }
     float nearPlane() const { return m_nearPlane; }
     float farPlane() const { return m_farPlane; }
+
+    // Camera angle control (Shapr3D-style)
+    // 0° = orthographic, >0° = perspective with FOV = angle
+    void setCameraAngle(float degrees);
+    float cameraAngle() const { return m_cameraAngle; }
+
+    ProjectionType projectionType() const { return m_projectionType; }
+    float orthoScale() const { return m_orthoScale; }
 
     // Matrix getters
     QMatrix4x4 viewMatrix() const;
@@ -67,15 +85,21 @@ private:
     QVector3D m_position;
     QVector3D m_target;
     QVector3D m_up;
-    
-    float m_fov = 45.0f;
+
+    // Projection parameters
+    ProjectionType m_projectionType = ProjectionType::Perspective;
+    float m_fov = 45.0f;           // Used in perspective mode
+    float m_orthoScale = 1.0f;     // Used in orthographic mode (world units per pixel)
+    float m_cameraAngle = 45.0f;   // 0° = ortho, >0° = perspective with FOV=angle
     float m_nearPlane = 0.1f;
     float m_farPlane = 100000.0f;
-    
+
     static constexpr float MIN_DISTANCE = 1.0f;
     static constexpr float MAX_DISTANCE = 50000.0f;
     static constexpr float MIN_PITCH = -89.0f;
     static constexpr float MAX_PITCH = 89.0f;
+    static constexpr float MIN_PERSPECTIVE_FOV = 5.0f;  // Minimum FOV to avoid degeneracy
+    static constexpr float MAX_PERSPECTIVE_FOV = 120.0f; // Maximum wide-angle FOV
 };
 
 } // namespace render

@@ -1,6 +1,7 @@
 #include "MainWindow.h"
 #include "../theme/ThemeManager.h"
 #include "../viewport/Viewport.h"
+#include "../../render/Camera3D.h"
 #include "../navigator/ModelNavigator.h"
 #include "../inspector/PropertyInspector.h"
 #include "../toolbar/ContextToolbar.h"
@@ -8,30 +9,38 @@
 #include <QMenuBar>
 #include <QStatusBar>
 #include <QLabel>
+#include <QSlider>
 #include <QApplication>
 #include <QMessageBox>
 #include <QFileDialog>
 #include <QActionGroup>
+#include <QSettings>
+#include <QHBoxLayout>
+#include <QWidget>
 
 namespace onecad {
 namespace ui {
 
 MainWindow::MainWindow(QWidget* parent)
     : QMainWindow(parent) {
-    
+
     setWindowTitle(tr("OneCAD"));
     resize(1280, 800);
     setMinimumSize(800, 600);
-    
+
     applyTheme();
     setupMenuBar();
     setupToolBar();
     setupViewport();
     setupDocks();
     setupStatusBar();
+
+    loadSettings();
 }
 
-MainWindow::~MainWindow() = default;
+MainWindow::~MainWindow() {
+    saveSettings();
+}
 
 void MainWindow::applyTheme() {
     ThemeManager::instance().applyTheme();
@@ -189,15 +198,54 @@ void MainWindow::setupDocks() {
 
 void MainWindow::setupStatusBar() {
     QStatusBar* status = statusBar();
-    
+
     m_toolStatus = new QLabel(tr("Ready"));
     m_toolStatus->setMinimumWidth(150);
     status->addWidget(m_toolStatus);
-    
+
     m_dofStatus = new QLabel(tr("DOF: —"));
     m_dofStatus->setMinimumWidth(80);
     status->addWidget(m_dofStatus);
-    
+
+    // Camera angle control (Shapr3D-style)
+    QWidget* cameraAngleWidget = new QWidget(this);
+    QHBoxLayout* cameraLayout = new QHBoxLayout(cameraAngleWidget);
+    cameraLayout->setContentsMargins(10, 0, 10, 0);
+    cameraLayout->setSpacing(8);
+
+    QLabel* orthoLabel = new QLabel(tr("Orthographic"), cameraAngleWidget);
+    orthoLabel->setStyleSheet("font-size: 10px;");
+
+    m_cameraAngleSlider = new QSlider(Qt::Horizontal, cameraAngleWidget);
+    m_cameraAngleSlider->setRange(0, 90);
+    m_cameraAngleSlider->setValue(45);
+    m_cameraAngleSlider->setFixedWidth(150);
+    m_cameraAngleSlider->setTickPosition(QSlider::TicksBelow);
+    m_cameraAngleSlider->setTickInterval(15);
+
+    QLabel* perspLabel = new QLabel(tr("Perspective"), cameraAngleWidget);
+    perspLabel->setStyleSheet("font-size: 10px;");
+
+    m_cameraAngleLabel = new QLabel(tr("45°"), cameraAngleWidget);
+    m_cameraAngleLabel->setMinimumWidth(35);
+    m_cameraAngleLabel->setAlignment(Qt::AlignCenter);
+
+    cameraLayout->addWidget(orthoLabel);
+    cameraLayout->addWidget(m_cameraAngleSlider);
+    cameraLayout->addWidget(perspLabel);
+    cameraLayout->addWidget(m_cameraAngleLabel);
+
+    status->addPermanentWidget(cameraAngleWidget);
+
+    // Wire slider to camera
+    connect(m_cameraAngleSlider, &QSlider::valueChanged, this, [this](int value) {
+        m_cameraAngleLabel->setText(tr("%1°").arg(value));
+        if (m_viewport && m_viewport->camera()) {
+            m_viewport->camera()->setCameraAngle(static_cast<float>(value));
+            m_viewport->update();
+        }
+    });
+
     m_coordStatus = new QLabel(tr("X: 0.00  Y: 0.00  Z: 0.00"));
     m_coordStatus->setMinimumWidth(200);
     status->addPermanentWidget(m_coordStatus);
@@ -223,6 +271,34 @@ void MainWindow::onMousePositionChanged(double x, double y, double z) {
         .arg(x, 0, 'f', 2)
         .arg(y, 0, 'f', 2)
         .arg(z, 0, 'f', 2));
+}
+
+void MainWindow::loadSettings() {
+    QSettings settings("OneCAD", "OneCAD");
+
+    // Restore camera angle from last session
+    float savedAngle = settings.value("viewport/cameraAngle", 45.0f).toFloat();
+
+    if (m_cameraAngleSlider) {
+        m_cameraAngleSlider->setValue(static_cast<int>(savedAngle));
+    }
+
+    if (m_viewport && m_viewport->camera()) {
+        m_viewport->camera()->setCameraAngle(savedAngle);
+        m_viewport->update();
+    }
+}
+
+void MainWindow::saveSettings() {
+    QSettings settings("OneCAD", "OneCAD");
+
+    // Save current camera angle
+    if (m_viewport && m_viewport->camera()) {
+        float currentAngle = m_viewport->camera()->cameraAngle();
+        settings.setValue("viewport/cameraAngle", currentAngle);
+    }
+
+    settings.sync(); // Force immediate write
 }
 
 } // namespace ui

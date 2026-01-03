@@ -4,6 +4,7 @@
 #include <QMainWindow>
 
 class QLabel;
+class QSlider;
 
 namespace onecad {
 namespace ui {
@@ -53,6 +54,13 @@ private:
     QLabel* m_toolStatus = nullptr;
     QLabel* m_dofStatus = nullptr;
     QLabel* m_coordStatus = nullptr;
+
+    // Camera angle control
+    QLabel* m_cameraAngleLabel = nullptr;
+    QSlider* m_cameraAngleSlider = nullptr;
+
+    void loadSettings();
+    void saveSettings();
 };
 
 } // namespace ui
