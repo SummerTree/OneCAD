@@ -5,6 +5,7 @@
 #include <QMatrix4x4>
 #include <QVector3D>
 #include <QVector2D>
+#include <QPointF>
 #include <QVector>
 
 namespace onecad {
@@ -40,6 +41,15 @@ protected:
     void leaveEvent(QEvent* event) override;
 
 private:
+    struct ProjectionParams {
+        QMatrix4x4 viewRotation;
+        QMatrix4x4 mvp;
+        QPointF center;
+        float viewSize = 1.0f;
+        float scale = 1.0f;
+        bool usePerspective = false;
+    };
+
     enum class ElementType { None, Face, Edge, Corner };
     struct Hit {
         ElementType type = ElementType::None;
@@ -66,8 +76,9 @@ private:
     };
 
     void initGeometry();
+    ProjectionParams buildProjectionParams() const;
     Hit hitTest(const QPoint& pos);
-    QPointF project(const QVector3D& point, const QMatrix4x4& viewRot, float scale);
+    QPointF project(const QVector3D& point, const ProjectionParams& params) const;
     void snapToView(const Hit& hit);
 
     render::Camera3D* m_camera = nullptr;

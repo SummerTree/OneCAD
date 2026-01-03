@@ -402,6 +402,12 @@ void Viewport::resetView() {
     emit cameraChanged();
 }
 
+void Viewport::setCameraAngle(float degrees) {
+    m_camera->setCameraAngle(degrees);
+    update();
+    emit cameraChanged();
+}
+
 void Viewport::toggleGrid() {
     m_grid->setVisible(!m_grid->isVisible());
     update();

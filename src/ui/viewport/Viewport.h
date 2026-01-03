@@ -47,6 +47,7 @@ public slots:
     void setBottomView();
     void setIsometricView();
     void resetView();
+    void setCameraAngle(float degrees);
     void toggleGrid();
     void updateTheme();
 

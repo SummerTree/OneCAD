@@ -140,20 +140,100 @@ void ViewCube::initGeometry() {
     addEdge(0, 4); addEdge(1, 5); addEdge(2, 6); addEdge(3, 7);
 }
 
-QPointF ViewCube::project(const QVector3D& point, const QMatrix4x4& viewRot, float scale) {
-    QVector3D transformed = viewRot * (m_cubeRotation * point);
-    float x = transformed.x() * scale + width() / 2.0f;
-    float y = -transformed.y() * scale + height() / 2.0f; 
+ViewCube::ProjectionParams ViewCube::buildProjectionParams() const {
+    ProjectionParams params;
+    if (!m_camera) {
+        return params;
+    }
+
+    const float viewSize = qMax(1.0f, static_cast<float>(std::min(width(), height())));
+    params.center = QPointF(width() * 0.5f, height() * 0.5f);
+    params.viewSize = viewSize;
+    const float baseScale = (viewSize * 0.5f) * m_scale;
+
+    QMatrix4x4 viewRot = m_camera->viewMatrix();
+    viewRot.setColumn(3, QVector4D(0, 0, 0, 1));
+    params.viewRotation = viewRot;
+
+    float maxExtent = 0.0f;
+    QVector<QVector3D> rotatedVertices;
+    rotatedVertices.reserve(m_vertices.size());
+
+    for (const auto& vertex : m_vertices) {
+        QVector3D rotated = viewRot * (m_cubeRotation * vertex.pos);
+        rotatedVertices.append(rotated);
+        float extent = qMax(qAbs(rotated.x()), qAbs(rotated.y()));
+        maxExtent = qMax(maxExtent, extent);
+    }
+
+    if (maxExtent > 1e-4f) {
+        params.scale = baseScale / maxExtent;
+    } else {
+        params.scale = baseScale;
+    }
+
+    if (m_camera->projectionType() == render::Camera3D::ProjectionType::Perspective) {
+        params.usePerspective = true;
+        const float fov = m_camera->fov();
+        const float halfFovRad = qDegreesToRadians(fov * 0.5f);
+        const float tanHalfFov = qTan(halfFovRad);
+        const float scaleDenom = qMax(1e-4f, m_scale * tanHalfFov);
+        float distance = 1.0f / scaleDenom;
+        constexpr float kCubeRadius = 1.7320508f; // sqrt(3)
+        constexpr float kDistancePadding = 0.02f;
+
+        float requiredDistance = distance;
+        for (const auto& rotated : rotatedVertices) {
+            float extent = qMax(qAbs(rotated.x()), qAbs(rotated.y()));
+            float needed = rotated.z() + extent / scaleDenom;
+            requiredDistance = qMax(requiredDistance, needed);
+        }
+
+        distance = qMax(requiredDistance, kCubeRadius + kDistancePadding);
+
+        QMatrix4x4 projection;
+        const float nearPlane = 0.1f;
+        const float farPlane = distance + kCubeRadius + 5.0f;
+        projection.perspective(fov, 1.0f, nearPlane, farPlane);
+
+        QMatrix4x4 translate;
+        translate.setToIdentity();
+        translate.translate(0.0f, 0.0f, -distance);
+
+        params.mvp = projection * translate * viewRot * m_cubeRotation;
+    }
+
+    return params;
+}
+
+QPointF ViewCube::project(const QVector3D& point, const ProjectionParams& params) const {
+    if (!params.usePerspective) {
+        QVector3D transformed = params.viewRotation * (m_cubeRotation * point);
+        float x = transformed.x() * params.scale + params.center.x();
+        float y = -transformed.y() * params.scale + params.center.y();
+        return QPointF(x, y);
+    }
+
+    QVector4D clip = params.mvp * QVector4D(point, 1.0f);
+    if (qFuzzyIsNull(clip.w())) {
+        return params.center;
+    }
+
+    const float invW = 1.0f / clip.w();
+    const float ndcX = clip.x() * invW;
+    const float ndcY = clip.y() * invW;
+    const float halfSize = params.viewSize * 0.5f;
+
+    float x = params.center.x() + ndcX * halfSize;
+    float y = params.center.y() - ndcY * halfSize;
     return QPointF(x, y);
 }
 
 ViewCube::Hit ViewCube::hitTest(const QPoint& pos) {
     if (!m_camera) return {};
 
-    QMatrix4x4 view = m_camera->viewMatrix();
-    view.setColumn(3, QVector4D(0, 0, 0, 1));
     QVector3D forward = m_camera->forward().normalized();
-    float scale = (std::min(width(), height()) / 2.0f) * m_scale;
+    const ProjectionParams params = buildProjectionParams();
     auto rotatePoint = [this](const QVector3D& point) {
         return m_cubeRotation * point;
     };
@@ -172,7 +252,7 @@ ViewCube::Hit ViewCube::hitTest(const QPoint& pos) {
         if (!isPointVisible(v.pos)) {
             continue;
         }
-        QPointF p = project(v.pos, view, scale);
+        QPointF p = project(v.pos, params);
         float dist = QVector2D(QPointF(pos) - p).length();
         if (dist < 12.0f) { // 12px radius
             return {ElementType::Corner, v.id};
@@ -193,8 +273,8 @@ ViewCube::Hit ViewCube::hitTest(const QPoint& pos) {
         if (!isPointVisible(mid)) {
             continue;
         }
-        QPointF p1 = project(m_vertices[e.v1].pos, view, scale);
-        QPointF p2 = project(m_vertices[e.v2].pos, view, scale);
+        QPointF p1 = project(m_vertices[e.v1].pos, params);
+        QPointF p2 = project(m_vertices[e.v2].pos, params);
         
         // Distance from point to segment
         QVector2D p(pos);
@@ -249,7 +329,7 @@ ViewCube::Hit ViewCube::hitTest(const QPoint& pos) {
     for (const auto& rf : visibleFaces) {
         QPolygonF poly;
         for (int k = 0; k < 4; ++k) {
-            poly << project(m_vertices[m_faces[rf.index].vIndices[k]].pos, view, scale);
+            poly << project(m_vertices[m_faces[rf.index].vIndices[k]].pos, params);
         }
         if (poly.containsPoint(pos, Qt::OddEvenFill)) {
             return {ElementType::Face, rf.index};
@@ -266,10 +346,8 @@ void ViewCube::paintEvent(QPaintEvent* event) {
     QPainter painter(this);
     painter.setRenderHint(QPainter::Antialiasing);
 
-    QMatrix4x4 view = m_camera->viewMatrix();
-    view.setColumn(3, QVector4D(0, 0, 0, 1));
     QVector3D forward = m_camera->forward().normalized();
-    float scale = (std::min(width(), height()) / 2.0f) * m_scale;
+    const ProjectionParams params = buildProjectionParams();
     auto rotatePoint = [this](const QVector3D& point) {
         return m_cubeRotation * point;
     };
@@ -304,7 +382,7 @@ void ViewCube::paintEvent(QPaintEvent* event) {
         const CubeFace& face = m_faces[rf.index];
         QPolygonF poly;
         for (int k = 0; k < 4; ++k) {
-            poly << project(m_vertices[face.vIndices[k]].pos, view, scale);
+            poly << project(m_vertices[face.vIndices[k]].pos, params);
         }
 
         bool isHovered = (m_hoveredHit.type == ElementType::Face && m_hoveredHit.index == face.id);
@@ -321,7 +399,7 @@ void ViewCube::paintEvent(QPaintEvent* event) {
         painter.drawPath(path);
 
         // Text
-        QPointF center = project((m_vertices[face.vIndices[0]].pos + m_vertices[face.vIndices[2]].pos) * 0.5f, view, scale);
+        QPointF center = project((m_vertices[face.vIndices[0]].pos + m_vertices[face.vIndices[2]].pos) * 0.5f, params);
         painter.setPen(textColor);
         QFont font = painter.font();
         font.setBold(true);
@@ -338,10 +416,10 @@ void ViewCube::paintEvent(QPaintEvent* event) {
         const QVector3D yAxisEnd(-1.0f, 1.0f, -1.0f);
         const QVector3D zAxisEnd(-1.0f, -1.0f, 1.0f);
 
-        QPointF o = project(origin, view, scale);
-        QPointF x = project(xAxisEnd, view, scale);
-        QPointF y = project(yAxisEnd, view, scale);
-        QPointF z = project(zAxisEnd, view, scale);
+        QPointF o = project(origin, params);
+        QPointF x = project(xAxisEnd, params);
+        QPointF y = project(yAxisEnd, params);
+        QPointF z = project(zAxisEnd, params);
 
         painter.setBrush(Qt::NoBrush);
         painter.setPen(QPen(QColor(220, 80, 80, 191), 2, Qt::SolidLine, Qt::RoundCap));
@@ -366,8 +444,8 @@ void ViewCube::paintEvent(QPaintEvent* event) {
     // Highlight Edge if hovered
     if (m_hoveredHit.type == ElementType::Edge) {
         const CubeEdge& e = m_edges[m_hoveredHit.index];
-        QPointF p1 = project(m_vertices[e.v1].pos, view, scale);
-        QPointF p2 = project(m_vertices[e.v2].pos, view, scale);
+        QPointF p1 = project(m_vertices[e.v1].pos, params);
+        QPointF p2 = project(m_vertices[e.v2].pos, params);
         
         painter.setPen(QPen(m_edgeHoverColor, 4, Qt::SolidLine, Qt::RoundCap));
         painter.drawLine(p1, p2);
@@ -376,7 +454,7 @@ void ViewCube::paintEvent(QPaintEvent* event) {
     // Highlight Corner if hovered
     if (m_hoveredHit.type == ElementType::Corner) {
         const CubeVertex& v = m_vertices[m_hoveredHit.index];
-        QPointF p = project(v.pos, view, scale);
+        QPointF p = project(v.pos, params);
         
         painter.setBrush(m_cornerHoverColor);
         painter.setPen(Qt::NoPen);

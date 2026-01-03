@@ -240,9 +240,8 @@ void MainWindow::setupStatusBar() {
     // Wire slider to camera
     connect(m_cameraAngleSlider, &QSlider::valueChanged, this, [this](int value) {
         m_cameraAngleLabel->setText(tr("%1°").arg(value));
-        if (m_viewport && m_viewport->camera()) {
-            m_viewport->camera()->setCameraAngle(static_cast<float>(value));
-            m_viewport->update();
+        if (m_viewport) {
+            m_viewport->setCameraAngle(static_cast<float>(value));
         }
     });
 
@@ -283,9 +282,8 @@ void MainWindow::loadSettings() {
         m_cameraAngleSlider->setValue(static_cast<int>(savedAngle));
     }
 
-    if (m_viewport && m_viewport->camera()) {
-        m_viewport->camera()->setCameraAngle(savedAngle);
-        m_viewport->update();
+    if (m_viewport) {
+        m_viewport->setCameraAngle(savedAngle);
     }
 }
 
