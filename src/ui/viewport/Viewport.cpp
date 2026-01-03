@@ -23,6 +23,7 @@ constexpr float kTrackpadOrbitScale = 0.35f;
 constexpr float kPinchZoomScale = 1000.0f;
 constexpr float kWheelZoomShiftScale = 0.2f;
 constexpr float kAngleDeltaToPixels = 1.0f / 8.0f;
+constexpr qint64 kNativeZoomPanSuppressMs = 120;
 } // namespace
 
 Viewport::Viewport(QWidget* parent) 
@@ -42,6 +43,8 @@ Viewport::Viewport(QWidget* parent)
     // Enable gesture recognition for trackpad
     grabGesture(Qt::PinchGesture);
     grabGesture(Qt::PanGesture);
+
+    m_nativeZoomTimer.start();
     
     // Note: QSurfaceFormat is now set globally in main.cpp
     // This ensures the format is applied BEFORE context creation
@@ -155,6 +158,23 @@ void Viewport::wheelEvent(QWheelEvent* event) {
     const bool hasAngleDelta = !angleDelta.isNull();
     const bool isTrackpad = (event->phase() != Qt::NoScrollPhase) ||
         (hasPixelDelta && !hasAngleDelta);
+    const bool pinchActive = m_pinchActive || isNativeZoomActive();
+    const bool zoomModifier = event->modifiers() & Qt::ControlModifier;
+
+    if (isTrackpad && pinchActive) {
+        event->accept();
+        return;
+    }
+
+    if (isTrackpad && zoomModifier && (hasPixelDelta || hasAngleDelta)) {
+        QPointF delta = hasPixelDelta
+            ? QPointF(pixelDelta)
+            : QPointF(angleDelta) * kAngleDeltaToPixels;
+        handleZoom(static_cast<float>(delta.y()));
+        m_lastNativeZoomMs = m_nativeZoomTimer.elapsed();
+        event->accept();
+        return;
+    }
 
     if (isTrackpad && (hasPixelDelta || hasAngleDelta)) {
         QPointF delta = hasPixelDelta
@@ -199,6 +219,7 @@ bool Viewport::event(QEvent* event) {
                 value -= 1.0;
             }
             handleZoom(static_cast<float>(value * kPinchZoomScale));
+            m_lastNativeZoomMs = m_nativeZoomTimer.elapsed();
             return true;
         }
     }
@@ -232,6 +253,9 @@ bool Viewport::event(QEvent* event) {
         // Handle pan gesture (two-finger drag)
         if (QPanGesture* pan = static_cast<QPanGesture*>(
                 gestureEvent->gesture(Qt::PanGesture))) {
+            if (m_pinchActive || isNativeZoomActive()) {
+                return true;
+            }
             
             QPointF delta = pan->delta();
             
@@ -263,7 +287,7 @@ void Viewport::handlePan(float dx, float dy) {
 
 void Viewport::handleOrbit(float dx, float dy) {
     // Sensitivity adjustment
-    m_camera->orbit(dx * kOrbitSensitivity, dy * kOrbitSensitivity);
+    m_camera->orbit(-dx * kOrbitSensitivity, dy * kOrbitSensitivity);
     update();
     emit cameraChanged();
 }
@@ -272,6 +296,14 @@ void Viewport::handleZoom(float delta) {
     m_camera->zoom(delta);
     update();
     emit cameraChanged();
+}
+
+bool Viewport::isNativeZoomActive() const {
+    if (!m_nativeZoomTimer.isValid() || m_lastNativeZoomMs < 0) {
+        return false;
+    }
+
+    return (m_nativeZoomTimer.elapsed() - m_lastNativeZoomMs) < kNativeZoomPanSuppressMs;
 }
 
 // Standard view slots

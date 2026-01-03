@@ -4,6 +4,7 @@
 #include <QOpenGLWidget>
 #include <QOpenGLFunctions>
 #include <QPoint>
+#include <QElapsedTimer>
 #include <memory>
 
 namespace onecad {
@@ -66,6 +67,7 @@ private:
     void handlePan(float dx, float dy);
     void handleOrbit(float dx, float dy);
     void handleZoom(float delta);
+    bool isNativeZoomActive() const;
 
     std::unique_ptr<render::Camera3D> m_camera;
     std::unique_ptr<render::Grid3D> m_grid;
@@ -78,6 +80,8 @@ private:
     // Gesture state
     qreal m_lastPinchScale = 1.0;
     bool m_pinchActive = false;
+    QElapsedTimer m_nativeZoomTimer;
+    qint64 m_lastNativeZoomMs = -1;
     
     // Viewport size
     int m_width = 1;
