@@ -5,6 +5,7 @@
 #include <QOpenGLFunctions>
 #include <QPoint>
 #include <QElapsedTimer>
+#include <QMatrix4x4>
 #include <QVector3D>
 #include <memory>
 
@@ -47,6 +48,9 @@ public:
 
     render::Camera3D* camera() const { return m_camera.get(); }
 
+    // Plane selection
+    bool isPlaneSelectionActive() const { return m_planeSelectionActive; }
+
     // Sketch mode
     bool isInSketchMode() const { return m_inSketchMode; }
     core::sketch::Sketch* activeSketch() const { return m_activeSketch; }
@@ -62,8 +66,13 @@ signals:
     void mousePositionChanged(double x, double y, double z);
     void cameraChanged();
     void sketchModeChanged(bool inSketchMode);
+    void sketchPlanePicked(int planeIndex);
+    void planeSelectionCancelled();
 
 public slots:
+    void beginPlaneSelection();
+    void cancelPlaneSelection();
+
     // Sketch mode
     void enterSketchMode(core::sketch::Sketch* sketch);
     void exitSketchMode();
@@ -109,6 +118,9 @@ private:
     void handleOrbit(float dx, float dy);
     void handleZoom(float delta);
     bool isNativeZoomActive() const;
+    void updatePlaneSelectionHover(const QPoint& screenPos);
+    bool pickPlaneSelection(const QPoint& screenPos, int* outIndex) const;
+    void drawPlaneSelectionOverlay(const QMatrix4x4& viewProjection);
 
     std::unique_ptr<render::Camera3D> m_camera;
     std::unique_ptr<render::Grid3D> m_grid;
@@ -119,6 +131,8 @@ private:
     // Sketch mode
     core::sketch::Sketch* m_activeSketch = nullptr;
     bool m_inSketchMode = false;
+    bool m_planeSelectionActive = false;
+    int m_planeHoverIndex = -1;
 
     // Document for rendering all sketches
     app::Document* m_document = nullptr;

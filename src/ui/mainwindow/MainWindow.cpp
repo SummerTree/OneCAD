@@ -20,7 +20,6 @@
 #include <QWidget>
 #include <QSizePolicy>
 #include <QEvent>
-#include <QInputDialog>
 
 #include "../components/SidebarToolButton.h"
 
@@ -264,6 +263,10 @@ void MainWindow::setupViewport() {
             this, &MainWindow::onMousePositionChanged);
     connect(m_viewport, &Viewport::sketchModeChanged,
             this, &MainWindow::onSketchModeChanged);
+    connect(m_viewport, &Viewport::sketchPlanePicked,
+            this, &MainWindow::onSketchPlanePicked);
+    connect(m_viewport, &Viewport::planeSelectionCancelled,
+            this, &MainWindow::onPlaneSelectionCancelled);
 
     setupNavigatorOverlayButton();
 
@@ -354,31 +357,15 @@ void MainWindow::onNewSketch() {
         onExitSketch();
     }
 
-    // Show plane selection dialog
-    QStringList planes;
-    planes << tr("XY Plane (Top)") << tr("XZ Plane (Front)") << tr("YZ Plane (Right)");
+    m_activeSketchId.clear();
+    m_viewport->beginPlaneSelection();
+    m_toolStatus->setText(tr("Select a plane to start sketch"));
+}
 
-    bool ok;
-    int selectedIndex = 0;
-    QString selectedPlane = QInputDialog::getItem(this,
-        tr("Select Sketch Plane"),
-        tr("Choose a plane for the new sketch:"),
-        planes, 0, false, &ok);
-
-    if (!ok) {
-        return; // User cancelled
-    }
-
-    // Find selected index (avoids comparing translated strings)
-    selectedIndex = planes.indexOf(selectedPlane);
-    if (selectedIndex < 0) {
-        selectedIndex = 0; // Default to XY if not found
-    }
-
-    // Determine which plane was selected by index
+void MainWindow::onSketchPlanePicked(int planeIndex) {
     core::sketch::SketchPlane plane;
     QString planeName;
-    switch (selectedIndex) {
+    switch (planeIndex) {
         case 0:
             plane = core::sketch::SketchPlane::XY();
             planeName = "XY";
@@ -394,25 +381,25 @@ void MainWindow::onNewSketch() {
             break;
     }
 
-    // Create new sketch on selected plane
     auto sketch = std::make_unique<core::sketch::Sketch>(plane);
-
-    // Add to document (document takes ownership)
     m_activeSketchId = m_document->addSketch(std::move(sketch));
 
-    // Get pointer to sketch for editing
     core::sketch::Sketch* sketchPtr = m_document->getSketch(m_activeSketchId);
     if (!sketchPtr) {
         m_activeSketchId.clear();
+        m_toolStatus->setText(tr("Ready"));
         return;
     }
 
-    // Enter sketch mode
     m_viewport->enterSketchMode(sketchPtr);
     m_toolStatus->setText(tr("Sketch Mode - %1 Plane").arg(planeName));
-
-    // Update toolbar context
     m_toolbar->setContext(ContextToolbar::Context::Sketch);
+}
+
+void MainWindow::onPlaneSelectionCancelled() {
+    if (!m_viewport->isInSketchMode()) {
+        m_toolStatus->setText(tr("Ready"));
+    }
 }
 
 void MainWindow::onExitSketch() {

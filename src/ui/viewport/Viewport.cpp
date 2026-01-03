@@ -9,7 +9,9 @@
 #include "../theme/ThemeManager.h"
 
 #include <QKeyEvent>
-
+#include <QPainter>
+#include <QPolygonF>
+#include <QString>
 #include <QMouseEvent>
 #include <QWheelEvent>
 #include <QGestureEvent>
@@ -20,7 +22,9 @@
 #include <QOpenGLContext>
 #include <QSizePolicy>
 #include <QtMath>
+#include <array>
 #include <iostream>
+#include <limits>
 
 namespace onecad {
 namespace ui {
@@ -36,6 +40,83 @@ constexpr float kPinchZoomScale = 1000.0f;
 constexpr float kWheelZoomShiftScale = 0.2f;
 constexpr float kAngleDeltaToPixels = 1.0f / 8.0f;
 constexpr qint64 kNativeZoomPanSuppressMs = 120;
+constexpr float kPlaneSelectSize = 120.0f;
+constexpr float kPlaneSelectHalf = kPlaneSelectSize * 0.5f;
+} // namespace
+
+namespace {
+struct PlaneSelectionVisual {
+    core::sketch::SketchPlane plane;
+    QString label;
+    QColor color;
+};
+
+const std::array<PlaneSelectionVisual, 3>& planeSelections() {
+    static const std::array<PlaneSelectionVisual, 3> selections = {{
+        {core::sketch::SketchPlane::XY(), QStringLiteral("XY"), QColor(80, 160, 255, 90)},
+        {core::sketch::SketchPlane::XZ(), QStringLiteral("XZ"), QColor(120, 200, 140, 90)},
+        {core::sketch::SketchPlane::YZ(), QStringLiteral("YZ"), QColor(255, 170, 90, 90)}
+    }};
+    return selections;
+}
+
+struct PlaneAxes {
+    QVector3D normal;
+    QVector3D xAxis;
+    QVector3D yAxis;
+};
+
+PlaneAxes buildPlaneAxes(const core::sketch::SketchPlane& plane) {
+    PlaneAxes axes;
+    axes.normal = QVector3D(plane.normal.x, plane.normal.y, plane.normal.z);
+    axes.xAxis = QVector3D(plane.xAxis.x, plane.xAxis.y, plane.xAxis.z);
+    axes.yAxis = QVector3D(plane.yAxis.x, plane.yAxis.y, plane.yAxis.z);
+
+    if (axes.normal.lengthSquared() < 1e-8f) {
+        axes.normal = QVector3D::crossProduct(axes.xAxis, axes.yAxis);
+    }
+    if (axes.normal.lengthSquared() < 1e-8f) {
+        axes.normal = QVector3D(0.0f, 0.0f, 1.0f);
+    }
+    axes.normal.normalize();
+
+    if (axes.xAxis.lengthSquared() < 1e-8f) {
+        axes.xAxis = QVector3D::crossProduct(axes.yAxis, axes.normal);
+    }
+    if (axes.xAxis.lengthSquared() < 1e-8f) {
+        axes.xAxis = (std::abs(axes.normal.z()) < 0.9f)
+            ? QVector3D::crossProduct(axes.normal, QVector3D(0, 0, 1))
+            : QVector3D::crossProduct(axes.normal, QVector3D(0, 1, 0));
+    }
+
+    axes.xAxis -= axes.normal * QVector3D::dotProduct(axes.normal, axes.xAxis);
+    if (axes.xAxis.lengthSquared() < 1e-8f) {
+        axes.xAxis = (std::abs(axes.normal.z()) < 0.9f)
+            ? QVector3D::crossProduct(axes.normal, QVector3D(0, 0, 1))
+            : QVector3D::crossProduct(axes.normal, QVector3D(0, 1, 0));
+    }
+    axes.xAxis.normalize();
+
+    axes.yAxis = QVector3D::crossProduct(axes.normal, axes.xAxis).normalized();
+    return axes;
+}
+
+bool projectToScreen(const QMatrix4x4& viewProjection,
+                     const QVector3D& worldPos,
+                     float width,
+                     float height,
+                     QPointF* outPos) {
+    QVector4D clip = viewProjection * QVector4D(worldPos, 1.0f);
+    if (clip.w() <= 1e-6f) {
+        return false;
+    }
+
+    QVector3D ndc = clip.toVector3D() / clip.w();
+    float x = (ndc.x() * 0.5f + 0.5f) * width;
+    float y = (1.0f - (ndc.y() * 0.5f + 0.5f)) * height;
+    *outPos = QPointF(x, y);
+    return true;
+}
 } // namespace
 
 Viewport::Viewport(QWidget* parent)
@@ -257,6 +338,11 @@ void Viewport::paintGL() {
         // Unbind sketch after rendering
         m_sketchRenderer->setSketch(nullptr);
     }
+
+    if (m_planeSelectionActive) {
+        glDisable(GL_DEPTH_TEST);
+        drawPlaneSelectionOverlay(viewProjection);
+    }
 }
 
 void Viewport::mousePressEvent(QMouseEvent* event) {
@@ -272,6 +358,18 @@ void Viewport::mousePressEvent(QMouseEvent* event) {
                 m_isOrbiting = true;
                 setCursor(Qt::ClosedHandCursor);
             }
+            return;
+        }
+    }
+
+    if (!m_inSketchMode && m_planeSelectionActive && event->button() == Qt::LeftButton) {
+        int hitIndex = -1;
+        if (pickPlaneSelection(event->pos(), &hitIndex)) {
+            m_planeSelectionActive = false;
+            m_planeHoverIndex = -1;
+            setCursor(Qt::ArrowCursor);
+            update();
+            emit sketchPlanePicked(hitIndex);
             return;
         }
     }
@@ -295,6 +393,10 @@ void Viewport::mouseMoveEvent(QMouseEvent* event) {
     if (m_inSketchMode && m_toolManager && m_toolManager->hasActiveTool()) {
         sketch::Vec2d sketchPos = screenToSketch(event->pos());
         m_toolManager->handleMouseMove(sketchPos);
+    }
+
+    if (m_planeSelectionActive && !m_inSketchMode && !m_isOrbiting && !m_isPanning) {
+        updatePlaneSelectionHover(event->pos());
     }
 
     if (m_isOrbiting) {
@@ -328,6 +430,9 @@ void Viewport::mouseReleaseEvent(QMouseEvent* event) {
     }
 
     setCursor(Qt::ArrowCursor);
+    if (m_planeSelectionActive && !m_inSketchMode) {
+        updatePlaneSelectionHover(event->pos());
+    }
     QOpenGLWidget::mouseReleaseEvent(event);
 }
 
@@ -459,6 +564,26 @@ bool Viewport::event(QEvent* event) {
     return QOpenGLWidget::event(event);
 }
 
+void Viewport::beginPlaneSelection() {
+    if (m_inSketchMode) {
+        return;
+    }
+    m_planeSelectionActive = true;
+    m_planeHoverIndex = -1;
+    update();
+}
+
+void Viewport::cancelPlaneSelection() {
+    if (!m_planeSelectionActive) {
+        return;
+    }
+    m_planeSelectionActive = false;
+    m_planeHoverIndex = -1;
+    setCursor(Qt::ArrowCursor);
+    update();
+    emit planeSelectionCancelled();
+}
+
 void Viewport::handlePan(float dx, float dy) {
     m_camera->pan(dx, dy);
     update();
@@ -492,6 +617,8 @@ void Viewport::enterSketchMode(sketch::Sketch* sketch) {
 
     m_activeSketch = sketch;
     m_inSketchMode = true;
+    m_planeSelectionActive = false;
+    m_planeHoverIndex = -1;
 
     // Store current camera state
     m_savedCameraPosition = m_camera->position();
@@ -533,7 +660,7 @@ void Viewport::enterSketchMode(sketch::Sketch* sketch) {
     float dist = m_camera->distance();
     m_camera->setTarget(target);
     m_camera->setUp(up);
-    m_camera->setPosition(target - normal * dist);
+    m_camera->setPosition(target + normal * dist);
     m_camera->setCameraAngle(0.0f);  // 0° = orthographic
 
     // Bind sketch to renderer
@@ -653,6 +780,12 @@ void Viewport::toggleGrid() {
 }
 
 void Viewport::keyPressEvent(QKeyEvent* event) {
+    if (m_planeSelectionActive && !m_inSketchMode && event->key() == Qt::Key_Escape) {
+        cancelPlaneSelection();
+        event->accept();
+        return;
+    }
+
     // Forward to sketch tool if active
     if (m_inSketchMode && m_toolManager && m_toolManager->hasActiveTool()) {
         m_toolManager->handleKeyPress(static_cast<Qt::Key>(event->key()));
@@ -729,6 +862,171 @@ sketch::Vec2d Viewport::screenToSketch(const QPoint& screenPos) const {
     // Convert world point to sketch 2D coordinates
     sketch::Vec3d worldPt{intersection.x(), intersection.y(), intersection.z()};
     return plane.toSketch(worldPt);
+}
+
+void Viewport::updatePlaneSelectionHover(const QPoint& screenPos) {
+    int hitIndex = -1;
+    if (pickPlaneSelection(screenPos, &hitIndex)) {
+        if (m_planeHoverIndex != hitIndex) {
+            m_planeHoverIndex = hitIndex;
+            update();
+        }
+        if (!m_isOrbiting && !m_isPanning) {
+            setCursor(Qt::PointingHandCursor);
+        }
+        return;
+    }
+
+    if (m_planeHoverIndex != -1) {
+        m_planeHoverIndex = -1;
+        update();
+    }
+    if (!m_isOrbiting && !m_isPanning) {
+        setCursor(Qt::ArrowCursor);
+    }
+}
+
+bool Viewport::pickPlaneSelection(const QPoint& screenPos, int* outIndex) const {
+    if (!m_camera) {
+        return false;
+    }
+
+    float aspectRatio = static_cast<float>(m_width) / static_cast<float>(m_height);
+    QMatrix4x4 view = m_camera->viewMatrix();
+    QMatrix4x4 projection = m_camera->projectionMatrix(aspectRatio);
+    QMatrix4x4 viewProj = projection * view;
+    bool invertible = false;
+    QMatrix4x4 invViewProj = viewProj.inverted(&invertible);
+
+    if (!invertible) {
+        return false;
+    }
+
+    float ndcX = (2.0f * screenPos.x() / m_width) - 1.0f;
+    float ndcY = 1.0f - (2.0f * screenPos.y() / m_height);
+
+    QVector4D nearPoint = invViewProj * QVector4D(ndcX, ndcY, -1.0f, 1.0f);
+    QVector4D farPoint = invViewProj * QVector4D(ndcX, ndcY, 1.0f, 1.0f);
+
+    if (std::abs(nearPoint.w()) < 1e-8f || std::abs(farPoint.w()) < 1e-8f) {
+        return false;
+    }
+
+    QVector3D rayOrigin = nearPoint.toVector3D() / nearPoint.w();
+    QVector3D rayEnd = farPoint.toVector3D() / farPoint.w();
+    QVector3D rayDir = (rayEnd - rayOrigin).normalized();
+
+    float bestT = std::numeric_limits<float>::max();
+    int bestIndex = -1;
+    const auto& selections = planeSelections();
+
+    for (int i = 0; i < static_cast<int>(selections.size()); ++i) {
+        const auto& selection = selections[i];
+        PlaneAxes axes = buildPlaneAxes(selection.plane);
+        QVector3D origin(selection.plane.origin.x, selection.plane.origin.y, selection.plane.origin.z);
+
+        float denom = QVector3D::dotProduct(rayDir, axes.normal);
+        if (std::abs(denom) < 1e-8f) {
+            continue;
+        }
+
+        float t = QVector3D::dotProduct(origin - rayOrigin, axes.normal) / denom;
+        if (t < 0.0f) {
+            continue;
+        }
+
+        QVector3D hitPoint = rayOrigin + rayDir * t;
+        QVector3D rel = hitPoint - origin;
+        float u = QVector3D::dotProduct(rel, axes.xAxis);
+        float v = QVector3D::dotProduct(rel, axes.yAxis);
+
+        if (std::abs(u) <= kPlaneSelectHalf && std::abs(v) <= kPlaneSelectHalf) {
+            if (t < bestT) {
+                bestT = t;
+                bestIndex = i;
+            }
+        }
+    }
+
+    if (bestIndex >= 0) {
+        if (outIndex) {
+            *outIndex = bestIndex;
+        }
+        return true;
+    }
+
+    return false;
+}
+
+void Viewport::drawPlaneSelectionOverlay(const QMatrix4x4& viewProjection) {
+    if (!m_planeSelectionActive) {
+        return;
+    }
+
+    QPainter painter(this);
+    painter.setRenderHint(QPainter::Antialiasing, true);
+
+    QFont labelFont = painter.font();
+    labelFont.setBold(true);
+    labelFont.setPointSize(labelFont.pointSize() + 1);
+    painter.setFont(labelFont);
+
+    const QColor textColor = ThemeManager::instance().isDark()
+        ? QColor(230, 230, 230)
+        : QColor(30, 30, 30);
+
+    const auto& selections = planeSelections();
+    for (int i = 0; i < static_cast<int>(selections.size()); ++i) {
+        const auto& selection = selections[i];
+        PlaneAxes axes = buildPlaneAxes(selection.plane);
+        QVector3D origin(selection.plane.origin.x, selection.plane.origin.y, selection.plane.origin.z);
+
+        QVector<QVector3D> corners;
+        corners.reserve(4);
+        corners.append(origin + axes.xAxis * -kPlaneSelectHalf + axes.yAxis * -kPlaneSelectHalf);
+        corners.append(origin + axes.xAxis * kPlaneSelectHalf + axes.yAxis * -kPlaneSelectHalf);
+        corners.append(origin + axes.xAxis * kPlaneSelectHalf + axes.yAxis * kPlaneSelectHalf);
+        corners.append(origin + axes.xAxis * -kPlaneSelectHalf + axes.yAxis * kPlaneSelectHalf);
+
+        QPolygonF polygon;
+        bool projectedAll = true;
+        for (const auto& corner : corners) {
+            QPointF screenPos;
+            if (!projectToScreen(viewProjection, corner, static_cast<float>(m_width),
+                                 static_cast<float>(m_height), &screenPos)) {
+                projectedAll = false;
+                break;
+            }
+            polygon << screenPos;
+        }
+
+        if (!projectedAll) {
+            continue;
+        }
+
+        QColor fillColor = selection.color;
+        QColor outlineColor = selection.color;
+        outlineColor.setAlpha(200);
+
+        bool hovered = (i == m_planeHoverIndex);
+        if (hovered) {
+            fillColor = fillColor.lighter(130);
+            fillColor.setAlpha(140);
+            outlineColor = outlineColor.lighter(150);
+        }
+
+        painter.setPen(QPen(outlineColor, hovered ? 2.5 : 1.5));
+        painter.setBrush(fillColor);
+        painter.drawPolygon(polygon);
+
+        QPointF center;
+        if (projectToScreen(viewProjection, origin, static_cast<float>(m_width),
+                            static_cast<float>(m_height), &center)) {
+            painter.setPen(textColor);
+            QRectF labelRect(center.x() - 18, center.y() - 10, 36, 20);
+            painter.drawText(labelRect, Qt::AlignCenter, selection.label);
+        }
+    }
 }
 
 void Viewport::activateLineTool() {

@@ -48,6 +48,8 @@ private slots:
     void onNewSketch();
     void onExitSketch();
     void onSketchModeChanged(bool inSketchMode);
+    void onSketchPlanePicked(int planeIndex);
+    void onPlaneSelectionCancelled();
     void onImport();
     void onMousePositionChanged(double x, double y, double z);
 
