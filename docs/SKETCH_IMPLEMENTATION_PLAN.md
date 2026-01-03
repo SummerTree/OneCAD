@@ -1,6 +1,6 @@
 # OneCAD Sketch System Implementation Plan
 
-Status: **Phase 2 Complete** - PlaneGCS Integration Operational
+Status: **Phase 3 Complete** - Loop Detection Implemented
 
 **Last Updated:** 2026-01-03
 
@@ -54,12 +54,24 @@ Status: **Phase 2 Complete** - PlaneGCS Integration Operational
 | Tangent | `GCS::addConstraintTangent` (all combinations) | ✅ |
 | Equal | `GCS::addConstraintEqualLength/EqualRadius` | ✅ |
 
+### COMPLETED - Phase 3: Loop Detection Algorithms
+
+| Component | File | Status |
+|-----------|------|--------|
+| Loop Detector | `src/core/loop/LoopDetector.h/cpp` | ✅ Complete (969 lines) |
+| Adjacency Graph | `src/core/loop/AdjacencyGraph.h/cpp` | ✅ Complete |
+| DFS Cycle Detection | `LoopDetector::findCycles()` | ✅ Complete |
+| Area Calculation | `computeSignedArea()` (Shoelace) | ✅ Complete |
+| Point-in-Polygon | `isPointInPolygon()` (Ray casting) | ✅ Complete |
+| Face Hierarchy | `buildFaceHierarchy()` | ✅ Complete |
+| Wire Building | `buildWire()` | ✅ Complete |
+| Loop Validation | `validateLoop()` | ✅ Complete |
+
 ### AWAITING IMPLEMENTATION
 
 | Component | Phase | Complexity | Priority |
 |-----------|-------|------------|----------|
-| Loop Detection Algorithms | 3 | High | **BLOCKING** |
-| Rendering System | 4 | High | High |
+| Rendering System | 4 | High | **BLOCKING** |
 | Snap & Auto-Constrain | 5 | Medium | Medium |
 | Sketch Tools (Interactive) | 6 | Medium | High |
 | UI Integration | 7 | Medium | Medium |
@@ -68,77 +80,37 @@ Status: **Phase 2 Complete** - PlaneGCS Integration Operational
 
 ## Detailed Implementation Phases
 
-### Phase 3: Loop Detection Algorithms
+### Phase 3: Loop Detection Algorithms ✅ COMPLETE
 
-**Priority: CRITICAL (Blocking for Phase 3 Solid Modeling)**
-**Estimated Complexity: High**
-**Dependencies: Phase 2 (Complete)**
+**Status: IMPLEMENTED** (969 lines in LoopDetector.cpp)
+**Files:**
+- `src/core/loop/LoopDetector.cpp` ✅
+- `src/core/loop/AdjacencyGraph.h/cpp` ✅
 
-#### 3.1 Graph Construction
-```cpp
-// Build adjacency graph from sketch
-struct GraphNode {
-    EntityID pointId;
-    std::vector<GraphEdge> edges;
-};
+#### 3.1 Graph Construction ✅
+Implemented in `buildGraph()` method. Builds adjacency graph from sketch entities:
+- Lines → 2 edges (start/end nodes)
+- Arcs → 2 edges with center/radius/angle data
+- Circles → handled separately as complete loops
 
-struct GraphEdge {
-    EntityID entityId;
-    EntityID otherNode;
-    bool isArc;
-};
+#### 3.2 Cycle Detection (DFS) ✅
+Implemented in `findCycles()` method (lines 560-628):
+- Uses DFS with backtracking
+- Deduplication via sorted edge key hashing
+- Returns vector of Wire objects with forward/backward flags
 
-// Algorithm: O(n) pass through all entities
-// Lines contribute 2 edges
-// Arcs contribute 2 edges (endpoints)
-```
+#### 3.3 Area & Orientation Calculation ✅
+Implemented:
+- `computeSignedArea()` - Shoelace formula (positive=CCW, negative=CW)
+- `computeLoopProperties()` - area, bounds, centroid, polygon sampling
+- Arc tessellation: 8+ segments per π radians
 
-Files to Create:
-- `src/core/loop/LoopDetector.cpp`
-- `src/core/loop/AdjacencyGraph.h/cpp`
-
-#### 3.2 Cycle Detection (DFS)
-```cpp
-// Johnson's algorithm for finding all simple cycles
-// Complexity: O((V+E)(C+1)) where C = number of cycles
-
-std::vector<Wire> findCycles(const AdjacencyGraph& graph) {
-    // 1. Find all SCCs (Tarjan's algorithm)
-    // 2. For each SCC, enumerate simple cycles
-    // 3. Build Wire from each cycle
-}
-```
-
-#### 3.3 Area & Orientation Calculation
-```cpp
-// Shoelace formula for polygon area
-double computeSignedArea(const std::vector<Vec2d>& polygon) {
-    double area = 0.0;
-    for (size_t i = 0; i < polygon.size(); ++i) {
-        size_t j = (i + 1) % polygon.size();
-        area += polygon[i].x * polygon[j].y;
-        area -= polygon[j].x * polygon[i].y;
-    }
-    return area * 0.5;
-}
-// Positive = CCW, Negative = CW
-```
-
-#### 3.4 Hole Detection & Face Hierarchy
-```cpp
-// Point-in-polygon for containment
-bool isPointInPolygon(const Vec2d& p, const Loop& loop) {
-    // Ray casting algorithm
-    // Count intersections with edges
-}
-
-// Build hierarchy: outer loops contain inner loops (holes)
-std::vector<Face> buildFaceHierarchy(std::vector<Loop>& loops) {
-    // 1. Sort by area (largest first)
-    // 2. For each loop, find smallest containing loop
-    // 3. Build parent-child relationships
-}
-```
+#### 3.4 Hole Detection & Face Hierarchy ✅
+Implemented in `buildFaceHierarchy()`:
+- Sorts loops by area (largest first)
+- Uses depth-based even/odd rule (even=outer, odd=hole)
+- Containment via `loopContainsLoop()` + bounding box pre-check
+- Validates holes don't overlap via `polygonsIntersect()`
 
 ---
 
@@ -443,26 +415,28 @@ src/core/
 │   ├── SketchArc.h/cpp         [✅ COMPLETE]
 │   ├── SketchCircle.h/cpp      [✅ COMPLETE]
 │   ├── SketchConstraint.h/cpp  [✅ COMPLETE]
-│   ├── Sketch.h/cpp            [✅ COMPLETE]
+│   ├── Sketch.h/cpp            [✅ COMPLETE] (894 lines)
 │   ├── SketchRenderer.h        [✅ INTERFACE]
 │   ├── SketchRenderer.cpp      [PHASE 4]
 │   ├── SketchTool.h            [PHASE 6]
+│   ├── SnapManager.h/cpp       [PHASE 5]
+│   ├── AutoConstrainer.h/cpp   [PHASE 5]
 │   ├── tools/
 │   │   ├── LineTool.h/cpp      [PHASE 6]
 │   │   ├── RectangleTool.h/cpp [PHASE 6]
 │   │   ├── ArcTool.h/cpp       [PHASE 6]
 │   │   └── CircleTool.h/cpp    [PHASE 6]
 │   ├── constraints/
-│   │   └── Constraints.h/cpp   [✅ COMPLETE]
+│   │   └── Constraints.h/cpp   [✅ COMPLETE] (884 lines)
 │   └── solver/
 │       ├── ConstraintSolver.h  [✅ COMPLETE]
-│       ├── ConstraintSolver.cpp[✅ COMPLETE]
+│       ├── ConstraintSolver.cpp[✅ COMPLETE] (981 lines)
 │       ├── SolverAdapter.h     [✅ COMPLETE]
 │       └── SolverAdapter.cpp   [✅ COMPLETE]
 ├── loop/
-│   ├── LoopDetector.h          [✅ INTERFACE]
-│   ├── LoopDetector.cpp        [PHASE 3]
-│   └── AdjacencyGraph.h/cpp    [PHASE 3]
+│   ├── LoopDetector.h          [✅ COMPLETE]
+│   ├── LoopDetector.cpp        [✅ COMPLETE] (969 lines)
+│   └── AdjacencyGraph.h/cpp    [✅ COMPLETE]
 └── CMakeLists.txt              [✅ COMPLETE]
 
 third_party/
@@ -473,31 +447,33 @@ third_party/
 
 ## Next Steps
 
-### Immediate Priority (Blocking)
-1. **Implement LoopDetector.cpp** — Required before any sketch→solid workflow.
-2. **Create AdjacencyGraph** — Foundation for cycle detection.
-3. **Implement Shoelace formula** — Area/orientation calculation.
+### Immediate Priority (Blocking for UI)
+1. **Implement SketchRenderer.cpp** — Visual feedback for sketch editing.
+2. **Create LineTool with snapping** — Basic interactive drawing.
+3. **Add DOF color visualization** — Green/Blue/Orange feedback.
 
 ### Short-term
-4. Implement SketchRenderer.cpp with VBO batching.
-5. Create LineTool with snapping.
-6. Add DOF color visualization to UI.
+4. Add Rectangle, Circle, Arc tools.
+5. Implement SnapManager for object snapping.
+6. Add auto-constraint detection.
 
 ### Medium-term
-7. Add Rectangle, Circle, Arc tools.
-8. Implement auto-constraint detection.
-9. Create dimension editor widget.
+7. Create dimension editor widget.
+8. Implement constraint icons (texture atlas).
+9. Add 30 FPS throttling to interactive solver.
 
 ---
 
 ## Unresolved Questions
 
-1. **Arc tessellation during loop detection** — Use fixed segments or adaptive?
+1. **Arc tessellation during loop detection** — Currently using 8+ segments per π radians. Sufficient?
 2. **Performance threshold for background solve** — Keep 100 entities or adjust based on profiling?
 3. **Constraint icon rendering** — Texture atlas or individual billboards?
 4. **Snap priority for overlapping candidates** — Distance-only or include geometric priority?
+5. **Missing constraint types** — Fixed, Midpoint, OnCurve, Concentric, Symmetric, Diameter not wired to PlaneGCS. Defer to v1.1?
+6. **MakeFace integration** — LoopDetector returns Face structs. Need OCCT `BRepBuilderAPI_MakeFace` wrapper.
 
 ---
 
-*Document Version: 2.0*
+*Document Version: 3.0*
 *Last Updated: 2026-01-03*

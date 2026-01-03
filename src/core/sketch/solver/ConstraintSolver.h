@@ -6,13 +6,11 @@
  * This class wraps the PlaneGCS library, providing a clean interface
  * for the sketch system while handling all PlaneGCS-specific details.
  *
- * IMPLEMENTATION STATUS: PLACEHOLDER
- * The actual PlaneGCS integration will be implemented in Phase 2.
- * Current implementation provides interface definition only.
+ * IMPLEMENTATION STATUS: PlaneGCS integration in progress.
  *
  * Key design decisions from spec:
  * - Direct parameter binding (no copying) for performance
- * - LevenbergMarquardt algorithm by default
+ * - DogLeg algorithm by default (LM fallback)
  * - 1e-4mm tolerance
  * - 30 FPS solve throttling
  * - Background threading for >100 entities
@@ -32,7 +30,6 @@
 // Forward declaration - PlaneGCS types
 namespace GCS {
     class System;
-    enum SolveStatus : int;
 }
 
 namespace onecad::core::sketch {
@@ -50,7 +47,7 @@ class SketchConstraint;
  * @brief Solver configuration options
  *
  * Per SPECIFICATION.md §23.4:
- * Default configuration uses LevenbergMarquardt with 1e-4mm tolerance
+ * Default configuration uses DogLeg with 1e-4mm tolerance
  */
 struct SolverConfig {
     /// Convergence tolerance in mm
@@ -61,8 +58,8 @@ struct SolverConfig {
 
     /// Algorithm selection
     enum class Algorithm {
-        LevenbergMarquardt,  ///< Default - good for most cases
-        DogLeg,              ///< Alternative nonlinear solver
+        LevenbergMarquardt,  ///< Fallback nonlinear solver
+        DogLeg,              ///< Default solver
         BFGS                 ///< Quasi-Newton method
     };
     Algorithm algorithm = Algorithm::DogLeg;
@@ -156,7 +153,7 @@ public:
      */
     explicit ConstraintSolver(const SolverConfig& config);
 
-    ~ConstraintSolver() = default;
+    ~ConstraintSolver();
 
     // Non-copyable
     ConstraintSolver(const ConstraintSolver&) = delete;
@@ -184,28 +181,28 @@ public:
      * Per SPECIFICATION.md §23.5:
      * Uses direct parameter binding - stores pointer to point's coordinates
      *
-     * PLACEHOLDER: Actual PlaneGCS point creation here
+     * Uses direct parameter binding to SketchPoint coordinates.
      */
     void addPoint(SketchPoint* point);
 
     /**
      * @brief Add a line to the solver
      *
-     * PLACEHOLDER: Creates PlaneGCS line from two points
+     * Registers the line for constraint mapping (line uses point parameters).
      */
     void addLine(SketchLine* line);
 
     /**
      * @brief Add an arc to the solver
      *
-     * PLACEHOLDER: Creates PlaneGCS arc with center/radius/angles
+     * Registers arc parameters (radius, start/end angles) for solving.
      */
     void addArc(SketchArc* arc);
 
     /**
      * @brief Add a circle to the solver
      *
-     * PLACEHOLDER: Creates PlaneGCS circle with center/radius
+     * Registers circle radius for solving.
      */
     void addCircle(SketchCircle* circle);
 
@@ -214,7 +211,7 @@ public:
      * @param constraint Constraint to add
      * @return true if constraint was added successfully
      *
-     * PLACEHOLDER: Translates OneCAD constraint to PlaneGCS constraint
+     * Translates OneCAD constraint to PlaneGCS constraint(s).
      */
     bool addConstraint(SketchConstraint* constraint);
 
@@ -238,7 +235,7 @@ public:
      * 2. If success, entity coordinates are already updated (direct binding)
      * 3. If failure, original coordinates preserved
      *
-     * PLACEHOLDER: Actual PlaneGCS solve() call
+     * Calls PlaneGCS solve() and applies or reverts the solution.
      */
     SolverResult solve();
 
@@ -250,7 +247,7 @@ public:
      * Per SPECIFICATION.md §5.13:
      * Implements rubber-band dragging with spring resistance
      *
-     * PLACEHOLDER: Complex algorithm - implement separately
+     * Current implementation adds temporary coordinate constraints for the dragged point.
      */
     SolverResult solveWithDrag(EntityID pointId, const Vec2d& targetPos);
 
@@ -295,7 +292,7 @@ public:
      * - Redundant constraints (remove without changing solution)
      * - Conflicting constraints (no solution exists)
      *
-     * PLACEHOLDER: PlaneGCS redundancy analysis
+     * Uses PlaneGCS redundancy analysis results (if available).
      */
     std::vector<ConstraintID> findRedundantConstraints() const;
 
@@ -313,7 +310,7 @@ public:
      * Per SPECIFICATION.md §23.6:
      * Background solving for >100 entities
      *
-     * PLACEHOLDER: QtConcurrent integration
+     * TODO: QtConcurrent integration for large sketches.
      */
     void solveAsync(std::function<void(SolverResult)> callback);
 
@@ -331,13 +328,14 @@ private:
     SolverConfig config_;
 
     /// PlaneGCS system instance
-    /// PLACEHOLDER: std::unique_ptr<GCS::System> gcs_;
+    std::unique_ptr<GCS::System> gcsSystem_;
 
     /// Mapping from OneCAD entity IDs to PlaneGCS internal IDs
     std::unordered_map<EntityID, int> entityToGcsId_;
 
     /// Mapping from OneCAD constraint IDs to PlaneGCS constraint tags
     std::unordered_map<ConstraintID, int> constraintToGcsTag_;
+    std::unordered_map<int, ConstraintID> gcsTagToConstraint_;
 
     /// Direct pointers to entity parameters for backup/restore
     struct ParameterBackup {
@@ -352,6 +350,10 @@ private:
     std::unordered_map<EntityID, SketchArc*> arcsById_;
     std::unordered_map<EntityID, SketchCircle*> circlesById_;
     std::vector<SketchConstraint*> constraints_;
+
+    /// Parameter pointers used for direct binding
+    std::vector<double*> parameters_;
+    std::vector<double*> drivenParameters_;
 
     int nextEntityTag_ = 1;
     int nextConstraintTag_ = 1;
@@ -376,10 +378,11 @@ private:
     void restoreParameters();
 
     /**
-     * @brief Translate OneCAD constraint type to PlaneGCS constraint
-     * PLACEHOLDER: Mapping logic
+     * @brief Translate OneCAD constraint to PlaneGCS constraint
      */
-    int translateConstraint(SketchConstraint* constraint);
+    bool translateConstraint(SketchConstraint* constraint, int tagId);
+
+    void configureSystem();
 };
 
 // ========== DOF Calculation Table ==========

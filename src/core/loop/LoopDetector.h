@@ -23,6 +23,7 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <unordered_set>
 #include <vector>
 
 namespace onecad::core::sketch {
@@ -36,6 +37,8 @@ class SketchArc;
 namespace onecad::core::loop {
 
 namespace sk = onecad::core::sketch;
+
+class AdjacencyGraph;
 
 /**
  * @brief Represents a connected wire (sequence of edges)
@@ -82,6 +85,9 @@ struct Loop {
 
     /// Signed area (positive = CCW, negative = CW)
     double signedArea = 0.0;
+
+    /// Sampled polygon used for area/containment tests
+    std::vector<sk::Vec2d> polygon;
 
     /// Bounding box
     sk::Vec2d boundsMin{0, 0};
@@ -279,8 +285,9 @@ private:
      * PLACEHOLDER: Graph data structure implementation
      * Each point becomes a node, each edge (line/arc) connects nodes
      */
-    struct AdjacencyGraph;
-    std::unique_ptr<AdjacencyGraph> buildGraph(const sk::Sketch& sketch) const;
+    std::unique_ptr<AdjacencyGraph> buildGraph(
+        const sk::Sketch& sketch,
+        const std::unordered_set<sk::EntityID>* selection = nullptr) const;
 
     /**
      * @brief Find all simple cycles in graph using DFS
@@ -338,9 +345,9 @@ bool isPointInPolygon(const sk::Vec2d& point, const std::vector<sk::Vec2d>& poly
 sk::Vec2d computeCentroid(const std::vector<sk::Vec2d>& polygon);
 
 /**
- * @brief Check if two polygons intersect
+ * @brief Check if polygon edges intersect
  *
- * PLACEHOLDER: Separating axis theorem or edge intersection
+ * PLACEHOLDER: Edge intersection test
  */
 bool polygonsIntersect(const std::vector<sk::Vec2d>& poly1,
                        const std::vector<sk::Vec2d>& poly2);

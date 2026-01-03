@@ -19,3 +19,9 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
+
+Third-Party Licenses
+
+PlaneGCS (from FreeCAD, LGPL-2.1-or-later) is vendored under
+`third_party/planegcs`. See `third_party/planegcs/LICENSE`. Static linking is
+used; object files will be provided to allow relinking per LGPL requirements.

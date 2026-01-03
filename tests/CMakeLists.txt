@@ -45,3 +45,17 @@ target_link_libraries(proto_sketch_solver
     PRIVATE
     onecad_core
 )
+
+# PlaneGCS Integration Prototype
+add_executable(proto_planegcs_integration prototypes/proto_planegcs_integration.cpp)
+target_link_libraries(proto_planegcs_integration
+    PRIVATE
+    planegcs
+)
+
+# Loop Detector Prototype
+add_executable(proto_loop_detector prototypes/proto_loop_detector.cpp)
+target_link_libraries(proto_loop_detector
+    PRIVATE
+    onecad_core
+)

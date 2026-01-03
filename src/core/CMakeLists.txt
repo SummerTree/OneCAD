@@ -10,6 +10,8 @@ add_library(onecad_core STATIC
     sketch/constraints/Constraints.cpp
     sketch/solver/ConstraintSolver.cpp
     sketch/solver/SolverAdapter.cpp
+    loop/AdjacencyGraph.cpp
+    loop/LoopDetector.cpp
 )
 
 target_include_directories(onecad_core
@@ -22,6 +24,8 @@ target_link_libraries(onecad_core
     PUBLIC
     Qt6::Core
     ${OpenCASCADE_LIBRARIES}
+    PRIVATE
+    planegcs
 )
 
 # Define header files for IDE visibility
@@ -41,6 +45,7 @@ set(SKETCH_HEADERS
 )
 
 set(LOOP_HEADERS
+    loop/AdjacencyGraph.h
     loop/LoopDetector.h
 )
 
@@ -50,7 +55,5 @@ add_custom_target(onecad_core_headers SOURCES
     ${LOOP_HEADERS}
 )
 
-# When PlaneGCS is integrated, add linking here:
-# - Use PRIVATE if PlaneGCS is internal to implementation
-# - Use PUBLIC if PlaneGCS types appear in onecad_core public headers
-# target_link_libraries(onecad_core PRIVATE planegcs)
+# When PlaneGCS types appear in onecad_core public headers,
+# move planegcs to PUBLIC linkage in the block above.

@@ -47,6 +47,7 @@ message(STATUS "Eigen3 Version: ${Eigen3_VERSION}")
 message(STATUS "OpenCASCADE Version: ${OpenCASCADE_VERSION}")
 
 # --- Subdirectories ---
+add_subdirectory(third_party/planegcs)
 add_subdirectory(src/app)
 add_subdirectory(src/core)
 add_subdirectory(src/kernel)

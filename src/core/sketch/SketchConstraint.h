@@ -165,6 +165,22 @@ public:
     double value() const { return m_value; }
 
     /**
+     * @brief Get mutable pointer to dimension value (for solver binding)
+     *
+     * Unsafe: the pointer is valid only while the owning constraint exists and is unchanged.
+     * Mutations bypass validation/notifications and are not thread-safe; callers must re-validate
+     * and notify after edits (or use a setter for safe updates).
+     */
+    double* valuePtr() { return &m_value; }
+
+    /**
+     * @brief Get pointer to dimension value (const)
+     *
+     * Pointer lifetime is tied to the owning constraint instance.
+     */
+    const double* valuePtr() const { return &m_value; }
+
+    /**
      * @brief Set dimension value
      * @param value New value (interpretation depends on subclass)
      */
