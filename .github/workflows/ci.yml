@@ -20,7 +20,7 @@ jobs:
             build-essential ninja-build cmake \
             qt6-base-dev qt6-base-dev-tools qt6-tools-dev qt6-tools-dev-tools \
             libgl1-mesa-dev libx11-dev libxext-dev libxrandr-dev libxfixes-dev libxi-dev libxrender-dev \
-            libocct-data libocct-ocaf-dev libocct-modeling-dev libocct-visualization-dev libocct-foundation-dev libocct-draw-dev \
+            libocct-foundation-dev libocct-modeling-data-dev libocct-modeling-algorithms-dev libocct-ocaf-dev libocct-visualization-dev libocct-draw-dev libocct-data-exchange-dev \
             libeigen3-dev
 
       - name: Configure
