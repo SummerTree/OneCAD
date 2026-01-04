@@ -1,8 +1,8 @@
 # OneCAD Sketch System Implementation Plan
 
-Status: **Phase 5 Complete, Phase 6 Complete, Phase 7 Complete, All Critical Fixes Complete**
+Status: **Phase 7 Complete, All UI Tool Integration Complete**
 
-**Last Updated:** 2026-01-04 *(PointOnCurveConstraint added, ArcTool fixes complete, 28 CodeRabbit issues resolved)*
+**Last Updated:** 2026-01-04 *(All 7 sketch tools fully integrated into UI with buttons + shortcuts)*
 
 ---
 
@@ -330,26 +330,28 @@ void LineTool::onMouseRelease(const Vec2d& pos) {
 |-----------|------|-------|--------|
 | **Constraint Panel** | `src/ui/sketch/ConstraintPanel.h/cpp` | 251 | ✅ **COMPLETE** |
 | **DOF Status Bar** | (in MainWindow) | ~40 | ✅ **COMPLETE** |
-| **Keyboard Shortcuts** | (in MainWindow: L/R/C/Esc) | ~30 | ✅ **COMPLETE** |
+| **Keyboard Shortcuts** | (in MainWindow: L/R/C/A/E/T/M/Esc) | ~90 | ✅ **COMPLETE** |
 | **Ghost Constraint Rendering** | (in SketchRenderer) | ~50 | ✅ **COMPLETE** |
 | **sketchUpdated Signal** | (Viewport→MainWindow) | ~20 | ✅ **COMPLETE** |
 | **pickConstraint()** | (in SketchRenderer) | 20 | ✅ **COMPLETE** |
 | **Dimension Editor** | `src/ui/sketch/DimensionEditor.h/cpp` | 232 | ✅ **COMPLETE** |
 | **SketchModePanel** | `src/ui/sketch/SketchModePanel.h/cpp` | 188 | ✅ **COMPLETE** |
 | **OnCurve Constraint UI** | (SketchModePanel + MainWindow handler) | ~60 | ✅ **COMPLETE** |
+| **Tool UI Integration** | (ContextToolbar + MainWindow + Viewport) | ~170 | ✅ **COMPLETE** |
 | **Constraint Icon Textures** | Point sprites (texture atlas deferred) | — | ⚠️ DEFERRED |
 
 **Implemented Features:**
 - ConstraintPanel: Floating panel showing constraint list with icons
 - DOF indicator in status bar with color coding (green=0, orange>0, red<0)
-- Keyboard shortcuts: L=Line, R=Rectangle, C=Circle, Esc=cancel/exit
+- Keyboard shortcuts: L=Line, R=Rectangle, C=Circle, A=Arc, E=Ellipse, T=Trim, M=Mirror, Esc=cancel/exit
 - Real-time DOF updates via Viewport::sketchUpdated() signal
 - Ghost constraints render semi-transparent during drawing
 - ConstraintPanel auto-shows/hides with sketch mode
 - pickConstraint() for clicking on constraint icons
 - DimensionEditor with expression parsing (+,-,*,/)
 - SketchModePanel with constraint creation buttons
-- **NEW (2026-01-04):** OnCurve constraint UI integration (button + handler)
+- OnCurve constraint UI integration (button + handler)
+- **NEW (2026-01-04):** All 7 sketch tools fully integrated with toolbar buttons + keyboard shortcuts
 
 #### DimensionEditor Widget
 - **Activation:** Double-click on segment shows inline editor

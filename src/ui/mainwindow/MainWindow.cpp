@@ -226,6 +226,42 @@ void MainWindow::setupMenuBar() {
     });
     addAction(circleAction);
 
+    QAction* arcAction = new QAction(tr("Arc Tool"), this);
+    arcAction->setShortcut(Qt::Key_A);
+    connect(arcAction, &QAction::triggered, this, [this]() {
+        if (m_viewport && m_viewport->isInSketchMode()) {
+            m_viewport->activateArcTool();
+        }
+    });
+    addAction(arcAction);
+
+    QAction* ellipseAction = new QAction(tr("Ellipse Tool"), this);
+    ellipseAction->setShortcut(Qt::Key_E);
+    connect(ellipseAction, &QAction::triggered, this, [this]() {
+        if (m_viewport && m_viewport->isInSketchMode()) {
+            m_viewport->activateEllipseTool();
+        }
+    });
+    addAction(ellipseAction);
+
+    QAction* trimAction = new QAction(tr("Trim Tool"), this);
+    trimAction->setShortcut(Qt::Key_T);
+    connect(trimAction, &QAction::triggered, this, [this]() {
+        if (m_viewport && m_viewport->isInSketchMode()) {
+            m_viewport->activateTrimTool();
+        }
+    });
+    addAction(trimAction);
+
+    QAction* mirrorAction = new QAction(tr("Mirror Tool"), this);
+    mirrorAction->setShortcut(Qt::Key_M);
+    connect(mirrorAction, &QAction::triggered, this, [this]() {
+        if (m_viewport && m_viewport->isInSketchMode()) {
+            m_viewport->activateMirrorTool();
+        }
+    });
+    addAction(mirrorAction);
+
     QAction* escAction = new QAction(tr("Cancel/Exit"), this);
     escAction->setShortcut(Qt::Key_Escape);
     connect(escAction, &QAction::triggered, this, [this]() {
@@ -269,6 +305,14 @@ void MainWindow::setupToolBar() {
                 m_viewport, &Viewport::activateCircleTool);
         connect(m_toolbar, &ContextToolbar::rectangleToolActivated,
                 m_viewport, &Viewport::activateRectangleTool);
+        connect(m_toolbar, &ContextToolbar::arcToolActivated,
+                m_viewport, &Viewport::activateArcTool);
+        connect(m_toolbar, &ContextToolbar::ellipseToolActivated,
+                m_viewport, &Viewport::activateEllipseTool);
+        connect(m_toolbar, &ContextToolbar::trimToolActivated,
+                m_viewport, &Viewport::activateTrimTool);
+        connect(m_toolbar, &ContextToolbar::mirrorToolActivated,
+                m_viewport, &Viewport::activateMirrorTool);
     }
 
     // Reposition toolbar when context changes (button visibility affects height)

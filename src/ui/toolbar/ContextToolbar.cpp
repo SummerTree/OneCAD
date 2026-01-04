@@ -55,6 +55,16 @@ void ContextToolbar::setupUi() {
     connect(m_circleButton, &SidebarToolButton::clicked, this, &ContextToolbar::circleToolActivated);
 
     m_arcButton = new SidebarToolButton("◠", tr("Draw arc (A)"), this);
+    connect(m_arcButton, &SidebarToolButton::clicked, this, &ContextToolbar::arcToolActivated);
+
+    m_ellipseButton = new SidebarToolButton("⬭", tr("Draw ellipse (E)"), this);
+    connect(m_ellipseButton, &SidebarToolButton::clicked, this, &ContextToolbar::ellipseToolActivated);
+
+    m_trimButton = new SidebarToolButton("✂", tr("Trim entity (T)"), this);
+    connect(m_trimButton, &SidebarToolButton::clicked, this, &ContextToolbar::trimToolActivated);
+
+    m_mirrorButton = new SidebarToolButton("⇄", tr("Mirror geometry (M)"), this);
+    connect(m_mirrorButton, &SidebarToolButton::clicked, this, &ContextToolbar::mirrorToolActivated);
 
     m_layout->addWidget(m_newSketchButton);
     m_layout->addWidget(m_importButton);
@@ -63,6 +73,9 @@ void ContextToolbar::setupUi() {
     m_layout->addWidget(m_rectangleButton);
     m_layout->addWidget(m_circleButton);
     m_layout->addWidget(m_arcButton);
+    m_layout->addWidget(m_ellipseButton);
+    m_layout->addWidget(m_trimButton);
+    m_layout->addWidget(m_mirrorButton);
     m_layout->addStretch();
 
     updateVisibleButtons();
@@ -95,7 +108,16 @@ void ContextToolbar::updateVisibleButtons() {
     if (m_arcButton) {
         m_arcButton->setVisible(inSketch);
     }
-    
+    if (m_ellipseButton) {
+        m_ellipseButton->setVisible(inSketch);
+    }
+    if (m_trimButton) {
+        m_trimButton->setVisible(inSketch);
+    }
+    if (m_mirrorButton) {
+        m_mirrorButton->setVisible(inSketch);
+    }
+
     // Recalculate size when button visibility changes
     adjustSize();
 }

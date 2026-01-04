@@ -1278,6 +1278,30 @@ void Viewport::activateRectangleTool() {
     }
 }
 
+void Viewport::activateArcTool() {
+    if (m_toolManager) {
+        m_toolManager->activateTool(tools::ToolType::Arc);
+    }
+}
+
+void Viewport::activateEllipseTool() {
+    if (m_toolManager) {
+        m_toolManager->activateTool(tools::ToolType::Ellipse);
+    }
+}
+
+void Viewport::activateTrimTool() {
+    if (m_toolManager) {
+        m_toolManager->activateTool(tools::ToolType::Trim);
+    }
+}
+
+void Viewport::activateMirrorTool() {
+    if (m_toolManager) {
+        m_toolManager->activateTool(tools::ToolType::Mirror);
+    }
+}
+
 void Viewport::deactivateTool() {
     if (m_toolManager) {
         m_toolManager->deactivateTool();

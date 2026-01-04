@@ -95,6 +95,10 @@ public slots:
     void activateLineTool();
     void activateCircleTool();
     void activateRectangleTool();
+    void activateArcTool();
+    void activateEllipseTool();
+    void activateTrimTool();
+    void activateMirrorTool();
     void deactivateTool();
 
     // Views

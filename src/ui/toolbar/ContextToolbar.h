@@ -39,6 +39,10 @@ signals:
     void lineToolActivated();
     void rectangleToolActivated();
     void circleToolActivated();
+    void arcToolActivated();
+    void ellipseToolActivated();
+    void trimToolActivated();
+    void mirrorToolActivated();
 
 private:
     void setupUi();
@@ -53,6 +57,9 @@ private:
     SidebarToolButton* m_rectangleButton = nullptr;
     SidebarToolButton* m_circleButton = nullptr;
     SidebarToolButton* m_arcButton = nullptr;
+    SidebarToolButton* m_ellipseButton = nullptr;
+    SidebarToolButton* m_trimButton = nullptr;
+    SidebarToolButton* m_mirrorButton = nullptr;
 };
 
 } // namespace ui
