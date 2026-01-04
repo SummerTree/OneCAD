@@ -7,6 +7,7 @@
 #include <QElapsedTimer>
 #include <QMatrix4x4>
 #include <QVector3D>
+#include <QVariantAnimation>
 #include <memory>
 
 namespace onecad {
@@ -31,6 +32,13 @@ namespace core::sketch {
 namespace onecad {
 namespace ui {
     class ViewCube; // Forward declaration
+
+    struct CameraState {
+        QVector3D position;
+        QVector3D target;
+        QVector3D up;
+        float angle = 0.0f;
+    };
 
 /**
  * @brief OpenGL 3D viewport with Shapr3D-style navigation.
@@ -121,12 +129,16 @@ private:
     void updatePlaneSelectionHover(const QPoint& screenPos);
     bool pickPlaneSelection(const QPoint& screenPos, int* outIndex) const;
     void drawPlaneSelectionOverlay(const QMatrix4x4& viewProjection);
+    
+    // Animation
+    void animateCamera(const CameraState& targetState);
 
     std::unique_ptr<render::Camera3D> m_camera;
     std::unique_ptr<render::Grid3D> m_grid;
     std::unique_ptr<core::sketch::SketchRenderer> m_sketchRenderer;
     std::unique_ptr<core::sketch::tools::SketchToolManager> m_toolManager;
     ViewCube* m_viewCube = nullptr;
+    QVariantAnimation* m_cameraAnimation = nullptr;
 
     // Sketch mode
     core::sketch::Sketch* m_activeSketch = nullptr;

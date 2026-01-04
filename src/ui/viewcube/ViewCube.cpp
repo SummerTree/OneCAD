@@ -18,7 +18,7 @@ ViewCube::ViewCube(QWidget* parent)
     setAttribute(Qt::WA_TranslucentBackground);
     setMouseTracking(true);
     m_cubeRotation.setToIdentity();
-    m_cubeRotation.rotate(90.0f, 0.0f, 0.0f, 1.0f);
+    // m_cubeRotation.rotate(90.0f, 0.0f, 0.0f, 1.0f); // Removed legacy rotation
     initGeometry();
 
     // Theme integration
@@ -95,31 +95,22 @@ void ViewCube::initGeometry() {
         m_faces.append(f);
     };
 
-    // Front (Y=-1): 0, 1, 5, 4 (CCW looking at face? No, vertices order matters for rendering loop)
-    // Vertices with Y=-1: 0, 1, 4, 5.
-    // Order to form a quad: (-1,-1,-1), (1,-1,-1), (1,-1,1), (-1,-1,1) -> 0, 1, 5, 4.
-    // Normal (0,-1,0).
-    addFace(0, "FRONT",  QVector3D(0, -1, 0), 4, 5, 1, 0); // Reordered for CCW from outside: TL(4), TR(5), BR(1), BL(0)
+    // Front (Geom +X): 5, 7, 3, 1
+    addFace(0, "FRONT",  QVector3D(1, 0, 0), 5, 7, 3, 1);
 
-    // Back (Y=1): 2, 3, 7, 6.
-    // Normal (0,1,0). CCW: 6, 7, 3, 2 (TopLeft, TopRight...)
-    addFace(1, "BACK",   QVector3D(0, 1, 0), 6, 2, 3, 7); // Checked visually.
+    // Back (Geom -X): 4, 6, 2, 0
+    addFace(1, "BACK",   QVector3D(-1, 0, 0), 4, 6, 2, 0);
 
-    // Right (X=1): 1, 3, 7, 5.
-    // Normal (1,0,0). CCW: 5, 7, 3, 1
-    addFace(2, "RIGHT",  QVector3D(1, 0, 0), 5, 7, 3, 1);
+    // Right (Geom +Y): 6, 7, 3, 2
+    addFace(2, "RIGHT",  QVector3D(0, 1, 0), 6, 7, 3, 2);
 
-    // Left (X=-1): 0, 2, 6, 4.
-    // Normal (-1,0,0). CCW: 4, 6, 2, 0
-    addFace(3, "LEFT",   QVector3D(-1, 0, 0), 4, 0, 2, 6);
+    // Left (Geom -Y): 4, 5, 1, 0
+    addFace(3, "LEFT",   QVector3D(0, -1, 0), 4, 5, 1, 0);
 
-    // Top (Z=1): 4, 5, 7, 6.
-    // Normal (0,0,1). CCW: 4, 6, 7, 5?
-    // -1 -1 1 (4), -1 1 1 (6), 1 1 1 (7), 1 -1 1 (5).
-    addFace(4, "TOP",    QVector3D(0, 0, 1), 6, 7, 5, 4);
+    // Top (Geom +Z): 4, 5, 7, 6
+    addFace(4, "TOP",    QVector3D(0, 0, 1), 4, 5, 7, 6);
 
-    // Bottom (Z=-1): 0, 1, 3, 2.
-    // Normal (0,0,-1). CCW: 0, 1, 3, 2.
+    // Bottom (Geom -Z): 0, 2, 3, 1
     addFace(5, "BOTTOM", QVector3D(0, 0, -1), 0, 2, 3, 1);
 
     // 3. Edges (12)
@@ -160,7 +151,7 @@ ViewCube::ProjectionParams ViewCube::buildProjectionParams() const {
     rotatedVertices.reserve(m_vertices.size());
 
     for (const auto& vertex : m_vertices) {
-        QVector3D rotated = viewRot * (m_cubeRotation * vertex.pos);
+        QVector3D rotated = viewRot.map(m_cubeRotation.map(vertex.pos));
         rotatedVertices.append(rotated);
         float extent = qMax(qAbs(rotated.x()), qAbs(rotated.y()));
         maxExtent = qMax(maxExtent, extent);
@@ -208,7 +199,7 @@ ViewCube::ProjectionParams ViewCube::buildProjectionParams() const {
 
 QPointF ViewCube::project(const QVector3D& point, const ProjectionParams& params) const {
     if (!params.usePerspective) {
-        QVector3D transformed = params.viewRotation * (m_cubeRotation * point);
+        QVector3D transformed = params.viewRotation.map(m_cubeRotation.map(point));
         float x = transformed.x() * params.scale + params.center.x();
         float y = -transformed.y() * params.scale + params.center.y();
         return QPointF(x, y);
@@ -235,10 +226,10 @@ ViewCube::Hit ViewCube::hitTest(const QPoint& pos) {
     QVector3D forward = m_camera->forward().normalized();
     const ProjectionParams params = buildProjectionParams();
     auto rotatePoint = [this](const QVector3D& point) {
-        return m_cubeRotation * point;
+        return m_cubeRotation.map(point);
     };
     auto rotateNormal = [this](const QVector3D& normal) {
-        return m_cubeRotation * normal;
+        return m_cubeRotation.map(normal);
     };
     auto isPointVisible = [&forward, &rotatePoint](const QVector3D& point) {
         return QVector3D::dotProduct(rotatePoint(point), forward) < 0.0f;
@@ -349,10 +340,10 @@ void ViewCube::paintEvent(QPaintEvent* event) {
     QVector3D forward = m_camera->forward().normalized();
     const ProjectionParams params = buildProjectionParams();
     auto rotatePoint = [this](const QVector3D& point) {
-        return m_cubeRotation * point;
+        return m_cubeRotation.map(point);
     };
     auto rotateNormal = [this](const QVector3D& normal) {
-        return m_cubeRotation * normal;
+        return m_cubeRotation.map(normal);
     };
     auto isFaceVisible = [&forward, &rotateNormal](const QVector3D& normal) {
         return QVector3D::dotProduct(rotateNormal(normal), forward) < -0.001f;
@@ -409,12 +400,14 @@ void ViewCube::paintEvent(QPaintEvent* event) {
         painter.drawText(textRect, Qt::AlignCenter, face.text);
     }
 
-    // Axes from front-left-bottom corner (origin for view cube)
+    // Draw axes from User Space origin corner (-1,-1,-1)
+    // User Space to Geom Space transformation: x=-v, y=u, z=w
+    // User X(+Y Geom), Y(-X Geom), Z(+Z Geom) axes shown in red, green, blue
     {
-        const QVector3D origin(-1.0f, -1.0f, -1.0f);
-        const QVector3D xAxisEnd(1.0f, -1.0f, -1.0f);
-        const QVector3D yAxisEnd(-1.0f, 1.0f, -1.0f);
-        const QVector3D zAxisEnd(-1.0f, -1.0f, 1.0f);
+        const QVector3D origin(1.0f, -1.0f, -1.0f);
+        const QVector3D xAxisEnd(1.0f, 1.0f, -1.0f);   // Geom +Y (User +X)
+        const QVector3D yAxisEnd(-1.0f, -1.0f, -1.0f); // Geom -X (User +Y)
+        const QVector3D zAxisEnd(1.0f, -1.0f, 1.0f);   // Geom +Z (User +Z)
 
         QPointF o = project(origin, params);
         QPointF x = project(xAxisEnd, params);

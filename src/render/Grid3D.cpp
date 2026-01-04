@@ -1,6 +1,6 @@
 #include "Grid3D.h"
 #include <QtMath>
-#include <iostream>
+#include <QDebug>
 
 namespace onecad {
 namespace render {
@@ -50,33 +50,30 @@ void Grid3D::initialize() {
     m_shader = new QOpenGLShaderProgram();
     
     if (!m_shader->addShaderFromSourceCode(QOpenGLShader::Vertex, vertexShaderSource)) {
-        std::cerr << "Grid3D: Vertex shader compile error: " 
-                  << m_shader->log().toStdString() << std::endl;
+        qWarning() << "Grid3D: Vertex shader compile error:" << m_shader->log();
         return;
     }
     
     if (!m_shader->addShaderFromSourceCode(QOpenGLShader::Fragment, fragmentShaderSource)) {
-        std::cerr << "Grid3D: Fragment shader compile error: " 
-                  << m_shader->log().toStdString() << std::endl;
+        qWarning() << "Grid3D: Fragment shader compile error:" << m_shader->log();
         return;
     }
     
     if (!m_shader->link()) {
-        std::cerr << "Grid3D: Shader link error: " 
-                  << m_shader->log().toStdString() << std::endl;
+        qWarning() << "Grid3D: Shader link error:" << m_shader->log();
         return;
     }
     
-    std::cout << "Grid3D: Shaders compiled and linked successfully" << std::endl;
+    qDebug() << "Grid3D: Shaders compiled and linked successfully";
     
     // Create buffers
     if (!m_vao.create()) {
-        std::cerr << "Grid3D: Failed to create VAO" << std::endl;
+        qWarning() << "Grid3D: Failed to create VAO";
         return;
     }
     
     if (!m_vertexBuffer.create()) {
-        std::cerr << "Grid3D: Failed to create vertex buffer" << std::endl;
+        qWarning() << "Grid3D: Failed to create vertex buffer";
         return;
     }
     
@@ -87,7 +84,7 @@ void Grid3D::initialize() {
     // Build initial grid
     buildGrid(10.0f, 1000.0f);
     
-    std::cout << "Grid3D: Initialized successfully with " << m_lineCount << " vertices" << std::endl;
+    qDebug() << "Grid3D: Initialized successfully with" << m_lineCount << "vertices";
 }
 
 void Grid3D::cleanup() {
@@ -142,31 +139,45 @@ void Grid3D::buildGrid(float spacing, float extent) {
     for (int i = -lineCount; i <= lineCount; ++i) {
         float y = i * spacing;
         bool isMajor = (i % 10 == 0);
-        QColor color = (i == 0) ? QColor(100, 255, 100, 255) : // Y axis green
-                       (isMajor ? m_majorColor : m_minorColor);
         float lineExtent = lineCount * spacing;
-        addLine(-lineExtent, y, 0, lineExtent, y, 0, color);
+
+        if (i == 0) {
+            // Coordinate Mapping: Geom X- aligns with User Y+
+            // Draw User Y Axis (Green) along negative Geom X
+            addLine(0, 0, 0, lineExtent, 0, 0, m_majorColor); // Geom X+ (Gray)
+            addLine(0, 0, 0, -lineExtent, 0, 0, m_yAxisColor); // Geom X- (Green)
+        } else {
+            QColor color = isMajor ? m_majorColor : m_minorColor;
+            addLine(-lineExtent, y, 0, lineExtent, y, 0, color);
+        }
     }
     
     // Grid lines parallel to Y axis
     for (int i = -lineCount; i <= lineCount; ++i) {
         float x = i * spacing;
         bool isMajor = (i % 10 == 0);
-        QColor color = (i == 0) ? QColor(255, 100, 100, 255) : // X axis red
-                       (isMajor ? m_majorColor : m_minorColor);
         float lineExtent = lineCount * spacing;
-        addLine(x, -lineExtent, 0, x, lineExtent, 0, color);
+
+        if (i == 0) {
+            // Coordinate Mapping: Geom Y+ aligns with User X+
+            // Draw User X Axis (Red) along positive Geom Y
+            addLine(0, -lineExtent, 0, 0, 0, 0, m_majorColor); // Geom Y- (Gray)
+            addLine(0, 0, 0, 0, lineExtent, 0, m_xAxisColor); // Geom Y+ (Red)
+        } else {
+            QColor color = isMajor ? m_majorColor : m_minorColor;
+            addLine(x, -lineExtent, 0, x, lineExtent, 0, color);
+        }
     }
     
     // Z axis (blue) - vertical line at origin
     float zExtent = lineCount * spacing * 0.5f;
-    addLine(0, 0, 0, 0, 0, zExtent, QColor(100, 100, 255, 255));
+    addLine(0, 0, 0, 0, 0, zExtent, m_zAxisColor);
     
     m_lineCount = static_cast<int>(m_vertices.size() / 3);
     m_lastSpacing = spacing;
     
     if (m_vertices.empty()) {
-        std::cerr << "Grid3D: No vertices generated!" << std::endl;
+        qWarning() << "Grid3D: No vertices generated!";
         return;
     }
     

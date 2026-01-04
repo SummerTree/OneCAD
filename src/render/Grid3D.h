@@ -53,6 +53,10 @@ private:
     
     QColor m_majorColor;
     QColor m_minorColor;
+
+    QColor m_xAxisColor{255, 100, 100, 255}; // Red
+    QColor m_yAxisColor{100, 255, 100, 255}; // Green
+    QColor m_zAxisColor{100, 100, 255, 255}; // Blue
     
     std::vector<float> m_vertices;
     std::vector<float> m_colors;

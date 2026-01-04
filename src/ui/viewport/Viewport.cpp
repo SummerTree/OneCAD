@@ -21,9 +21,10 @@
 #include <QApplication>
 #include <QOpenGLContext>
 #include <QSizePolicy>
+#include <QEasingCurve>
 #include <QtMath>
+#include <QDebug>
 #include <array>
-#include <iostream>
 #include <limits>
 
 namespace onecad {
@@ -158,8 +159,11 @@ Viewport::Viewport(QWidget* parent)
     m_themeConnection = connect(&ThemeManager::instance(), &ThemeManager::themeChanged,
                                 this, &Viewport::updateTheme, Qt::UniqueConnection);
     updateTheme();
-    // Note: QSurfaceFormat is now set globally in main.cpp
-    // This ensures the format is applied BEFORE context creation
+
+    // Initialize camera animation
+    m_cameraAnimation = new QVariantAnimation(this);
+    m_cameraAnimation->setDuration(500); // 500ms transition
+    m_cameraAnimation->setEasingCurve(QEasingCurve::OutCubic);
 }
 
 Viewport::~Viewport() {
@@ -177,8 +181,8 @@ void Viewport::initializeGL() {
     // Debug: Print OpenGL info
     const char* version = reinterpret_cast<const char*>(glGetString(GL_VERSION));
     const char* renderer = reinterpret_cast<const char*>(glGetString(GL_RENDERER));
-    std::cout << "OpenGL Version: " << (version ? version : "unknown") << std::endl;
-    std::cout << "OpenGL Renderer: " << (renderer ? renderer : "unknown") << std::endl;
+    qDebug() << "OpenGL Version:" << (version ? version : "unknown");
+    qDebug() << "OpenGL Renderer:" << (renderer ? renderer : "unknown");
     
     // Background color set via updateTheme
     glClearColor(m_backgroundColor.redF(), m_backgroundColor.greenF(), m_backgroundColor.blueF(), m_backgroundColor.alphaF());
@@ -196,7 +200,7 @@ void Viewport::initializeGL() {
     // Create and initialize sketch renderer (requires OpenGL context)
     m_sketchRenderer = std::make_unique<sketch::SketchRenderer>();
     if (!m_sketchRenderer->initialize()) {
-        std::cerr << "Failed to initialize SketchRenderer" << std::endl;
+        qWarning() << "Failed to initialize SketchRenderer";
     }
 }
 
@@ -691,6 +695,65 @@ bool Viewport::isNativeZoomActive() const {
     return (m_nativeZoomTimer.elapsed() - m_lastNativeZoomMs) < kNativeZoomPanSuppressMs;
 }
 
+void Viewport::animateCamera(const CameraState& targetState) {
+    if (!m_camera || !m_cameraAnimation) return;
+
+    // Capture start state
+    CameraState startState;
+    startState.position = m_camera->position();
+    startState.target = m_camera->target();
+    startState.up = m_camera->up();
+    startState.angle = m_camera->cameraAngle();
+
+    // Stop any running animation
+    m_cameraAnimation->stop();
+
+    // Disconnect previous connections to avoid stacking slots
+    m_cameraAnimation->disconnect(this);
+
+    // Connect update slot
+    connect(m_cameraAnimation, &QVariantAnimation::valueChanged, this, [this, startState, targetState](const QVariant& value) {
+        float t = value.toFloat();
+        
+        // Linear interpolation for vectors
+        // Note: For 'up' vector and camera rotation, SLERP would be mathematically ideal,
+        // but LERP + normalize is sufficient for smooth camera transitions in this context.
+        QVector3D newPos = startState.position * (1.0f - t) + targetState.position * t;
+        QVector3D newTarget = startState.target * (1.0f - t) + targetState.target * t;
+        QVector3D newUp = (startState.up * (1.0f - t) + targetState.up * t).normalized();
+        float newAngle = startState.angle * (1.0f - t) + targetState.angle * t;
+
+        // Apply to camera
+        // IMPORTANT: We set angle first to let Camera3D handle projection switches,
+        // but then we overwrite position/target/up because we want to follow our 
+        // specific trajectory (aligning to plane) rather than Camera3D's internal "zoom to mouse" logic.
+        m_camera->setCameraAngle(newAngle);
+        m_camera->setPosition(newPos);
+        m_camera->setTarget(newTarget);
+        m_camera->setUp(newUp);
+
+        update();
+        emit cameraChanged();
+    });
+
+    // Cleanup when finished
+    connect(m_cameraAnimation, &QVariantAnimation::finished, this, [this, targetState]() {
+        // Ensure final state is exact
+        m_camera->setCameraAngle(targetState.angle);
+        m_camera->setPosition(targetState.position);
+        m_camera->setTarget(targetState.target);
+        m_camera->setUp(targetState.up);
+        
+        update();
+        emit cameraChanged();
+    });
+
+    // Start animation (0.0 to 1.0)
+    m_cameraAnimation->setStartValue(0.0f);
+    m_cameraAnimation->setEndValue(1.0f);
+    m_cameraAnimation->start();
+}
+
 // Sketch mode
 void Viewport::enterSketchMode(sketch::Sketch* sketch) {
     if (m_inSketchMode || !sketch) return;
@@ -708,40 +771,28 @@ void Viewport::enterSketchMode(sketch::Sketch* sketch) {
 
     // Align camera to sketch plane and switch to orthographic
     const auto& plane = sketch->getPlane();
+    
+    // Use plane vectors directly for camera alignment
+    // Normal -> View direction (from camera towards target)
+    // Y-Axis -> Camera Up vector
     QVector3D normal(plane.normal.x, plane.normal.y, plane.normal.z);
-    QVector3D xAxis(plane.xAxis.x, plane.xAxis.y, plane.xAxis.z);
-    QVector3D yAxis(plane.yAxis.x, plane.yAxis.y, plane.yAxis.z);
-
-    if (normal.lengthSquared() < 1e-8f) {
-        normal = QVector3D::crossProduct(xAxis, yAxis);
-    }
-    if (normal.lengthSquared() < 1e-8f) {
-        normal = QVector3D(0.0f, 0.0f, 1.0f);
-    }
+    QVector3D up(plane.yAxis.x, plane.yAxis.y, plane.yAxis.z);
+    
+    // Ensure vectors are normalized
     normal.normalize();
-
-    if (xAxis.lengthSquared() < 1e-8f) {
-        xAxis = QVector3D::crossProduct(yAxis, normal);
-    }
-    if (xAxis.lengthSquared() < 1e-8f) {
-        xAxis = (std::abs(normal.z()) < 0.9f) ? QVector3D::crossProduct(normal, QVector3D(0, 0, 1))
-                                              : QVector3D::crossProduct(normal, QVector3D(0, 1, 0));
-    }
-    xAxis -= normal * QVector3D::dotProduct(normal, xAxis);
-    if (xAxis.lengthSquared() < 1e-8f) {
-        xAxis = (std::abs(normal.z()) < 0.9f) ? QVector3D::crossProduct(normal, QVector3D(0, 0, 1))
-                                              : QVector3D::crossProduct(normal, QVector3D(0, 1, 0));
-    }
-    xAxis.normalize();
-
-    QVector3D up = QVector3D::crossProduct(normal, xAxis).normalized();
+    up.normalize();
 
     QVector3D target(plane.origin.x, plane.origin.y, plane.origin.z);
     float dist = m_camera->distance();
-    m_camera->setTarget(target);
-    m_camera->setUp(up);
-    m_camera->setPosition(target + normal * dist);
-    m_camera->setCameraAngle(0.0f);  // 0° = orthographic
+    
+    CameraState targetState;
+    targetState.target = target;
+    targetState.up = up;
+    targetState.position = target + normal * dist;
+    targetState.angle = 0.0f; // 0° = orthographic
+
+    // Animate to sketch view
+    animateCamera(targetState);
 
     // Bind sketch to renderer
     if (m_sketchRenderer) {
@@ -789,11 +840,14 @@ void Viewport::exitSketchMode() {
     // Mark document sketches dirty for rebuild
     m_documentSketchesDirty = true;
 
-    // Restore camera to previous state
-    m_camera->setPosition(m_savedCameraPosition);
-    m_camera->setTarget(m_savedCameraTarget);
-    m_camera->setUp(m_savedCameraUp);
-    m_camera->setCameraAngle(m_savedCameraAngle);
+    // Restore camera to previous state with animation
+    CameraState savedState;
+    savedState.position = m_savedCameraPosition;
+    savedState.target = m_savedCameraTarget;
+    savedState.up = m_savedCameraUp;
+    savedState.angle = m_savedCameraAngle;
+    
+    animateCamera(savedState);
 
     update();
     emit sketchModeChanged(false);

@@ -105,45 +105,55 @@ void Camera3D::reset() {
 }
 
 void Camera3D::setFrontView() {
-    float dist = distance();
-    m_target = QVector3D(0, 0, 0);
-    m_position = QVector3D(0, -dist, 0);
-    m_up = QVector3D(0, 0, 1);
-}
-
-void Camera3D::setBackView() {
-    float dist = distance();
-    m_target = QVector3D(0, 0, 0);
-    m_position = QVector3D(0, dist, 0);
-    m_up = QVector3D(0, 0, 1);
-}
-
-void Camera3D::setLeftView() {
-    float dist = distance();
-    m_target = QVector3D(0, 0, 0);
-    m_position = QVector3D(-dist, 0, 0);
-    m_up = QVector3D(0, 0, 1);
-}
-
-void Camera3D::setRightView() {
+    // User Front = User -Y = Geom +X
     float dist = distance();
     m_target = QVector3D(0, 0, 0);
     m_position = QVector3D(dist, 0, 0);
     m_up = QVector3D(0, 0, 1);
 }
 
+void Camera3D::setBackView() {
+    // User Back = User +Y = Geom -X
+    float dist = distance();
+    m_target = QVector3D(0, 0, 0);
+    m_position = QVector3D(-dist, 0, 0);
+    m_up = QVector3D(0, 0, 1);
+}
+
+void Camera3D::setLeftView() {
+    // User Left = User -X = Geom -Y
+    float dist = distance();
+    m_target = QVector3D(0, 0, 0);
+    m_position = QVector3D(0, -dist, 0);
+    m_up = QVector3D(0, 0, 1);
+}
+
+void Camera3D::setRightView() {
+    // User Right = User +X = Geom +Y
+    float dist = distance();
+    m_target = QVector3D(0, 0, 0);
+    m_position = QVector3D(0, dist, 0);
+    m_up = QVector3D(0, 0, 1);
+}
+
 void Camera3D::setTopView() {
+    // User Top = +Z view
+    // Screen right (User +X) maps to Geom +Y
+    // Screen up (User +Y) maps to Geom -X
     float dist = distance();
     m_target = QVector3D(0, 0, 0);
     m_position = QVector3D(0, 0, dist);
-    m_up = QVector3D(0, 1, 0);
+    m_up = QVector3D(-1, 0, 0);
 }
 
 void Camera3D::setBottomView() {
+    // User Bottom = -Z
+    // Up Vector should be User -Y (Top of screen) -> Geom +X
+    // (To mirror Top view flip)
     float dist = distance();
     m_target = QVector3D(0, 0, 0);
     m_position = QVector3D(0, 0, -dist);
-    m_up = QVector3D(0, -1, 0);
+    m_up = QVector3D(1, 0, 0);
 }
 
 void Camera3D::setIsometricView() {

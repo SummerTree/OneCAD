@@ -66,3 +66,17 @@ target_link_libraries(proto_face_builder
     PRIVATE
     onecad_core
 )
+
+# Viewport Compilation Test
+add_executable(test_compile test_compile.cpp)
+target_link_libraries(test_compile
+    PRIVATE
+    onecad_app
+    onecad_ui
+    Qt6::Widgets
+    Qt6::Gui
+    Qt6::Core
+    Qt6::OpenGL
+    Qt6::OpenGLWidgets
+)
+target_include_directories(test_compile PRIVATE ${CMAKE_SOURCE_DIR}/src)

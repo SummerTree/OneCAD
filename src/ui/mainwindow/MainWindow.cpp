@@ -464,7 +464,7 @@ void MainWindow::onMousePositionChanged(double x, double y, double z) {
 void MainWindow::loadSettings() {
     QSettings settings("OneCAD", "OneCAD");
 
-    // Restore camera angle from last session
+    // Restore saved camera angle (default to 45 degrees if not set)
     float savedAngle = settings.value("viewport/cameraAngle", 45.0f).toFloat();
 
     if (m_cameraAngleSlider) {

@@ -51,17 +51,36 @@ struct SketchPlane {
 
     /**
      * @brief Default XY plane at origin
+     * 
+     * @note NON-STANDARD COORDINATE SYSTEM
+     * This plane maps 2D sketch coordinates to 3D world coordinates as follows:
+     * - User X (Sketch X) -> World Y+ (0,1,0)
+     * - User Y (Sketch Y) -> World X- (-1,0,0)
+     * - Normal -> World Z+ (0,0,1)
+     * 
+     * This orientation is intentional to align with the application's specific
+     * viewport conventions where "Front" is World X+ and "Right" is World Y+.
      */
     static SketchPlane XY() {
-        return {{0, 0, 0}, {1, 0, 0}, {0, 1, 0}, {0, 0, 1}};
+        return {{0, 0, 0}, {0, 1, 0}, {-1, 0, 0}, {0, 0, 1}};
     }
 
+    /**
+     * @brief XZ plane
+     * User X = Geom Y+ (0,1,0)
+     * User Z = Geom Z+ (0,0,1)
+     */
     static SketchPlane XZ() {
-        return {{0, 0, 0}, {1, 0, 0}, {0, 0, 1}, {0, -1, 0}};
+        return {{0, 0, 0}, {0, 1, 0}, {0, 0, 1}, {1, 0, 0}};
     }
 
+    /**
+     * @brief YZ plane
+     * User Y = Geom X- (-1,0,0)
+     * User Z = Geom Z+ (0,0,1)
+     */
     static SketchPlane YZ() {
-        return {{0, 0, 0}, {0, 1, 0}, {0, 0, 1}, {1, 0, 0}};
+        return {{0, 0, 0}, {-1, 0, 0}, {0, 0, 1}, {0, 1, 0}};
     }
 
     /**
