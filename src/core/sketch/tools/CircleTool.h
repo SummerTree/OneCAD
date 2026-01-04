@@ -41,6 +41,7 @@ public:
 private:
     Vec2d centerPoint_{0, 0};
     Vec2d currentPoint_{0, 0};
+    EntityID centerPointId_;
     double currentRadius_ = 0.0;
     bool circleCreated_ = false;
 };

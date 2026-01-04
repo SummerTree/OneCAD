@@ -6,8 +6,8 @@
  * A closed loop is a sequence of connected edges (lines, arcs) that form a
  * continuous boundary.
  *
- * IMPLEMENTATION STATUS: PLACEHOLDER
- * Complex graph algorithms will be implemented in Phase 3.
+ * IMPLEMENTATION STATUS: COMPLETE
+ * Graph-based algorithms implemented in LoopDetector.cpp (1506 lines).
  *
  * Key concepts:
  * - Wire: Ordered sequence of connected edges forming a path
@@ -109,8 +109,7 @@ struct Loop {
     /**
      * @brief Check if a point is inside this loop
      *
-     * PLACEHOLDER: Point-in-polygon algorithm
-     * Will use ray casting or winding number method
+     * Uses ray casting algorithm for point-in-polygon test.
      */
     bool contains(const sk::Vec2d& point) const;
 
@@ -228,8 +227,8 @@ struct LoopDetectorConfig {
  * Finds closed loops in sketch geometry suitable for extrusion.
  * Uses graph-based algorithms to detect and classify loops.
  *
- * IMPLEMENTATION STATUS: PLACEHOLDER
- * Core algorithms to be implemented in Phase 3:
+ * IMPLEMENTATION STATUS: COMPLETE
+ * Core algorithms implemented:
  * - Graph construction from sketch entities
  * - Depth-first search for cycle detection
  * - Shoelace formula for area/orientation
@@ -260,7 +259,6 @@ public:
      * 5. Build face hierarchy (outer loops containing holes)
      * 6. Validate and return results
      *
-     * PLACEHOLDER: Returns empty result
      */
     LoopDetectionResult detect(const sk::Sketch& sketch) const;
 
@@ -303,8 +301,8 @@ private:
     /**
      * @brief Build adjacency graph from sketch
      *
-     * PLACEHOLDER: Graph data structure implementation
-     * Each point becomes a node, each edge (line/arc) connects nodes
+     * Each point becomes a node, each edge (line/arc) connects nodes.
+     * Supports optional planarization for intersection handling.
      */
     std::unique_ptr<AdjacencyGraph> buildGraph(
         const sk::Sketch& sketch,
@@ -314,8 +312,7 @@ private:
     /**
      * @brief Find all simple cycles in graph using DFS
      *
-     * PLACEHOLDER: Cycle detection algorithm
-     * References: Johnson's algorithm or Tarjan's algorithm
+     * Uses depth-first search for cycle detection.
      */
     std::vector<Wire> findCycles(const AdjacencyGraph& graph) const;
 
@@ -327,8 +324,7 @@ private:
     /**
      * @brief Compute loop properties (area, centroid, bounds)
      *
-     * PLACEHOLDER: Shoelace formula for polygon area
-     * Area = 0.5 * |Σ(x_i * y_{i+1} - x_{i+1} * y_i)|
+     * Uses Shoelace formula: Area = 0.5 * |Σ(x_i * y_{i+1} - x_{i+1} * y_i)|
      */
     void computeLoopProperties(Loop& loop, const sk::Sketch& sketch) const;
 
@@ -340,8 +336,7 @@ private:
     /**
      * @brief Build face hierarchy from loops
      *
-     * PLACEHOLDER: Containment testing
-     * Uses point-in-polygon to determine nesting
+     * Uses point-in-polygon to determine nesting.
      * Note: loops are copied and may be reordered for hierarchy building.
      */
     std::vector<Face> buildFaceHierarchy(std::vector<Loop> loops) const;
@@ -359,15 +354,14 @@ private:
 /**
  * @brief Compute signed area of a polygon
  *
- * PLACEHOLDER: Shoelace formula implementation
- * Positive = CCW, Negative = CW
+ * Uses Shoelace formula. Positive = CCW, Negative = CW
  */
 double computeSignedArea(const std::vector<sk::Vec2d>& polygon);
 
 /**
  * @brief Check if point is inside polygon
  *
- * PLACEHOLDER: Ray casting algorithm
+ * Uses ray casting algorithm.
  */
 bool isPointInPolygon(const sk::Vec2d& point, const std::vector<sk::Vec2d>& polygon);
 
@@ -378,8 +372,6 @@ sk::Vec2d computeCentroid(const std::vector<sk::Vec2d>& polygon);
 
 /**
  * @brief Check if polygon edges intersect
- *
- * PLACEHOLDER: Edge intersection test
  */
 bool polygonsIntersect(const std::vector<sk::Vec2d>& poly1,
                        const std::vector<sk::Vec2d>& poly2);

@@ -1,6 +1,9 @@
 #include "LineTool.h"
 #include "../Sketch.h"
 #include "../SketchRenderer.h"
+#include "../AutoConstrainer.h"
+#include "../SketchLine.h"
+#include "../SketchPoint.h"
 
 #include <cstdio>
 #include <string>
@@ -27,6 +30,10 @@ void LineTool::onMousePress(const Vec2d& pos, Qt::MouseButton button) {
         // First click - record start point
         startPoint_ = pos;
         currentPoint_ = pos;
+        startPointId_.clear();
+        if (snapResult_.snapped && !snapResult_.pointId.empty()) {
+            startPointId_ = snapResult_.pointId;
+        }
         state_ = State::FirstClick;
     } else if (state_ == State::FirstClick) {
         // Second click - create line
@@ -39,13 +46,28 @@ void LineTool::onMousePress(const Vec2d& pos, Qt::MouseButton button) {
         double dy = pos.y - startPoint_.y;
         double length = std::sqrt(dx * dx + dy * dy);
 
-        if (length < 0.01) {
+        if (length < constants::MIN_GEOMETRY_SIZE) {
             // Too short, ignore
             return;
         }
 
-        // Create line using the convenience method that creates points
-        EntityID lineId = sketch_->addLine(startPoint_.x, startPoint_.y, pos.x, pos.y);
+        EntityID startId = startPointId_;
+        if (startId.empty()) {
+            startId = sketch_->addPoint(startPoint_.x, startPoint_.y);
+        }
+
+        EntityID endId;
+        if (snapResult_.snapped && !snapResult_.pointId.empty()) {
+            endId = snapResult_.pointId;
+        } else {
+            endId = sketch_->addPoint(pos.x, pos.y);
+        }
+
+        if (startId.empty() || endId.empty() || startId == endId) {
+            return;
+        }
+
+        EntityID lineId = sketch_->addLine(startId, endId);
 
         if (!lineId.empty()) {
             lineCreated_ = true;
@@ -55,6 +77,26 @@ void LineTool::onMousePress(const Vec2d& pos, Qt::MouseButton button) {
             auto* line = sketch_->getEntityAs<SketchLine>(lineId);
             if (line) {
                 lastPointId_ = line->endPointId();
+                startPointId_ = line->endPointId();
+
+                // Apply inferred constraints
+                if (autoConstrainer_ && autoConstrainer_->isEnabled()) {
+                    DrawingContext context;
+                    context.activeEntity = lineId;
+                    context.previousEntity = lastCreatedLineId_;
+                    context.startPoint = startPoint_;
+                    context.currentPoint = pos;
+                    context.isPolylineMode = !lastCreatedLineId_.empty();
+
+                    auto constraints = autoConstrainer_->inferLineConstraints(
+                        startPoint_, pos, lineId, *sketch_, context);
+
+                    // Filter and apply high-confidence constraints
+                    auto toApply = autoConstrainer_->filterForAutoApply(constraints);
+                    applyInferredConstraints(toApply, lineId);
+                }
+
+                lastCreatedLineId_ = lineId;
             }
 
             // Continue polyline: new start = old end
@@ -67,6 +109,96 @@ void LineTool::onMousePress(const Vec2d& pos, Qt::MouseButton button) {
 
 void LineTool::onMouseMove(const Vec2d& pos) {
     currentPoint_ = pos;
+
+    // Update preview constraints
+    updateInferredConstraints();
+}
+
+void LineTool::updateInferredConstraints() {
+    inferredConstraints_.clear();
+
+    if (state_ != State::FirstClick || !autoConstrainer_ || !sketch_) {
+        return;
+    }
+
+    DrawingContext context;
+    context.activeEntity = {};  // Line not created yet
+    context.previousEntity = lastCreatedLineId_;
+    context.startPoint = startPoint_;
+    context.currentPoint = currentPoint_;
+    context.isPolylineMode = !lastCreatedLineId_.empty();
+
+    // Use empty lineId since line doesn't exist yet
+    inferredConstraints_ = autoConstrainer_->inferLineConstraints(
+        startPoint_, currentPoint_, {}, *sketch_, context);
+}
+
+void LineTool::applyInferredConstraints(const std::vector<InferredConstraint>& constraints,
+                                         EntityID lineId) {
+    if (!sketch_ || lineId.empty()) return;
+
+    auto* line = sketch_->getEntityAs<SketchLine>(lineId);
+    if (!line) return;
+
+    for (const auto& constraint : constraints) {
+        switch (constraint.type) {
+            case ConstraintType::Horizontal:
+                sketch_->addHorizontal(lineId);
+                break;
+
+            case ConstraintType::Vertical:
+                sketch_->addVertical(lineId);
+                break;
+
+            case ConstraintType::Perpendicular:
+                if (constraint.entity2) {
+                    sketch_->addPerpendicular(lineId, *constraint.entity2);
+                }
+                break;
+
+            case ConstraintType::Parallel:
+                if (constraint.entity2) {
+                    sketch_->addParallel(lineId, *constraint.entity2);
+                }
+                break;
+
+            case ConstraintType::Coincident:
+                if (!constraint.entity1.empty()) {
+                    const auto* existing = sketch_->getEntityAs<SketchPoint>(constraint.entity1);
+                    const auto* startPt = sketch_->getEntityAs<SketchPoint>(line->startPointId());
+                    const auto* endPt = sketch_->getEntityAs<SketchPoint>(line->endPointId());
+                    if (!existing || !startPt || !endPt) {
+                        break;
+                    }
+
+                    if (constraint.entity1 == line->startPointId() ||
+                        constraint.entity1 == line->endPointId()) {
+                        break;
+                    }
+
+                    Vec2d existingPos{existing->position().X(), existing->position().Y()};
+                    Vec2d startPos{startPt->position().X(), startPt->position().Y()};
+                    Vec2d endPos{endPt->position().X(), endPt->position().Y()};
+                    double tolerance = autoConstrainer_
+                        ? autoConstrainer_->getConfig().coincidenceTolerance
+                        : constants::SNAP_RADIUS_MM;
+
+                    double startDist = std::hypot(existingPos.x - startPos.x, existingPos.y - startPos.y);
+                    double endDist = std::hypot(existingPos.x - endPos.x, existingPos.y - endPos.y);
+
+                    if (startDist <= tolerance) {
+                        sketch_->addCoincident(line->startPointId(), constraint.entity1);
+                    } else if (endDist <= tolerance) {
+                        sketch_->addCoincident(line->endPointId(), constraint.entity1);
+                    }
+                }
+                break;
+
+            default:
+                // Other constraint types not applicable to lines
+                break;
+        }
+    }
 }
 
 void LineTool::onMouseRelease(const Vec2d& /*pos*/, Qt::MouseButton /*button*/) {
@@ -81,8 +213,11 @@ void LineTool::onKeyPress(Qt::Key key) {
 
 void LineTool::cancel() {
     state_ = State::Idle;
+    startPointId_.clear();
     lastPointId_.clear();
+    lastCreatedLineId_.clear();
     lineCreated_ = false;
+    inferredConstraints_.clear();
 }
 
 void LineTool::render(SketchRenderer& renderer) {
@@ -95,7 +230,7 @@ void LineTool::render(SketchRenderer& renderer) {
         double dy = currentPoint_.y - startPoint_.y;
         double length = std::sqrt(dx * dx + dy * dy);
 
-        if (length > 0.01) {
+        if (length > constants::MIN_GEOMETRY_SIZE) {
             char buffer[32];
             std::snprintf(buffer, sizeof(buffer), "%.2f", length);
             
@@ -106,7 +241,7 @@ void LineTool::render(SketchRenderer& renderer) {
 
             renderer.setPreviewDimensions({{midPoint, std::string(buffer)}});
         } else {
-             renderer.clearPreviewDimensions();
+            renderer.clearPreviewDimensions();
         }
     } else {
         renderer.clearPreview();

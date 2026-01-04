@@ -9,14 +9,14 @@
  * - DOF indicator visualization
  * - Viewport culling for large sketches
  *
- * IMPLEMENTATION STATUS: PLACEHOLDER
- * Actual rendering implementation in Phase 4.
- * Requires integration with existing OpenGL infrastructure.
+ * IMPLEMENTATION STATUS: COMPLETE
+ * Full OpenGL rendering implementation in SketchRenderer.cpp (1897 lines).
  */
 #ifndef ONECAD_CORE_SKETCH_SKETCH_RENDERER_H
 #define ONECAD_CORE_SKETCH_SKETCH_RENDERER_H
 
 #include "SketchTypes.h"
+#include "SnapManager.h"  // For SnapType, SnapResult
 #include <functional>
 #include <memory>
 #include <optional>
@@ -37,27 +37,7 @@ class Sketch;
 class SketchEntity;
 class SketchConstraint;
 
-/**
- * @brief Snap type enumeration
- *
- * Per SPECIFICATION.md §5.14:
- * Different snap types with priority order
- */
-enum class SnapType {
-    None = 0,
-    Vertex,       // Snap to existing point (highest priority)
-    Endpoint,     // Snap to line/arc endpoint
-    Midpoint,     // Snap to line midpoint
-    Center,       // Snap to arc/circle center
-    Quadrant,     // Snap to circle quadrant points
-    Intersection, // Snap to intersection of two entities
-    OnCurve,      // Snap to nearest point on curve
-    Grid,         // Snap to grid (lowest priority)
-    Perpendicular,// Perpendicular snap (inference)
-    Tangent,      // Tangent snap (inference)
-    Horizontal,   // Horizontal inference
-    Vertical      // Vertical inference
-};
+// Note: SnapType and SnapResult are now defined in SnapManager.h
 
 /**
  * @brief Color definitions for sketch rendering
@@ -203,13 +183,13 @@ struct ConstraintRenderData {
  *
  * Handles all visual representation of sketch geometry and constraints.
  *
- * IMPLEMENTATION STATUS: PLACEHOLDER
- * Key rendering systems to implement:
+ * IMPLEMENTATION STATUS: COMPLETE
+ * Key rendering systems implemented:
  * - VBO management for entity geometry
- * - Texture atlas for constraint icons
- * - Adaptive arc tessellation
+ * - Adaptive arc tessellation (8-256 segments)
  * - Viewport culling
  * - Selection highlighting
+ * - Region rendering with triangulation
  */
 // Forward declare PIMPL class
 class SketchRendererImpl;
@@ -228,8 +208,6 @@ public:
      *
      * Must be called after OpenGL context is available.
      * Creates shaders, VBOs, textures.
-     *
-     * PLACEHOLDER: OpenGL initialization
      */
     bool initialize();
 
@@ -262,8 +240,6 @@ public:
      * @brief Render the sketch
      * @param viewMatrix View transformation matrix
      * @param projMatrix Projection matrix
-     *
-     * PLACEHOLDER: OpenGL rendering calls
      *
      * Per SPECIFICATION.md §5.18:
      * 1. Frustum cull entities outside viewport
@@ -433,9 +409,7 @@ public:
      * @brief Find entity at screen position
      * @param screenPos Position in screen coordinates
      * @param tolerance Pick tolerance in pixels
-     * @return EntityID of nearest entity, or 0 if none
-     *
-     * PLACEHOLDER: Hit testing algorithm
+     * @return EntityID of nearest entity, or empty string if none
      */
     EntityID pickEntity(const Vec2d& screenPos, double tolerance = 5.0) const;
 
@@ -500,30 +474,13 @@ private:
     bool constraintsDirty_ = true;
     bool vboDirty_ = true;
 
-    // ========== OpenGL Resources (PLACEHOLDERS) ==========
-    // These will be initialized in Phase 4
-
-    // Shaders
-    // std::unique_ptr<QOpenGLShaderProgram> lineShader_;
-    // std::unique_ptr<QOpenGLShaderProgram> pointShader_;
-    // std::unique_ptr<QOpenGLShaderProgram> iconShader_;
-
-    // VBOs
-    // std::unique_ptr<QOpenGLBuffer> lineVBO_;
-    // std::unique_ptr<QOpenGLBuffer> pointVBO_;
-    // std::unique_ptr<QOpenGLVertexArrayObject> lineVAO_;
-    // std::unique_ptr<QOpenGLVertexArrayObject> pointVAO_;
-
-    // Texture atlas for constraint icons
-    // unsigned int constraintIconAtlas_ = 0;
+    // OpenGL resources managed via PIMPL (SketchRendererImpl)
 
     /**
      * @brief Tessellate arc into line segments
      *
      * Per SPECIFICATION.md §5.18:
-     * Adaptive tessellation based on zoom level
-     *
-     * PLACEHOLDER: Arc tessellation algorithm
+     * Adaptive tessellation based on zoom level.
      * segments = clamp(arc_angle / tessellation_angle, min, max)
      */
     std::vector<Vec2d> tessellateArc(const Vec2d& center, double radius,
@@ -536,8 +493,6 @@ private:
 
     /**
      * @brief Build VBO data from entity render data
-     *
-     * PLACEHOLDER: VBO building
      */
     void buildVBOs();
 
@@ -555,73 +510,7 @@ private:
     Vec2d calculateConstraintIconPosition(const SketchConstraint* constraint) const;
 };
 
-/**
- * @brief Snap result from snap system
- */
-struct SnapResult {
-    bool snapped = false;
-    SnapType type = SnapType::None;
-    Vec2d position;
-    EntityID entityId;          // Entity snapped to (if any)
-    EntityID secondEntity;      // For intersections
-    double distance = 0.0;      // Distance from cursor
-
-    bool operator<(const SnapResult& other) const {
-        // Priority: type first, then distance
-        if (type != other.type) {
-            return static_cast<int>(type) < static_cast<int>(other.type);
-        }
-        return distance < other.distance;
-    }
-};
-
-/**
- * @brief Snap manager for auto-constraining
- *
- * Per SPECIFICATION.md §5.14:
- * 2mm snap radius, priority order
- *
- * PLACEHOLDER: Snap implementation in Phase 5
- */
-class SnapManager {
-public:
-    /**
-     * @brief Find best snap position
-     * @param cursorPos Current cursor position
-     * @param sketch Sketch to snap to
-     * @param excludeEntity Entity to exclude (e.g., entity being drawn)
-     */
-    SnapResult findSnap(const Vec2d& cursorPos, const Sketch& sketch,
-                        EntityID excludeEntity = {}) const;
-
-    /**
-     * @brief Set snap radius in mm
-     */
-    void setSnapRadius(double radius) { snapRadius_ = radius; }
-
-    /**
-     * @brief Enable/disable specific snap types
-     */
-    void setSnapEnabled(SnapType type, bool enabled);
-
-    /**
-     * @brief Enable/disable grid snapping
-     */
-    void setGridSnap(bool enabled, double gridSize = 1.0);
-
-private:
-    double snapRadius_ = 2.0;  // mm
-    double gridSize_ = 1.0;    // mm
-    bool gridSnapEnabled_ = true;
-    std::unordered_map<SnapType, bool> snapEnabled_;
-
-    /**
-     * @brief Find all potential snap points
-     */
-    std::vector<SnapResult> findAllSnaps(const Vec2d& cursorPos,
-                                          const Sketch& sketch,
-                                          EntityID excludeEntity) const;
-};
+// Note: SnapResult and SnapManager are now in SnapManager.h
 
 } // namespace onecad::core::sketch
 

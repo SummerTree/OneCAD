@@ -8,6 +8,8 @@ add_library(onecad_core STATIC
     sketch/SketchCircle.cpp
     sketch/SketchConstraint.cpp
     sketch/SketchRenderer.cpp
+    sketch/SnapManager.cpp
+    sketch/AutoConstrainer.cpp
     sketch/constraints/Constraints.cpp
     sketch/solver/ConstraintSolver.cpp
     sketch/solver/SolverAdapter.cpp
@@ -48,6 +50,8 @@ set(SKETCH_HEADERS
     sketch/SketchConstraint.h
     sketch/Sketch.h
     sketch/SketchRenderer.h
+    sketch/SnapManager.h
+    sketch/AutoConstrainer.h
     sketch/constraints/Constraints.h
     sketch/solver/ConstraintSolver.h
     sketch/solver/SolverAdapter.h

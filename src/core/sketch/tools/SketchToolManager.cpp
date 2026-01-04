@@ -37,6 +37,7 @@ void SketchToolManager::activateTool(ToolType type) {
     activeTool_ = createTool(type);
     if (activeTool_) {
         activeTool_->setSketch(sketch_);
+        activeTool_->setAutoConstrainer(&autoConstrainer_);
         currentType_ = type;
         emit toolChanged(type);
     }
@@ -48,10 +49,13 @@ void SketchToolManager::deactivateTool() {
         activeTool_.reset();
     }
     currentType_ = ToolType::None;
+    currentSnapResult_ = SnapResult{};
+    currentInferredConstraints_.clear();
 
     // Clear any preview
     if (renderer_) {
         renderer_->clearPreview();
+        renderer_->hideSnapIndicator();
     }
 
     emit toolChanged(ToolType::None);
@@ -62,7 +66,20 @@ void SketchToolManager::handleMousePress(const Vec2d& pos, Qt::MouseButton butto
         return;
     }
 
-    activeTool_->onMousePress(pos, button);
+    rawCursorPos_ = pos;
+    if (sketch_) {
+        currentSnapResult_ = snapManager_.findBestSnap(pos, *sketch_, excludeFromSnap_);
+    } else {
+        currentSnapResult_ = SnapResult{};
+    }
+    activeTool_->setSnapResult(currentSnapResult_);
+    activeTool_->setInferredConstraints({});
+
+    // Use snapped position for press
+    Vec2d snappedPos = currentSnapResult_.snapped ? currentSnapResult_.position : pos;
+
+    activeTool_->onMousePress(snappedPos, button);
+    currentInferredConstraints_ = activeTool_->inferredConstraints();
 
     // Check if geometry was created
     bool created = false;
@@ -91,11 +108,30 @@ void SketchToolManager::handleMousePress(const Vec2d& pos, Qt::MouseButton butto
 }
 
 void SketchToolManager::handleMouseMove(const Vec2d& pos) {
+    rawCursorPos_ = pos;
+
     if (!activeTool_) {
+        currentSnapResult_ = SnapResult{};
+        currentInferredConstraints_.clear();
         return;
     }
 
-    activeTool_->onMouseMove(pos);
+    // Apply snapping
+    if (sketch_) {
+        currentSnapResult_ = snapManager_.findBestSnap(pos, *sketch_, excludeFromSnap_);
+    } else {
+        currentSnapResult_ = SnapResult{};
+    }
+
+    // Pass snap result to tool
+    activeTool_->setSnapResult(currentSnapResult_);
+    activeTool_->setInferredConstraints({});
+
+    // Get snapped position for tool
+    Vec2d snappedPos = currentSnapResult_.snapped ? currentSnapResult_.position : pos;
+
+    activeTool_->onMouseMove(snappedPos);
+    currentInferredConstraints_ = activeTool_->inferredConstraints();
     emit updateRequested();
 }
 
@@ -104,7 +140,20 @@ void SketchToolManager::handleMouseRelease(const Vec2d& pos, Qt::MouseButton but
         return;
     }
 
-    activeTool_->onMouseRelease(pos, button);
+    rawCursorPos_ = pos;
+    if (sketch_) {
+        currentSnapResult_ = snapManager_.findBestSnap(pos, *sketch_, excludeFromSnap_);
+    } else {
+        currentSnapResult_ = SnapResult{};
+    }
+    activeTool_->setSnapResult(currentSnapResult_);
+    activeTool_->setInferredConstraints({});
+
+    // Use snapped position for release
+    Vec2d snappedPos = currentSnapResult_.snapped ? currentSnapResult_.position : pos;
+
+    activeTool_->onMouseRelease(snappedPos, button);
+    currentInferredConstraints_ = activeTool_->inferredConstraints();
     emit updateRequested();
 }
 
@@ -118,11 +167,21 @@ void SketchToolManager::handleKeyPress(Qt::Key key) {
 }
 
 void SketchToolManager::renderPreview() {
-    if (!activeTool_ || !renderer_) {
+    if (!renderer_) {
         return;
     }
 
-    activeTool_->render(*renderer_);
+    // Show snap indicator if snapped
+    if (currentSnapResult_.snapped) {
+        renderer_->showSnapIndicator(currentSnapResult_.position, currentSnapResult_.type);
+    } else {
+        renderer_->hideSnapIndicator();
+    }
+
+    // Render tool preview
+    if (activeTool_) {
+        activeTool_->render(*renderer_);
+    }
 }
 
 std::unique_ptr<SketchTool> SketchToolManager::createTool(ToolType type) {

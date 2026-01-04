@@ -7,9 +7,12 @@
 #define ONECAD_CORE_SKETCH_TOOLS_SKETCHTOOL_H
 
 #include "../SketchTypes.h"
+#include "../SnapManager.h"
+#include "../AutoConstrainer.h"
 
 #include <Qt>
 #include <string>
+#include <vector>
 
 namespace onecad::core::sketch {
 
@@ -93,9 +96,43 @@ public:
      */
     bool isActive() const { return state_ != State::Idle; }
 
+    // ========== Snap & Auto-Constraint Info ==========
+
+    /**
+     * @brief Set current snap result (called by ToolManager before onMouseMove)
+     */
+    void setSnapResult(const SnapResult& result) { snapResult_ = result; }
+    const SnapResult& snapResult() const { return snapResult_; }
+
+    /**
+     * @brief Set inferred constraints (called by ToolManager)
+     */
+    void setInferredConstraints(const std::vector<InferredConstraint>& constraints) {
+        inferredConstraints_ = constraints;
+    }
+    const std::vector<InferredConstraint>& inferredConstraints() const {
+        return inferredConstraints_;
+    }
+
+    /**
+     * @brief Get snapped position (snap point if snapped, raw otherwise)
+     * @param rawPos Original cursor position
+     */
+    Vec2d getSnappedPos(const Vec2d& rawPos) const {
+        return snapResult_.snapped ? snapResult_.position : rawPos;
+    }
+
+    /**
+     * @brief Set auto-constrainer (called by ToolManager)
+     */
+    void setAutoConstrainer(AutoConstrainer* constrainer) { autoConstrainer_ = constrainer; }
+
 protected:
     Sketch* sketch_ = nullptr;
     State state_ = State::Idle;
+    SnapResult snapResult_;
+    std::vector<InferredConstraint> inferredConstraints_;
+    AutoConstrainer* autoConstrainer_ = nullptr;
 };
 
 } // namespace tools

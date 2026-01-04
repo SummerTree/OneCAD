@@ -1,9 +1,14 @@
 #include "CircleTool.h"
 #include "../Sketch.h"
 #include "../SketchRenderer.h"
+#include "../AutoConstrainer.h"
+#include "../SketchCircle.h"
+#include "../SketchArc.h"
+#include "../constraints/Constraints.h"
 
 #include <cmath>
 #include <cstdio>
+#include <memory>
 #include <string>
 
 namespace onecad::core::sketch::tools {
@@ -27,6 +32,10 @@ void CircleTool::onMousePress(const Vec2d& pos, Qt::MouseButton button) {
         centerPoint_ = pos;
         currentPoint_ = pos;
         currentRadius_ = 0.0;
+        centerPointId_.clear();
+        if (snapResult_.snapped && !snapResult_.pointId.empty()) {
+            centerPointId_ = snapResult_.pointId;
+        }
         state_ = State::FirstClick;
     } else if (state_ == State::FirstClick) {
         // Second click - create circle
@@ -39,21 +48,72 @@ void CircleTool::onMousePress(const Vec2d& pos, Qt::MouseButton button) {
         double dy = pos.y - centerPoint_.y;
         double radius = std::sqrt(dx * dx + dy * dy);
 
-        if (radius < 0.01) {
+        if (radius < constants::MIN_GEOMETRY_SIZE) {
             // Too small, ignore
             return;
         }
 
         // Create circle
-        EntityID circleId = sketch_->addCircle(centerPoint_.x, centerPoint_.y, radius);
+        EntityID circleId;
+        if (!centerPointId_.empty()) {
+            circleId = sketch_->addCircle(centerPointId_, radius);
+        } else {
+            circleId = sketch_->addCircle(centerPoint_.x, centerPoint_.y, radius);
+        }
 
         if (!circleId.empty()) {
             circleCreated_ = true;
+
+            auto resolveCenterPointId = [this](const EntityID& entityId) -> EntityID {
+                if (const auto* circle = sketch_->getEntityAs<SketchCircle>(entityId)) {
+                    return circle->centerPointId();
+                }
+                if (const auto* arc = sketch_->getEntityAs<SketchArc>(entityId)) {
+                    return arc->centerPointId();
+                }
+                return {};
+            };
+
+            // Apply inferred constraints
+            if (autoConstrainer_ && autoConstrainer_->isEnabled()) {
+                DrawingContext context;
+                context.activeEntity = circleId;
+                context.startPoint = centerPoint_;
+                context.currentPoint = pos;
+
+                auto constraints = autoConstrainer_->inferCircleConstraints(
+                    centerPoint_, radius, circleId, *sketch_, context);
+
+                // Filter and apply high-confidence constraints
+                auto toApply = autoConstrainer_->filterForAutoApply(constraints);
+                for (const auto& constraint : toApply) {
+                    if (constraint.type == ConstraintType::Coincident) {
+                        EntityID centerId = resolveCenterPointId(circleId);
+                        if (!centerId.empty() && !constraint.entity1.empty() &&
+                            centerId != constraint.entity1) {
+                            sketch_->addCoincident(centerId, constraint.entity1);
+                        }
+                    } else if (constraint.type == ConstraintType::Concentric && constraint.entity2 &&
+                               !constraint.entity2->empty()) {
+                        EntityID centerId = resolveCenterPointId(circleId);
+                        EntityID otherCenterId = resolveCenterPointId(*constraint.entity2);
+                        if (!centerId.empty() && !otherCenterId.empty() &&
+                            centerId != otherCenterId) {
+                            sketch_->addCoincident(centerId, otherCenterId);
+                        }
+                    } else if (constraint.type == ConstraintType::Equal && constraint.entity2 &&
+                               !constraint.entity2->empty()) {
+                        sketch_->addConstraint(
+                            std::make_unique<constraints::EqualConstraint>(circleId, *constraint.entity2));
+                    }
+                }
+            }
         }
 
         // Return to idle state (circle tool doesn't chain like line tool)
         state_ = State::Idle;
         currentRadius_ = 0.0;
+        centerPointId_.clear();
     }
 }
 
@@ -82,10 +142,11 @@ void CircleTool::cancel() {
     state_ = State::Idle;
     currentRadius_ = 0.0;
     circleCreated_ = false;
+    centerPointId_.clear();
 }
 
 void CircleTool::render(SketchRenderer& renderer) {
-    if (state_ == State::FirstClick && currentRadius_ > 0.01) {
+    if (state_ == State::FirstClick && currentRadius_ > constants::MIN_GEOMETRY_SIZE) {
         // Show preview circle
         renderer.setPreviewCircle(centerPoint_, currentRadius_);
 

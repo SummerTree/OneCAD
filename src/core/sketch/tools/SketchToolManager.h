@@ -7,9 +7,12 @@
 #define ONECAD_CORE_SKETCH_TOOLS_SKETCHTOOLMANAGER_H
 
 #include "SketchTool.h"
+#include "../SnapManager.h"
+#include "../AutoConstrainer.h"
 
 #include <QObject>
 #include <memory>
+#include <unordered_set>
 
 namespace onecad::core::sketch {
 
@@ -88,6 +91,51 @@ public:
      */
     void renderPreview();
 
+    // ========== Snap & Auto-Constraint Access ==========
+
+    /**
+     * @brief Get current snap result (updated on mouse move)
+     */
+    const SnapResult& currentSnapResult() const { return currentSnapResult_; }
+
+    /**
+     * @brief Get current snapped position (snap point if snapped, raw pos otherwise)
+     */
+    Vec2d snappedPosition() const {
+        return currentSnapResult_.snapped ? currentSnapResult_.position : rawCursorPos_;
+    }
+
+    /**
+     * @brief Get current inferred constraints (updated on mouse move)
+     */
+    const std::vector<InferredConstraint>& currentInferredConstraints() const {
+        return currentInferredConstraints_;
+    }
+
+    /**
+     * @brief Get snap manager for configuration
+     */
+    SnapManager& snapManager() { return snapManager_; }
+    const SnapManager& snapManager() const { return snapManager_; }
+
+    /**
+     * @brief Get auto-constrainer for configuration
+     */
+    AutoConstrainer& autoConstrainer() { return autoConstrainer_; }
+    const AutoConstrainer& autoConstrainer() const { return autoConstrainer_; }
+
+    /**
+     * @brief Set entities to exclude from snapping (e.g., entity being drawn)
+     */
+    void setExcludeFromSnap(const std::unordered_set<EntityID>& entities) {
+        excludeFromSnap_ = entities;
+    }
+
+    /**
+     * @brief Clear snap exclusion set
+     */
+    void clearExcludeFromSnap() { excludeFromSnap_.clear(); }
+
 signals:
     /**
      * @brief Emitted when active tool changes
@@ -111,6 +159,14 @@ private:
     ToolType currentType_ = ToolType::None;
     Sketch* sketch_ = nullptr;
     SketchRenderer* renderer_ = nullptr;
+
+    // Snap & Auto-Constraint
+    SnapManager snapManager_;
+    AutoConstrainer autoConstrainer_;
+    SnapResult currentSnapResult_;
+    std::vector<InferredConstraint> currentInferredConstraints_;
+    Vec2d rawCursorPos_{0, 0};
+    std::unordered_set<EntityID> excludeFromSnap_;
 };
 
 } // namespace tools

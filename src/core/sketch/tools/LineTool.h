@@ -40,9 +40,22 @@ public:
     void clearLineCreatedFlag() { lineCreated_ = false; }
 
 private:
+    /**
+     * @brief Apply inferred constraints to sketch
+     */
+    void applyInferredConstraints(const std::vector<InferredConstraint>& constraints,
+                                   EntityID lineId);
+
+    /**
+     * @brief Update inferred constraints for preview
+     */
+    void updateInferredConstraints();
+
     Vec2d startPoint_{0, 0};
     Vec2d currentPoint_{0, 0};
-    EntityID lastPointId_;  // For coincident constraint on polyline continuation
+    EntityID startPointId_;       // Existing point for line start (if snapped)
+    EntityID lastPointId_;         // For coincident constraint on polyline continuation
+    EntityID lastCreatedLineId_;   // For polyline perpendicular inference
     bool lineCreated_ = false;
 };
 
