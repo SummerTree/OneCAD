@@ -16,6 +16,23 @@
 - ✅ PlaneGCS solver integration
 - 🚀 Phase 3 (3D modeling) in progress
 
+### Implementation Matrix (Implemented vs Planned)
+
+| Feature Area | Status | Notes |
+|--------------|--------|-------|
+| Sketching engine + constraints | ✅ Implemented | Tools, constraints, solver, loop detection |
+| Selection & picking | ✅ Implemented | Deep select, click cycling, mesh-based 3D picking |
+| Rendering (Shaded + Edges) | ✅ Implemented | BodyRenderer + preview meshes |
+| Adaptive Grid3D | ✅ Implemented | Pixel-targeted spacing |
+| Extrude v1a | ✅ Implemented | SketchRegion only, drag-to-commit, preview + arrow |
+| Extrude v1b | ⏳ Planned | Face input, smart boolean, override badge |
+| Revolve / Booleans / Push-Pull | ⏳ Planned | Core Phase 3 tools |
+| Command + Undo/Redo | ⚠️ Partial | CommandProcessor + AddBodyCommand only |
+| Feature history / regen | ⏳ Planned | Operation replay + dependency graph |
+| Native save/load (.onecad) | ⏳ Planned | BREP + ElementMap + ops list |
+| STEP I/O | ⏳ Planned | Import/export pipeline |
+| Property Inspector | ⏳ Planned | UI exists but not wired |
+
 ### Technology Stack
 
 - **C++20** — Modern C++ (CMake enforced)

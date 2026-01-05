@@ -12,8 +12,6 @@
 #include "../sketch/SketchModePanel.h"
 #include "../../core/sketch/SketchRenderer.h"
 #include "../../core/sketch/SketchTypes.h"
-#include <BRepPrimAPI_MakeBox.hxx>
-
 #include <QMenuBar>
 #include <QStatusBar>
 #include <QLabel>
@@ -184,9 +182,6 @@ void MainWindow::setupMenuBar() {
 
     viewMenu->addSeparator();
 
-    // Debug menu
-    QMenu* debugMenu = menuBar->addMenu(tr("&Debug"));
-    debugMenu->addAction(tr("Add Debug Box"), this, &MainWindow::onAddDebugBox);
     viewMenu->addAction(tr("Toggle &Grid"), QKeySequence(Qt::Key_G), this, [this]() {
         m_viewport->toggleGrid();
     });
@@ -349,8 +344,6 @@ void MainWindow::setupToolBar() {
             this, &MainWindow::onExitSketch);
     connect(m_toolbar, &ContextToolbar::importRequested,
             this, &MainWindow::onImport);
-    connect(m_toolbar, &ContextToolbar::debugBoxRequested,
-            this, &MainWindow::onAddDebugBox);
 
     if (m_viewport) {
         connect(m_toolbar, &ContextToolbar::lineToolActivated,
@@ -695,20 +688,6 @@ void MainWindow::onImport() {
     if (!fileName.isEmpty()) {
         m_toolStatus->setText(tr("Importing: %1").arg(fileName));
         // TODO: Actual import
-    }
-}
-
-void MainWindow::onAddDebugBox() {
-    if (!m_document) {
-        return;
-    }
-    TopoDS_Shape shape = BRepPrimAPI_MakeBox(50.0, 30.0, 20.0).Shape();
-    m_document->addBody(shape);
-    if (m_viewport) {
-        m_viewport->update();
-    }
-    if (m_toolStatus) {
-        m_toolStatus->setText(tr("Debug box added"));
     }
 }
 

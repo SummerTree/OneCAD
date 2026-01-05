@@ -58,7 +58,6 @@ private slots:
     void onSketchPlanePicked(int planeIndex);
     void onPlaneSelectionCancelled();
     void onImport();
-    void onAddDebugBox();
     void onMousePositionChanged(double x, double y, double z);
     void onSketchUpdated();
     void onConstraintRequested(core::sketch::ConstraintType constraintType);

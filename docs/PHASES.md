@@ -2,7 +2,7 @@
 
 This document outlines the phased implementation strategy for OneCAD, ensuring a robust foundation before adding complexity.
 
-**Last Updated:** 2026-01-04
+**Last Updated:** 2026-01-05
 
 ---
 
@@ -10,12 +10,12 @@ This document outlines the phased implementation strategy for OneCAD, ensuring a
 
 | Phase | Status | Progress |
 |-------|--------|----------|
-| Phase 1.1 Project & Rendering | In Progress | ~85% |
-| Phase 1.2 OCCT Kernel | Partial | ~30% |
-| Phase 1.3 Topological Naming | Substantial | ~80% |
-| Phase 1.4 Command & Document | Partial | ~20% |
+| Phase 1.1 Project & Rendering | In Progress | ~95% |
+| Phase 1.2 OCCT Kernel | Partial | ~35% |
+| Phase 1.3 Topological Naming | Substantial | ~90% |
+| Phase 1.4 Command & Document | In Progress | ~60% |
 | Phase 2 Sketching Engine | **Complete** | **100%** |
-| Phase 3 Solid Modeling | Not Started | 0% |
+| Phase 3 Solid Modeling | In Progress | ~15% |
 | Phase 4 Advanced Modeling | Not Started | 0% |
 | Phase 5 Optimization & Release | Not Started | 0% |
 
@@ -28,6 +28,12 @@ This document outlines the phased implementation strategy for OneCAD, ensuring a
 - ✅ SnapManager complete (1166 LOC, 8 snap types)
 - ✅ AutoConstrainer complete (1091 LOC, 7 inference rules)
 - ✅ UI integration complete (ContextToolbar, ConstraintPanel, DimensionEditor, ViewCube)
+- ✅ Adaptive Grid3D spacing (pixel-targeted minor/major grid)
+- ✅ Selection system with deep select + click cycling
+- ✅ Mesh-based picking + 3D selection overlays (face/edge/vertex/body)
+- ✅ SceneMeshStore + BodyRenderer (Shaded+Edges + preview meshes)
+- ✅ Extrude v1a (SketchRegion → new body, preview, draft param stored)
+- ✅ CommandProcessor + AddBodyCommand (undo/redo wired)
 
 ---
 
@@ -40,10 +46,12 @@ This document outlines the phased implementation strategy for OneCAD, ensuring a
 - [x] **OpenGL Viewport**: OpenGLWidgets-based rendering pipeline. **Complete** (1427 LOC).
 - [ ] **Qt RHI Viewport**: Metal-based rendering pipeline (deferred to optimization phase).
 - [~] **Camera Controls**: Camera3D with Orbit, Pan, Zoom, standard views (270 LOC). *Missing: inertia physics, sticky pivot.*
-- [⚠] **Grid System**: Grid3D exists (250 LOC). **SPEC DEVIATION**: Fixed 10mm spacing despite header claiming "adaptive". *Needs refactor for spec compliance.*
+- [x] **Grid System**: Grid3D adaptive spacing implemented (pixel-targeted minor/major tiers).
+- [x] **Body Renderer**: Shaded + Edges renderer (SceneMeshStore-backed) with preview mesh support.
 
 ### 1.2 OCCT Kernel Integration
 - [~] **Shape Wrappers**: Basic ElementMap structure exists. *Missing: full `onecad::kernel::Shape` decoupled wrapper.*
+- [~] **Tessellation Cache**: OCCT triangulation → SceneMeshStore for rendering/picking (implemented; LOD and progressive refinement pending).
 - [ ] **Geometry Factory**: Utilities for creating primitives (Box, Cylinder, Plane).
 - [ ] **BREP Utilities**: Explorer for traversing Faces, Edges, Vertices.
 
@@ -60,12 +68,12 @@ This document outlines the phased implementation strategy for OneCAD, ensuring a
 - [~] **Testing Suite**: Core validated, advanced scenarios pending.
     - ✅ 5/5 prototype tests passing (basic cut, split, determinism, serialization)
     - ⚠️ Missing: chain ops, merge scenarios, pattern operations
-- [ ] **Document Integration**: Not wired into feature tree yet (blocking Phase 3).
+- [x] **Document Integration**: ElementMap wired into Document (body registration + tessellation IDs).
 
 ### 1.4 Command & Document Infrastructure
-- [~] **Document Model**: Basic entity registry exists in Sketch class. *Missing: full document ownership hierarchy.*
-- [ ] **Selection Manager**: Ray-casting picking, highlighting logic.
-- [ ] **Command Processor**: Transaction-based Undo/Redo stack.
+- [~] **Document Model**: Owns sketches + bodies + operations list; persistence/history replay still pending.
+- [x] **Selection Manager**: Ray-casting picking, deep select, click cycling, hover/selection highlights.
+- [~] **Command Processor**: Execute/undo/redo + transaction hooks implemented; additional commands pending.
 
 ---
 
@@ -132,7 +140,7 @@ This document outlines the phased implementation strategy for OneCAD, ensuring a
 
 ## Phase 3: Solid Modeling Operations
 **Focus:** Enabling 3D geometry creation and manipulation.
-**Status:** Not Started
+**Status:** In Progress
 
 ### 3.1 Feature Management
 - [ ] **Feature History Tree**: Parametric history management.
@@ -140,10 +148,10 @@ This document outlines the phased implementation strategy for OneCAD, ensuring a
 - [ ] **Regeneration Engine**: Replaying history on modification.
 
 ### 3.2 Core Operations
-- [ ] **Extrude**:
-    - Vector-based extrusion.
-    - Draft angle support.
-    - Boolean options (New/Add/Cut/Intersect).
+- [~] **Extrude**:
+    - v1a implemented: SketchRegion → new body, preview + commit on drag release.
+    - Draft angle parameter stored (UI pending).
+    - Boolean options planned (enum exists; smart boolean deferred).
 - [ ] **Revolve**: Axis selection, angle parameters.
 - [ ] **Boolean Operations**: Union, Subtract, Intersect (Multi-body).
 
@@ -222,27 +230,35 @@ This document outlines the phased implementation strategy for OneCAD, ensuring a
 2. ~~Create MakeFace wrapper~~ → **DONE** (FaceBuilder 719 LOC)
 3. ~~Add Rectangle/Ellipse tools~~ → **DONE** (all 7 tools complete)
 4. ~~Implement SnapManager~~ → **DONE** (1166 LOC, 8 snap types)
+5. ~~Fix Grid3D adaptive spacing~~ → **DONE** (pixel-targeted minor/major tiers)
+6. ~~Integrate ElementMap into Document~~ → **DONE** (body registration + tessellation IDs)
+7. ~~Implement Selection Manager~~ → **DONE** (deep select, click cycling, 3D picking)
+8. ~~Add Shaded + Edges renderer~~ → **DONE** (SceneMeshStore-backed)
+9. ~~Implement Extrude v1a~~ → **DONE** (SketchRegion → new body, preview, auto-commit)
+10. ~~Add CommandProcessor~~ → **DONE** (execute/undo/redo + AddBodyCommand)
 
 ### Immediate Next Steps (High Priority for Phase 3)
-1. **Fix Grid3D adaptive spacing** — Refactor from fixed 10mm to spec-compliant adaptive tiers (SPEC DEVIATION).
-2. **Integrate ElementMap into Document** — Wire topological naming into feature tree (blocking Phase 3).
-3. **Implement Extrude operation** — First 3D modeling primitive (requires ElementMap integration).
-4. **Create Feature History infrastructure** — Parametric operation replay (blocking extrude parametric mode).
+1. **Extrude v1b smart boolean** — Add/Cut detection + override enum plumbed to UI.
+2. **Face extrude path (same tool)** — Prepare face selection input + push/pull-style preview.
+3. **Feature History infrastructure** — Operation replay scaffold for native persistence.
+4. **Native `.onecad` save/load v0** — BREP + ElementMap + operation list.
+5. **Numeric entry for modeling tools** — Dimension label editing (distance + draft).
 
 ### Short-term (Medium Priority - UX Polish)
-5. Add Camera inertia physics and sticky pivot (270 LOC existing base).
-6. Complete DOF color-coding UI wiring (logic exists in SketchRenderer).
-7. Wire PropertyInspector into UI (88 LOC stub exists, not integrated).
-8. Implement Selection Manager ray-casting for 3D entities (sketch selection exists).
+1. Add Camera inertia physics and sticky pivot (270 LOC existing base).
+2. Complete DOF color-coding UI wiring (logic exists in SketchRenderer).
+3. Wire PropertyInspector into UI (88 LOC stub exists, not integrated).
+4. Add contextual tool badges (boolean override, direction flip).
 
 ### Blocking Items for Phase 3
 - ✅ ~~MakeFace wrapper~~ → COMPLETE
 - ✅ ~~SketchRenderer~~ → COMPLETE
-- ⚠️ **ElementMap Document integration** → NOT WIRED (kernel component ready, needs feature tree)
-- ⚠️ **Grid3D adaptive spacing** → SPEC DEVIATION (claims adaptive, implements fixed)
+- ✅ ~~ElementMap Document integration~~ → COMPLETE
+- ✅ ~~Grid3D adaptive spacing~~ → COMPLETE
+- ⚠️ **History replay + persistence** → REQUIRED for robust parametric workflows
 
 ---
 
-*Document Version: 4.0*
-*Last Updated: 2026-01-04*
-*Major Update: Phase 2 confirmed 100% complete, ElementMap 80% complete, comprehensive codebase audit*
+*Document Version: 4.1*
+*Last Updated: 2026-01-05*
+*Major Update: Selection/picking + rendering + extrude v1a integrated, adaptive grid complete*

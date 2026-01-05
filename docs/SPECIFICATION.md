@@ -1343,20 +1343,18 @@ private:
 | Overlapping loops | Resolved by region detection |
 | Self-intersecting loops | Detected and flagged as invalid |
 
-### 6.5 Face Selection for Operations
+### 6.5 Face/Region Selection for Operations (v1a)
 
 **Workflow:**
 1. System detects all valid regions in sketch
 2. User hovers to preview individual regions
-3. User clicks to select region(s)
-4. User can select multiple regions (Shift+Click or box select)
-5. Each region can be extruded separately or together
+3. User clicks to select a region
+4. In modeling mode, selecting a sketch in the navigator enables region picking on the reference sketch
 
 | Selection | Extrude Result |
 |-----------|----------------|
-| Single region | Single body |
-| Multiple regions (same height) | Multiple bodies or single compound |
-| Multiple regions (different heights) | Separate operations |
+| Single region | Single body (implemented) |
+| Multiple regions | Planned (multi-select + batch extrude) |
 
 ### 6.6 Construction Geometry Visibility After Face Creation
 
@@ -1377,13 +1375,13 @@ private:
 
 ## 7. Grid System
 
-**⚠️ IMPLEMENTATION STATUS: SPEC DEVIATION** (Updated 2026-01-04)
+**IMPLEMENTATION STATUS: INTEGRATED** (Updated 2026-01-05)
 
-Grid3D.cpp (250 LOC) exists but **does NOT implement adaptive spacing**:
-- **Current**: Fixed 10mm spacing (hardcoded in `calculateSpacing()`)
-- **Spec**: Adaptive tiers based on camera distance (7 tiers from 0.1mm to 100mm)
-- **Issue**: Header claims "adaptive" but implementation ignores `cameraDistance` parameter
-- **Action Required**: Refactor to match spec section 7.2
+Grid3D now uses pixel-scale adaptive spacing:
+- **Target minor spacing**: ~10 px on screen
+- **Target major spacing**: ~50 px on screen
+- **Snapping**: 1/2/5 × 10^n world-unit steps for stable transitions
+- **Extent**: scales with viewport to bound line count
 
 ### 7.1 Grid Specification
 
@@ -1393,9 +1391,9 @@ Grid3D.cpp (250 LOC) exists but **does NOT implement adaptive spacing**:
 | **Toggle** | View menu or keyboard shortcut (G) | ✅ Implemented |
 | **Snap-to-Grid** | Enabled by default | ✅ Implemented |
 | **Snap Toggle** | Hold Alt to temporarily disable | ✅ Implemented |
-| **Grid Spacing** | Adaptive to zoom level | ⚠️ **NOT IMPLEMENTED** (fixed 10mm) |
+| **Grid Spacing** | Adaptive to zoom level (pixel-targeted) | ✅ Implemented |
 
-### 7.2 Adaptive Grid Spacing (⚠️ SPEC ONLY, NOT IMPLEMENTED)
+### 7.2 Adaptive Grid Spacing (Implemented)
 
 ```mermaid
 flowchart LR
@@ -1404,22 +1402,10 @@ flowchart LR
     S --> D[Render grid]
 ```
 
-**Spacing Tiers:**
-
-| Visible Area Width | Grid Spacing |
-|-------------------|--------------|
-| < 10 mm | 0.1 mm |
-| 10 - 50 mm | 0.5 mm |
-| 50 - 100 mm | 1 mm |
-| 100 - 500 mm | 5 mm |
-| 500 mm - 1 m | 10 mm |
-| 1 - 5 m | 50 mm |
-| > 5 m | 100 mm |
-
 **Spacing Selection Logic:**
-- Target ~30-50 grid lines visible on screen
-- Smooth transitions during zoom (no jarring changes)
-- Major/minor grid line distinction
+- Target minor spacing ~10 px and major spacing ~50 px
+- Snap spacing to 1/2/5 × 10^n in world units
+- Major/minor grid line distinction (major every 5 minor lines)
 
 ### 7.3 Grid Appearance
 
@@ -1466,24 +1452,32 @@ mindmap
 
 | Property | Specification |
 |----------|---------------|
+| **Activation** | Modeling mode only; auto-activates on single sketch-region selection (reference sketch); toolbar button available |
+| **Input** | SketchRegion (v1a). Face input reserved for same tool (v1b) |
 | **Direction** | Positive normal to sketch plane (default) |
-| **Flip Direction** | User drags in opposite direction |
-| **Distance Input** | Drag with on-screen editable value |
-| **Draft Angle** | Secondary parameter (0° to 89°) |
-| **Multi-face** | User selects which faces to extrude |
+| **Flip Direction** | Drag in opposite direction (negative distance) |
+| **Distance Input** | Drag with on-screen value + arrow; commit on mouse release; Esc cancels |
+| **Draft Angle** | Parameter stored; default 0° (UI later) |
+| **Multi-step** | Tool stays active after commit; new selection changes the input |
+
+**v1a Limitation:** Only one sketch region is extruded per activation; multi-region extrude is planned.
 
 #### 8.2.2 Direction Determination
 
 ```mermaid
 flowchart TD
-    A[User activates Extrude] --> B[Show drag handle on positive normal]
+    A[User selects region] --> B[Show arrow handle on normal]
     B --> C[User drags handle]
     C --> D{Drag direction?}
     D -->|Positive| E[Extrude in positive normal]
     D -->|Negative| F[Flip to negative normal]
-    E --> G[Preview with low opacity shading]
+    E --> G[Preview with low opacity shading + distance label]
     F --> G
+    G --> H{Mouse release?}
+    H -->|Yes| I[Auto-commit operation]
 ```
+
+**Implementation Note (v1a):** The arrow handle moves with the preview face while dragging. The distance label is display-only during drag; numeric entry is planned.
 
 #### 8.2.3 Smart Boolean Integration
 
@@ -1495,7 +1489,9 @@ Shapr3D-style automatic boolean determination:
 | Extrude away from body | Assume Add (Union) |
 | No intersection | New Body |
 
-**Boolean Override Badge:** Small popup menu next to distance label allows explicit selection of Union, Subtract, Intersect, or New Body.
+**Boolean Override Badge:** Planned (v1b). Small popup menu next to distance label allows explicit selection of Union, Subtract, Intersect, or New Body.
+
+**Implementation Note (v1a):** Extrude commits as **New Body** only. Boolean enum exists in the data model for future smart-boolean support.
 
 #### 8.2.4 Draft Angle
 
@@ -1503,7 +1499,7 @@ Shapr3D-style automatic boolean determination:
 |----------|---------------|
 | Range | 0° to 89° |
 | Default | 0° (no draft) |
-| Input method | Secondary field in panel OR select axis/sketch line |
+| Input method | UI deferred; parameter stored in operation record |
 | Positive angle | Tapers inward (for mold release) |
 | Negative angle | Tapers outward |
 
@@ -1629,7 +1625,9 @@ flowchart TD
 | **Style** | Full shaded preview |
 | **Opacity** | Low opacity (30-40%) |
 | **Update** | Real-time during parameter changes |
-| **Performance** | Use coarse tessellation for preview |
+| **Performance** | Coarse preview tessellation planned; current preview uses standard tessellation |
+
+**Implementation Status (2026-01-05):** Preview meshes render via the BodyRenderer with ~0.35 alpha during drag.
 
 ---
 
@@ -1652,13 +1650,19 @@ flowchart TD
     J --> K[User chooses from list]
 ```
 
+**Implementation Status (2026-01-05):**
+- Sketch and model picking implemented via `SketchPickerAdapter` and `ModelPickerAdapter`.
+- Model picking raycasts tessellated meshes, collects all hits, and promotes vertex/edge hits using screen-space tolerance.
+- Reference sketch regions are included in modeling picks when a sketch is selected in the navigator.
+
 ### 9.2 Selection Priority by Context
 
 **Sketch Mode:**
-1. Sketch vertex (highest)
-2. Sketch edge
-3. Sketch region
-4. Construction geometry
+1. Constraint icon (highest; sketch mode only)
+2. Sketch vertex
+3. Sketch edge
+4. Sketch region
+5. Construction geometry
 
 **Modeling Mode:**
 1. Vertex (highest)
@@ -1678,13 +1682,13 @@ When click is ambiguous (multiple entities at same pixel):
 └─────────────────┘
 ```
 
-- Small list appears under cursor
+- Small list appears under cursor (offset to avoid occluding the pick point)
 - Hover to preview highlight entity
 - Click to confirm selection
 
 ### 9.4 Click Cycling (Alternative)
 
-When multiple entities overlap at cursor position:
+When multiple entities overlap at cursor position (deep select disabled):
 - First click: Select highest priority entity
 - Second click (same position): Select next entity
 - Continue clicking: Cycle through all entities
@@ -1699,13 +1703,15 @@ When multiple entities overlap at cursor position:
 | **Secondary selection** | Violet (#8040FF) | Violet (#A060FF) | Tool body in boolean |
 | **Invalid selection** | Orange (#FF8020) | Orange (#FFA040) | Cannot apply operation |
 
+**Highlight Style (Current):** Faces and bodies use a translucent fill + outline overlay; edges are drawn as thicker polylines; vertices as screen-space discs.
+
 ### 9.6 Selection Modifiers
 
 | Modifier | Behavior |
 |----------|----------|
 | **None** | Replace current selection |
 | **Shift + Click** | Add to selection |
-| **Cmd + Click** | Toggle in selection |
+| **Cmd/Ctrl + Click** | Toggle in selection |
 
 ### 9.7 Box Selection
 
@@ -1715,6 +1721,8 @@ When multiple entities overlap at cursor position:
 | Right-to-left | Select entities touching box (crossing) | ✅ Default |
 
 **User Configurable:** Preference to swap behaviors or set single mode.
+
+**Implementation Note (v1a):** Box selection is not implemented yet.
 
 ### 9.8 Selection Persistence
 
@@ -1913,6 +1921,7 @@ Traditional hierarchical context menu:
 **Interactions:**
 - Click: Select item
 - Double-click body: Isolate (hide all others)
+- Click sketch: Set as reference sketch for modeling selection
 - Double-click sketch: Enter sketch edit mode
 - Right-click: Context menu
 - Eye icon: Toggle visibility
@@ -1956,7 +1965,9 @@ stateDiagram-v2
 - User presses Escape
 - User selects different tool
 
-### 11.2 Dimension Input — Hybrid Drag + Type
+**Implementation Note (v1a):** In modeling mode, selecting a single sketch region auto-activates Extrude to match direct-manipulation workflow.
+
+### 11.2 Dimension Input — Drag (v1a)
 
 ```mermaid
 flowchart TD
@@ -1964,23 +1975,11 @@ flowchart TD
     B --> C[User drags]
     C --> D[Update preview + show value near cursor]
     D --> E{User action?}
-    E -->|Release mouse| F[Accept dragged value]
-    E -->|Click on value| G[Edit field active]
-    E -->|Type number| H[Replace current value]
-    G --> I[User types new value]
-    H --> I
-    I --> J{Key pressed?}
-    J -->|Enter| F
-    J -->|Escape| K[Cancel operation]
-    J -->|Tab| L[Move to next parameter]
-    F --> M[Execute operation]
+    E -->|Release mouse| F[Auto-commit operation]
+    E -->|Escape| G[Cancel operation]
 ```
 
-**Key Behavior:**
-- Typing a number **replaces** the current value (not append)
-- Tab moves between parameters (e.g., distance → draft angle)
-- Unit suffix in different unit auto-converts (e.g., "2.5 cm" → 25 mm)
-- Supports basic formulas and variables (e.g., "width/2")
+**Implementation Note (v1a):** Numeric entry and parameter cycling are planned, but current operations commit on drag release with a display-only value label.
 
 ### 11.3 Mouse/Trackpad Navigation
 
@@ -2542,7 +2541,7 @@ classDiagram
         +redo() Result
     }
     
-    class CommandProcessor {
+class CommandProcessor {
         -undoStack: ICommand[]
         -redoStack: ICommand[]
         -maxUndoDepth: Int
@@ -2570,6 +2569,11 @@ classDiagram
     ICommand <|-- Transaction
     CommandProcessor --> ICommand
 ```
+
+**Implementation Status (2026-01-05):**
+- `CommandProcessor` implemented with execute/undo/redo and transaction hooks.
+- `AddBodyCommand` wired for Extrude commits; undo/redo preserves body IDs.
+- Additional commands and transaction grouping are planned.
 
 ### 16.2 Undo/Redo Specifications
 
@@ -2668,15 +2672,17 @@ flowchart TB
 
 ## 18. Rendering System
 
-### 18.1 Qt RHI Configuration
+### 18.1 OpenGL Viewport Configuration (Current)
 
 | Property | Specification |
 |----------|---------------|
-| Backend | OpenGL (for OCCT context sharing) |
+| Backend | QOpenGLWidget (OpenGL 4.1 Core) |
 | Render mode | On-demand (not continuous 60 FPS) |
 | VSync | Enabled |
 | Sample count | 4x MSAA |
-| Reverse-Z | Enabled for depth precision |
+| Reverse-Z | Planned (not implemented) |
+
+**Implementation Note (2026-01-05):** Qt RHI/Metal pipeline is deferred; current renderer uses OpenGL for OCCT compatibility.
 
 ### 18.2 On-Demand Render Loop
 
@@ -2699,8 +2705,10 @@ flowchart LR
 | Mode | Description | Default |
 |------|-------------|:-------:|
 | **Shaded + Edges** | Solid shading with edge overlay | ✅ |
-| **Shaded** | Solid shading only | |
-| **Wireframe** | Edges only | |
+| **Shaded** | Solid shading only | Planned |
+| **Wireframe** | Edges only | Planned |
+
+**Sketch Mode:** Bodies remain visible but are ghosted/dimmed to preserve sketch context.
 
 ### 18.4 Progressive Tessellation
 
