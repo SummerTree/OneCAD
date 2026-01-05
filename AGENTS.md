@@ -1,57 +1,67 @@
 # Repository Guidelines
 
-## Project Structure & Module Organization
-- `src/`: C++ source code, organized by domain (`app/`, `core/`, `kernel/`, `render/`, `ui/`, `io/`). Entry point is `src/main.cpp`.
-  - `src/app/`: application singleton and startup wiring (`Application`).
-  - `src/render/`: camera + grid rendering utilities (`Camera3D`, `Grid3D`).
-  - `src/ui/`: Qt Widgets UI (`MainWindow`, `Viewport`, `ViewCube`, `ThemeManager`, `ModelNavigator`, `PropertyInspector`, `ContextToolbar`).
-  - `src/kernel/`: OCCT-related kernel utilities; `elementmap/ElementMap.h` holds topological naming.
-  - `src/core/`, `src/io/`: interface libraries with placeholders for sketch/modeling and I/O.
-- `resources/`: runtime assets like `icons/`, `shaders/`, and `themes/`.
-- `tests/`: prototype executables under `tests/prototypes/`.
-- `third_party/`: vendored dependencies (if any).
-- `build/`: out-of-tree build output (local only).
+## Repository Snapshot
+- Current code focuses on the sketch engine + OpenGL viewport. 3D modeling/feature history/undo/STEP I/O are not implemented yet despite roadmap claims.
+- Document model owns multiple sketches (JSON serialization), but no on-disk save/load pipeline or feature tree.
+- Kernel and I/O targets are interface placeholders; ElementMap is header-only and only used by prototypes.
+- UI is Qt6 Widgets (MainWindow + Viewport + ModelNavigator + overlay toolbar/panels). PropertyInspector exists but is not built or wired into the app.
+- Resources are minimal (stack.svg, paper_pencil.svg). Import/Export menu entries are placeholders.
 
-## Build, Test, and Development Commands
-From the repo root:
-- `mkdir -p build && cd build`: create an out-of-tree build directory.
-- `cmake ..`: configure with CMake (C++20, Qt6, OCCT, Eigen).
-- `cmake --build .` (or `make`): build the app and any test targets.
-- `./OneCAD`: run the desktop app from the build directory.
-- `cmake --build . --target proto_tnaming`: build a prototype test executable.
-- `./tests/proto_tnaming`: run that prototype (repeat for `proto_custom_map`).
-- `cmake --build . --target proto_custom_map`: build custom map prototype.
-- `cmake --build . --target proto_elementmap_rigorous`: build ElementMap rigorous prototype.
-- `./tests/proto_custom_map` / `./tests/proto_elementmap_rigorous`: run prototypes from the build directory.
+## Project Structure & Modules
+- `src/app/`: `Application` singleton and `document/Document` (sketch registry with QUuid IDs, JSON round-trip).
+- `src/core/`: Sketch engine (points/lines/arcs/circles/ellipses), constraints (Fixed, Midpoint, Coincident, OnCurve, Parallel, Perpendicular, Tangent, Concentric, Equal, Distance, Angle, Radius, Diameter, Horizontal/Vertical), PlaneGCS solver adapter, snapping, auto-constrainer, SketchRenderer, tools (Line, Arc, Circle, Rectangle, Ellipse, Trim, Mirror), loop detection + FaceBuilder -> OCCT faces.
+- `src/render/`: `Camera3D` orbit camera, `Grid3D` (fixed 10 mm spacing, OpenGL shaders).
+- `src/ui/`: MainWindow, Viewport (OpenGL, plane selection overlay, ViewCube, DimensionEditor), ModelNavigator, ContextToolbar, ConstraintPanel, SketchModePanel, ThemeManager, SidebarToolButton. PropertyInspector lives in `inspector/` but is excluded from the CMake target.
+- `src/kernel/`: `elementmap/ElementMap.h` (topological naming utilities) only; library is INTERFACE and not linked into OneCAD.
+- `src/io/`: Empty INTERFACE library placeholder.
+- `resources/`: `resources.qrc` registering `icons/stack.svg` and `icons/paper_pencil.svg`.
+- `third_party/planegcs`: Vendored PlaneGCS constraint solver.
+- `tests/`: Prototypes under `tests/prototypes/` plus `tests/test_compile.cpp` (UI compile sanity).
+- `build/`: Out-of-tree build output (local only).
+
+## Build, Run, and Prototype Commands
+From repo root:
+- `mkdir -p build && cd build`
+- `cmake ..` (C++20, Qt6, OCCT, Eigen; Qt hint in CMakeLists.txt points to `/opt/homebrew/opt/qt`)
+- `cmake --build .` (or `make`)
+- `./OneCAD` to launch from `build/`
+
+Prototype targets (all built from `build/`):
+- Sketch engine: `proto_sketch_geometry`, `proto_sketch_constraints`, `proto_sketch_solver`, `proto_loop_detector`, `proto_face_builder`
+- PlaneGCS only: `proto_planegcs_integration`
+- ElementMap/OCCT: `proto_tnaming`, `proto_custom_map`, `proto_elementmap_rigorous`
+- UI compile check: `test_compile`
+Run with `./tests/<target_name>` after building.
 
 ## Coding Style & Naming Conventions
-- C++20 is required (`CMakeLists.txt` sets the standard).
-- Follow existing formatting: 4-space indentation, braces on the same line.
-- Classes use PascalCase (e.g., `MainWindow`), functions/variables use lower camelCase.
-- Keep file pairs as `.h`/`.cpp` and match class names to filenames.
-
-## Testing Guidelines
-- There is no automated test suite wired to `ctest` yet; tests are prototype executables.
-- Add new prototypes under `tests/prototypes/` and register them in `tests/CMakeLists.txt`.
-- If you add real tests, also add `add_test(...)` so `ctest` works.
+- C++20, 4-space indentation, braces on the same line.
+- Classes in PascalCase; functions/variables in lower camelCase.
+- Keep `.h/.cpp` pairs and match class names to filenames.
 
 ## Architecture & Runtime Notes
-- `src/main.cpp` configures a Core Profile OpenGL 4.1 context via `QSurfaceFormat` before creating `QApplication`.
-- Qt6 Widgets + `QOpenGLWidget` are the current UI/rendering path; rendering utilities live under `src/render/`.
-- OpenCASCADE, Eigen, and Qt6 are linked at the top level; kernel/core/io modules are currently lightweight interface libraries.
+- `src/main.cpp` sets OpenGL 4.1 CoreProfile via `QSurfaceFormat` before creating `QApplication`.
+- Viewport: orbit/pan/zoom camera (`Camera3D`), fixed-spacing `Grid3D`, plane selection overlay for XY/XZ/YZ, ViewCube, inline DimensionEditor for dimensional constraints.
+- Sketch mode: ContextToolbar + SketchModePanel/ConstraintPanel drive tool and constraint actions; rendering via `core::sketch::SketchRenderer`.
+- Document state is in-memory only; `Document::toJson/fromJson` exist but are not wired to file dialogs. STEP import/export menu items are TODOs.
+- ThemeManager persists theme choice in `QSettings`; MainWindow persists camera angle.
+
+## Testing Guidelines
+- No `ctest` wiring; use prototype executables. Register new prototypes in `tests/CMakeLists.txt`.
+- ElementMap changes: run `proto_elementmap_rigorous` (and `proto_custom_map`/`proto_tnaming` if relevant).
+- Sketch/solver changes: run `proto_sketch_geometry`, `proto_sketch_constraints`, `proto_sketch_solver`, `proto_loop_detector`, `proto_face_builder`.
+- UI build breakage: `test_compile`.
 
 ## Key Documents
-- `SPECIFICATION.md`: primary product requirements and architectural targets.
-- `PHASES.md`: implementation roadmap and phase checklist.
-- `SHAPR_UX.md` / `GEMINI.md`: UX and interaction research notes.
-- `ELEMENT_MAP.md` / `TOPO.md`: topological naming analysis and background.
-- `STEP.md`: STEP import/export research notes and OCCT/XDE guidance.
+- `docs/SPECIFICATION.md`: product requirements and architecture targets.
+- `docs/PHASES.md`: roadmap/status (aspirational; code is behind 3D claims).
+- `docs/researches/SHAPR_UX.md`, `docs/researches/SHAPR_SKETCHING.md`, `GEMINI.md`: UX and interaction research.
+- `docs/ELEMENT_MAP.md` / `docs/researches/TOPO.md`: topological naming analysis.
+- `docs/researches/STEP.md`: STEP import/export research notes.
 
-## Commit & Pull Request Guidelines
-- Recent commits use Conventional Commit-style prefixes (e.g., `feat:`). Prefer `feat:`, `fix:`, or `chore:` with a short, imperative subject.
-- PRs should include: a brief summary, build instructions or output, and screenshots for UI changes.
-- Link related issues or specs when applicable (e.g., `SPECIFICATION.md`).
+## Commit & PR Guidelines
+- Prefer Conventional Commit prefixes (`feat:`, `fix:`, `chore:`). Keep subjects short and imperative.
+- PRs should include a brief summary, build/test output or commands, and screenshots for UI changes. Link related specs/issues where applicable.
 
 ## Configuration Tips
-- Qt6 is expected at `/opt/homebrew/opt/qt` or via `CMAKE_PREFIX_PATH`.
-- OpenCASCADE and Eigen are expected from Homebrew on macOS.
+- Qt6 expected at `/opt/homebrew/opt/qt` or via `CMAKE_PREFIX_PATH`.
+- OCCT and Eigen are expected from Homebrew on macOS.
