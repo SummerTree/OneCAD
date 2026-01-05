@@ -28,6 +28,15 @@ void ContextToolbar::setContext(Context context) {
     emit contextChanged();
 }
 
+void ContextToolbar::setExtrudeActive(bool active) {
+    if (!m_extrudeButton) {
+        return;
+    }
+    m_extrudeButton->blockSignals(true);
+    m_extrudeButton->setChecked(active);
+    m_extrudeButton->blockSignals(false);
+}
+
 void ContextToolbar::setupUi() {
     m_layout = new QVBoxLayout(this);
     m_layout->setContentsMargins(8, 12, 8, 12);  // Better padding
@@ -38,6 +47,10 @@ void ContextToolbar::setupUi() {
 
     m_newSketchButton = SidebarToolButton::fromSvgIcon(":/icons/paper_pencil.svg", tr("Create a new sketch (S)"), this);
     connect(m_newSketchButton, &SidebarToolButton::clicked, this, &ContextToolbar::newSketchRequested);
+
+    m_extrudeButton = new SidebarToolButton("⬆", tr("Extrude (E)"), this);
+    m_extrudeButton->setCheckable(true);
+    connect(m_extrudeButton, &SidebarToolButton::clicked, this, &ContextToolbar::extrudeRequested);
 
     m_importButton = new SidebarToolButton("📂", tr("Import STEP file"), this);
     connect(m_importButton, &SidebarToolButton::clicked, this, &ContextToolbar::importRequested);
@@ -70,6 +83,7 @@ void ContextToolbar::setupUi() {
     connect(m_mirrorButton, &SidebarToolButton::clicked, this, &ContextToolbar::mirrorToolActivated);
 
     m_layout->addWidget(m_newSketchButton);
+    m_layout->addWidget(m_extrudeButton);
     m_layout->addWidget(m_importButton);
     m_layout->addWidget(m_debugBoxButton);
     m_layout->addWidget(m_exitSketchButton);
@@ -93,6 +107,9 @@ void ContextToolbar::updateVisibleButtons() {
 
     if (m_newSketchButton) {
         m_newSketchButton->setVisible(!inSketch);
+    }
+    if (m_extrudeButton) {
+        m_extrudeButton->setVisible(!inSketch);
     }
     if (m_importButton) {
         m_importButton->setVisible(m_currentContext == Context::Default);

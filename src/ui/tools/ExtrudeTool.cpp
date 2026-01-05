@@ -10,16 +10,19 @@
 #include "../../core/loop/FaceBuilder.h"
 #include "../../core/loop/RegionUtils.h"
 
+#include <BRepGProp.hxx>
 #include <BRepAdaptor_Surface.hxx>
 #include <BRepPrimAPI_MakePrism.hxx>
 #include <BRepOffsetAPI_DraftAngle.hxx>
 #include <GeomAbs_SurfaceType.hxx>
+#include <GProp_GProps.hxx>
 #include <TopExp_Explorer.hxx>
 #include <TopoDS.hxx>
 #include <TopAbs_Orientation.hxx>
 #include <gp_Vec.hxx>
 
 #include <QUuid>
+#include <QVector3D>
 #include <QtMath>
 
 namespace onecad::ui::tools {
@@ -162,6 +165,13 @@ bool ExtrudeTool::prepareInput(const app::selection::SelectionItem& selection) {
     const auto& plane = sketch_->getPlane();
     direction_ = gp_Dir(plane.normal.x, plane.normal.y, plane.normal.z);
     neutralPlane_ = gp_Pln(gp_Pnt(plane.origin.x, plane.origin.y, plane.origin.z), direction_);
+
+    baseCenter_ = gp_Pnt(plane.origin.x, plane.origin.y, plane.origin.z);
+    GProp_GProps props;
+    BRepGProp::SurfaceProperties(baseFace_, props);
+    if (props.Mass() > 0.0) {
+        baseCenter_ = props.CentreOfMass();
+    }
     return true;
 }
 
@@ -241,6 +251,32 @@ TopoDS_Shape ExtrudeTool::buildExtrudeShape(double distance) const {
     }
 
     return result;
+}
+
+std::optional<ModelingTool::Indicator> ExtrudeTool::indicator() const {
+    if (!active_ || baseFace_.IsNull()) {
+        return std::nullopt;
+    }
+
+    const double offset = dragging_ ? currentDistance_ : 0.0;
+    const gp_Pnt originPoint = baseCenter_.Translated(gp_Vec(direction_.X() * offset,
+                                                             direction_.Y() * offset,
+                                                             direction_.Z() * offset));
+
+    QVector3D dir(direction_.X(), direction_.Y(), direction_.Z());
+    if (dragging_ && currentDistance_ < 0.0) {
+        dir = -dir;
+    }
+    if (dir.lengthSquared() < 1e-6f) {
+        return std::nullopt;
+    }
+
+    Indicator indicator;
+    indicator.origin = QVector3D(originPoint.X(), originPoint.Y(), originPoint.Z());
+    indicator.direction = dir;
+    indicator.distance = currentDistance_;
+    indicator.showDistance = dragging_ && std::abs(currentDistance_) >= kMinExtrudeDistance;
+    return indicator;
 }
 
 } // namespace onecad::ui::tools

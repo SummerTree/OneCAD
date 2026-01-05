@@ -331,6 +331,20 @@ void MainWindow::setupToolBar() {
 
     connect(m_toolbar, &ContextToolbar::newSketchRequested,
             this, &MainWindow::onNewSketch);
+    connect(m_toolbar, &ContextToolbar::extrudeRequested, this, [this]() {
+        if (!m_viewport) {
+            return;
+        }
+        const bool activated = m_viewport->activateExtrudeTool();
+        if (m_toolStatus) {
+            m_toolStatus->setText(activated
+                ? tr("Extrude tool active")
+                : tr("Select a sketch region to extrude"));
+        }
+        if (m_toolbar) {
+            m_toolbar->setExtrudeActive(activated);
+        }
+    });
     connect(m_toolbar, &ContextToolbar::exitSketchRequested,
             this, &MainWindow::onExitSketch);
     connect(m_toolbar, &ContextToolbar::importRequested,
@@ -353,6 +367,9 @@ void MainWindow::setupToolBar() {
                 m_viewport, &Viewport::activateTrimTool);
         connect(m_toolbar, &ContextToolbar::mirrorToolActivated,
                 m_viewport, &Viewport::activateMirrorTool);
+
+        connect(m_viewport, &Viewport::extrudeToolActiveChanged,
+                m_toolbar, &ContextToolbar::setExtrudeActive);
     }
 
     // Reposition toolbar when context changes (button visibility affects height)

@@ -223,6 +223,10 @@ const QString& ThemeManager::getDarkStyleSheet() {
             background-color: #007acc;
             border: 1px solid #007acc;
         }
+        QToolButton[sidebarButton="true"]:checked {
+            background-color: #007acc;
+            border: 1px solid #007acc;
+        }
 
         /* Inspector */
         QWidget#inspectorContainer {
@@ -416,6 +420,10 @@ const QString& ThemeManager::getLightStyleSheet() {
             border: 1px solid #bbbbbb;
         }
         QToolButton[sidebarButton="true"]:pressed {
+            background-color: #cce8ff;
+            border: 1px solid #cce8ff;
+        }
+        QToolButton[sidebarButton="true"]:checked {
             background-color: #cce8ff;
             border: 1px solid #cce8ff;
         }

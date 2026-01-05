@@ -9,6 +9,7 @@
 
 #include <QObject>
 #include <memory>
+#include <optional>
 
 namespace onecad::app {
 class Document;
@@ -44,6 +45,7 @@ public:
     bool handleMousePress(const QPoint& screenPos, Qt::MouseButton button);
     bool handleMouseMove(const QPoint& screenPos);
     bool handleMouseRelease(const QPoint& screenPos, Qt::MouseButton button);
+    std::optional<ModelingTool::Indicator> activeIndicator() const;
 
 private:
     Viewport* viewport_ = nullptr;

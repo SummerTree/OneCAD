@@ -31,10 +31,12 @@
 #include <QApplication>
 #include <QOpenGLContext>
 #include <QSizePolicy>
+#include <QVector2D>
 #include <QEasingCurve>
 #include <QtMath>
 #include <QDebug>
 #include <array>
+#include <cmath>
 #include <limits>
 #include <optional>
 
@@ -536,6 +538,7 @@ void Viewport::paintGL() {
     }
 
     drawModelSelectionOverlay(viewProjection);
+    drawModelToolOverlay(viewProjection);
 }
 
 void Viewport::mousePressEvent(QMouseEvent* event) {
@@ -955,6 +958,7 @@ void Viewport::beginPlaneSelection() {
     if (m_modelingToolManager) {
         m_modelingToolManager->cancelActiveTool();
     }
+    setExtrudeToolActive(false);
     if (m_deepSelectPopup && m_deepSelectPopup->isVisible()) {
         m_deepSelectPopup->hide();
     }
@@ -1092,6 +1096,11 @@ void Viewport::animateCamera(const CameraState& targetState) {
 // Sketch mode
 void Viewport::enterSketchMode(sketch::Sketch* sketch) {
     if (m_inSketchMode || !sketch) return;
+
+    if (m_modelingToolManager) {
+        m_modelingToolManager->cancelActiveTool();
+    }
+    setExtrudeToolActive(false);
 
     m_activeSketch = sketch;
     m_activeSketchId.clear();
@@ -1242,6 +1251,28 @@ void Viewport::exitSketchMode() {
     emit sketchModeChanged(false);
 }
 
+bool Viewport::activateExtrudeTool() {
+    if (m_inSketchMode || !m_selectionManager || !m_modelingToolManager || !m_referenceSketch) {
+        setExtrudeToolActive(false);
+        return false;
+    }
+
+    if (m_extrudeToolActive) {
+        return true;
+    }
+
+    const auto& selection = m_selectionManager->selection();
+    if (selection.size() == 1 &&
+        selection.front().kind == app::selection::SelectionKind::SketchRegion) {
+        m_modelingToolManager->activateExtrude(selection.front());
+        setExtrudeToolActive(true);
+        return true;
+    }
+
+    setExtrudeToolActive(false);
+    return false;
+}
+
 // Standard view slots
 void Viewport::setFrontView() {
     m_camera->setFrontView();
@@ -1320,6 +1351,7 @@ void Viewport::keyPressEvent(QKeyEvent* event) {
         m_modelingToolManager->hasActiveTool() &&
         event->key() == Qt::Key_Escape) {
         m_modelingToolManager->cancelActiveTool();
+        setExtrudeToolActive(false);
         event->accept();
         return;
     }
@@ -1496,9 +1528,19 @@ void Viewport::handleModelSelectionChanged() {
         selection.front().kind == app::selection::SelectionKind::SketchRegion &&
         m_referenceSketch) {
         m_modelingToolManager->activateExtrude(selection.front());
+        setExtrudeToolActive(true);
     } else {
         m_modelingToolManager->cancelActiveTool();
+        setExtrudeToolActive(false);
     }
+}
+
+void Viewport::setExtrudeToolActive(bool active) {
+    if (m_extrudeToolActive == active) {
+        return;
+    }
+    m_extrudeToolActive = active;
+    emit extrudeToolActiveChanged(active);
 }
 
 void Viewport::updateSketchHoverFromManager() {
@@ -1891,6 +1933,100 @@ void Viewport::drawModelSelectionOverlay(const QMatrix4x4& viewProjection) {
                 drawBody(*hover, true);
             }
         }
+    }
+}
+
+void Viewport::drawModelToolOverlay(const QMatrix4x4& viewProjection) {
+    if (m_inSketchMode || !m_modelingToolManager) {
+        return;
+    }
+
+    auto indicator = m_modelingToolManager->activeIndicator();
+    if (!indicator.has_value()) {
+        return;
+    }
+
+    QVector3D dir = indicator->direction;
+    if (dir.lengthSquared() < 1e-6f) {
+        return;
+    }
+    dir.normalize();
+
+    const double pixelScale = (m_pixelScale > 0.0) ? m_pixelScale : 1.0;
+    const float lengthWorld = static_cast<float>(pixelScale * 40.0);
+    const float offsetWorld = static_cast<float>(pixelScale * 6.0);
+
+    const QVector3D startWorld = indicator->origin + dir * offsetWorld;
+    const QVector3D endWorld = indicator->origin + dir * lengthWorld;
+
+    QPointF startScreen;
+    QPointF endScreen;
+    if (!projectToScreen(viewProjection, startWorld, static_cast<float>(m_width),
+                         static_cast<float>(m_height), &startScreen)) {
+        return;
+    }
+    if (!projectToScreen(viewProjection, endWorld, static_cast<float>(m_width),
+                         static_cast<float>(m_height), &endScreen)) {
+        return;
+    }
+
+    QVector2D screenDir(endScreen - startScreen);
+    if (screenDir.lengthSquared() < 1e-4f) {
+        return;
+    }
+    screenDir.normalize();
+    QVector2D perp(-screenDir.y(), screenDir.x());
+
+    const float headLength = 10.0f;
+    const float headWidth = 6.0f;
+    QPointF headBase = endScreen - QPointF(screenDir.x() * headLength,
+                                           screenDir.y() * headLength);
+    QPointF left = headBase + QPointF(perp.x() * headWidth, perp.y() * headWidth);
+    QPointF right = headBase - QPointF(perp.x() * headWidth, perp.y() * headWidth);
+
+    QColor color = ThemeManager::instance().isDark()
+        ? QColor(96, 160, 255, 230)
+        : QColor(32, 96, 255, 230);
+
+    QPainter painter(this);
+    painter.setRenderHint(QPainter::Antialiasing, true);
+    painter.setPen(QPen(color, 2.5, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
+    painter.setBrush(color);
+    painter.drawLine(startScreen, endScreen);
+
+    QPolygonF head;
+    head << endScreen << left << right;
+    painter.drawPolygon(head);
+
+    if (indicator->showDistance) {
+        const double distanceValue = std::abs(indicator->distance);
+        QString text = QString::number(distanceValue, 'f', 2);
+
+        QFont font = painter.font();
+        font.setPointSize(10);
+        font.setBold(true);
+        painter.setFont(font);
+
+        QColor textColor = ThemeManager::instance().isDark()
+            ? QColor(240, 240, 240)
+            : QColor(20, 20, 20);
+        QColor bgColor = ThemeManager::instance().isDark()
+            ? QColor(0, 0, 0, 180)
+            : QColor(255, 255, 255, 200);
+
+        QPointF labelPos = endScreen + QPointF(perp.x() * 10.0f, perp.y() * 10.0f);
+        QFontMetrics metrics(font);
+        const int padding = 4;
+        QRectF labelRect(labelPos.x(), labelPos.y(),
+                         metrics.horizontalAdvance(text) + padding * 2,
+                         metrics.height() + padding * 2);
+
+        painter.setPen(Qt::NoPen);
+        painter.setBrush(bgColor);
+        painter.drawRoundedRect(labelRect, 4.0, 4.0);
+
+        painter.setPen(textColor);
+        painter.drawText(labelRect, Qt::AlignCenter, text);
     }
 }
 

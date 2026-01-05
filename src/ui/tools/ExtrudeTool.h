@@ -12,6 +12,7 @@
 
 #include <TopoDS_Face.hxx>
 #include <gp_Dir.hxx>
+#include <gp_Pnt.hxx>
 #include <gp_Pln.hxx>
 
 namespace onecad::app {
@@ -46,6 +47,7 @@ public:
     bool handleMousePress(const QPoint& screenPos, Qt::MouseButton button) override;
     bool handleMouseMove(const QPoint& screenPos) override;
     bool handleMouseRelease(const QPoint& screenPos, Qt::MouseButton button) override;
+    std::optional<Indicator> indicator() const override;
 
 private:
     bool prepareInput(const app::selection::SelectionItem& selection);
@@ -59,6 +61,7 @@ private:
     app::selection::SelectionItem selection_{};
     core::sketch::Sketch* sketch_ = nullptr;
     TopoDS_Face baseFace_;
+    gp_Pnt baseCenter_;
     gp_Dir direction_;
     gp_Pln neutralPlane_;
 

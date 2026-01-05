@@ -113,6 +113,7 @@ signals:
     void sketchPlanePicked(int planeIndex);
     void planeSelectionCancelled();
     void sketchUpdated();  // Emitted when geometry/constraints change
+    void extrudeToolActiveChanged(bool active);
 
 public slots:
     void beginPlaneSelection();
@@ -132,6 +133,7 @@ public slots:
     void activateMirrorTool();
     void deactivateTool();
     void setReferenceSketch(const QString& sketchId);
+    bool activateExtrudeTool();
 
     // Views
     void setFrontView();
@@ -181,6 +183,7 @@ private:
     bool pickPlaneSelection(const QPoint& screenPos, int* outIndex) const;
     void drawPlaneSelectionOverlay(const QMatrix4x4& viewProjection);
     void drawModelSelectionOverlay(const QMatrix4x4& viewProjection);
+    void drawModelToolOverlay(const QMatrix4x4& viewProjection);
     QMatrix4x4 buildViewProjection() const;
     QSize viewportSize() const;
     void syncModelMeshes();
@@ -192,6 +195,7 @@ private:
     
     // Animation
     void animateCamera(const CameraState& targetState);
+    void setExtrudeToolActive(bool active);
 
     std::unique_ptr<render::Camera3D> m_camera;
     std::unique_ptr<render::Grid3D> m_grid;
@@ -200,6 +204,7 @@ private:
     std::unique_ptr<core::sketch::tools::SketchToolManager> m_toolManager;
     std::unique_ptr<ui::tools::ModelingToolManager> m_modelingToolManager;
     app::commands::CommandProcessor* m_commandProcessor = nullptr;
+    bool m_extrudeToolActive = false;
     ViewCube* m_viewCube = nullptr;
     DimensionEditor* m_dimensionEditor = nullptr;
     QVariantAnimation* m_cameraAnimation = nullptr;

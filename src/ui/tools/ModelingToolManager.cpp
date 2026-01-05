@@ -81,4 +81,11 @@ bool ModelingToolManager::handleMouseRelease(const QPoint& screenPos, Qt::MouseB
     return activeTool_->handleMouseRelease(screenPos, button);
 }
 
+std::optional<ModelingTool::Indicator> ModelingToolManager::activeIndicator() const {
+    if (!activeTool_ || !activeTool_->isActive()) {
+        return std::nullopt;
+    }
+    return activeTool_->indicator();
+}
+
 } // namespace onecad::ui::tools

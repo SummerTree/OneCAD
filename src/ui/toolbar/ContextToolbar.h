@@ -30,10 +30,12 @@ public:
 
 public slots:
     void setContext(Context context);
+    void setExtrudeActive(bool active);
 
 signals:
     void contextChanged();
     void newSketchRequested();
+    void extrudeRequested();
     void exitSketchRequested();
     void importRequested();
     void debugBoxRequested();
@@ -52,6 +54,7 @@ private:
     Context m_currentContext = Context::Default;
     QVBoxLayout* m_layout = nullptr;
     SidebarToolButton* m_newSketchButton = nullptr;
+    SidebarToolButton* m_extrudeButton = nullptr;
     SidebarToolButton* m_importButton = nullptr;
     SidebarToolButton* m_debugBoxButton = nullptr;
     SidebarToolButton* m_exitSketchButton = nullptr;
