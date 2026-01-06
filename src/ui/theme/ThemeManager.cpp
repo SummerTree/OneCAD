@@ -180,7 +180,6 @@ QString ThemeManager::buildStyleSheet(const ThemeDefinition& theme) {
         QWidget#NavigatorPanel {
             background-color: @navigator-bg@;
             border: 1px solid @navigator-divider@;
-            border-radius: 14px;
         }
         QTreeWidget#NavigatorTree {
             background-color: transparent;
