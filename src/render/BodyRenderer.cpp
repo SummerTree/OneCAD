@@ -296,65 +296,23 @@ void BodyRenderer::appendMeshBuffers(const SceneMeshStore::Mesh& mesh, CpuBuffer
         }
     }
 
+    // Only render edges from OCCT topology - no tessellation edge fallback
+    // This ensures cylinders show only their actual edges (top/bottom circles)
+    // and planar faces show only their boundary edges (no internal triangulation)
     std::unordered_set<std::string> seenEdges;
-    if (!mesh.topologyByFace.empty()) {
-        for (const auto& [faceId, topo] : mesh.topologyByFace) {
-            (void)faceId;
-            for (const auto& edge : topo.edges) {
-                if (seenEdges.find(edge.edgeId) != seenEdges.end()) {
-                    continue;
-                }
-                seenEdges.insert(edge.edgeId);
-                if (edge.points.size() < 2) {
-                    continue;
-                }
-                for (size_t i = 0; i + 1 < edge.points.size(); ++i) {
-                    QVector4D p0 = mesh.modelMatrix * QVector4D(edge.points[i], 1.0f);
-                    QVector4D p1 = mesh.modelMatrix * QVector4D(edge.points[i + 1], 1.0f);
-                    outBuffers->edges.push_back(p0.x());
-                    outBuffers->edges.push_back(p0.y());
-                    outBuffers->edges.push_back(p0.z());
-                    outBuffers->edges.push_back(p1.x());
-                    outBuffers->edges.push_back(p1.y());
-                    outBuffers->edges.push_back(p1.z());
-                }
+    for (const auto& [faceId, topo] : mesh.topologyByFace) {
+        (void)faceId;
+        for (const auto& edge : topo.edges) {
+            if (seenEdges.find(edge.edgeId) != seenEdges.end()) {
+                continue;
             }
-        }
-    } else {
-        struct PairHash {
-            size_t operator()(const std::pair<int, int>& value) const noexcept {
-                size_t seed = std::hash<int>{}(value.first);
-                seed ^= std::hash<int>{}(value.second) + 0x9e3779b9 + (seed << 6) + (seed >> 2);
-                return seed;
+            seenEdges.insert(edge.edgeId);
+            if (edge.points.size() < 2) {
+                continue;
             }
-        };
-        auto makeEdgeKey = [](int a, int b) {
-            if (a > b) {
-                std::swap(a, b);
-            }
-            return std::make_pair(a, b);
-        };
-        std::unordered_set<std::pair<int, int>, PairHash> seenEdgesLocal;
-        for (const auto& tri : mesh.triangles) {
-            int indices[3] = {
-                static_cast<int>(tri.i0),
-                static_cast<int>(tri.i1),
-                static_cast<int>(tri.i2)
-            };
-            for (int i = 0; i < 3; ++i) {
-                int a = indices[i];
-                int b = indices[(i + 1) % 3];
-                auto key = makeEdgeKey(a, b);
-                if (!seenEdgesLocal.insert(key).second) {
-                    continue;
-                }
-                if (a < 0 || b < 0 ||
-                    static_cast<size_t>(a) >= transformedVertices.size() ||
-                    static_cast<size_t>(b) >= transformedVertices.size()) {
-                    continue;
-                }
-                const QVector3D& p0 = transformedVertices[a];
-                const QVector3D& p1 = transformedVertices[b];
+            for (size_t i = 0; i + 1 < edge.points.size(); ++i) {
+                QVector4D p0 = mesh.modelMatrix * QVector4D(edge.points[i], 1.0f);
+                QVector4D p1 = mesh.modelMatrix * QVector4D(edge.points[i + 1], 1.0f);
                 outBuffers->edges.push_back(p0.x());
                 outBuffers->edges.push_back(p0.y());
                 outBuffers->edges.push_back(p0.z());

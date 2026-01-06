@@ -186,6 +186,24 @@ void ModelPickerAdapter::setMeshes(std::vector<Mesh>&& meshes) {
             }
         }
 
+        cache.faceGroupLeaderByFaceId = std::move(mesh.faceGroupByFaceId);
+        if (cache.faceGroupLeaderByFaceId.empty()) {
+            for (const auto& [faceId, tris] : cache.faceMap) {
+                (void)tris;
+                cache.faceGroupLeaderByFaceId[faceId] = faceId;
+            }
+        } else {
+            for (const auto& [faceId, tris] : cache.faceMap) {
+                (void)tris;
+                if (cache.faceGroupLeaderByFaceId.find(faceId) == cache.faceGroupLeaderByFaceId.end()) {
+                    cache.faceGroupLeaderByFaceId[faceId] = faceId;
+                }
+            }
+        }
+        for (const auto& [faceId, leaderId] : cache.faceGroupLeaderByFaceId) {
+            cache.faceGroupMembers[leaderId].push_back(faceId);
+        }
+
         meshes_.push_back(std::move(cache));
     }
 }
@@ -424,7 +442,12 @@ app::selection::PickResult ModelPickerAdapter::pick(const QPoint& screenPos,
     for (const auto& hit : faceHits) {
         app::selection::SelectionItem faceItem;
         faceItem.kind = app::selection::SelectionKind::Face;
-        faceItem.id = {hit.mesh->bodyId, hit.triangle.faceId};
+        std::string faceId = hit.triangle.faceId;
+        auto groupIt = hit.mesh->faceGroupLeaderByFaceId.find(faceId);
+        if (groupIt != hit.mesh->faceGroupLeaderByFaceId.end()) {
+            faceId = groupIt->second;
+        }
+        faceItem.id = {hit.mesh->bodyId, faceId};
         faceItem.priority = kFacePriority;
         faceItem.screenDistance = 0.0;
         faceItem.depth = static_cast<double>(hit.t);
@@ -464,12 +487,28 @@ bool ModelPickerAdapter::getFaceTriangles(const std::string& bodyId,
         if (mesh.bodyId != bodyId) {
             continue;
         }
-        auto it = mesh.faceMap.find(faceId);
-        if (it == mesh.faceMap.end()) {
-            return false;
+        std::string groupId = faceId;
+        auto groupIt = mesh.faceGroupLeaderByFaceId.find(faceId);
+        if (groupIt != mesh.faceGroupLeaderByFaceId.end()) {
+            groupId = groupIt->second;
         }
-        outTriangles = it->second;
-        return true;
+        outTriangles.clear();
+        auto membersIt = mesh.faceGroupMembers.find(groupId);
+        if (membersIt != mesh.faceGroupMembers.end()) {
+            for (const auto& memberId : membersIt->second) {
+                auto it = mesh.faceMap.find(memberId);
+                if (it != mesh.faceMap.end()) {
+                    outTriangles.insert(outTriangles.end(), it->second.begin(), it->second.end());
+                }
+            }
+            return !outTriangles.empty();
+        }
+        auto it = mesh.faceMap.find(faceId);
+        if (it != mesh.faceMap.end()) {
+            outTriangles = it->second;
+            return true;
+        }
+        return false;
     }
     return false;
 }
@@ -537,6 +576,54 @@ bool ModelPickerAdapter::getVertexPosition(const std::string& bodyId,
         }
         outVertex = it->second;
         return true;
+    }
+    return false;
+}
+
+bool ModelPickerAdapter::getFaceBoundaryEdges(const std::string& bodyId,
+                                               const std::string& faceId,
+                                               std::vector<std::vector<QVector3D>>& outEdges) const {
+    for (const auto& mesh : meshes_) {
+        if (mesh.bodyId != bodyId) {
+            continue;
+        }
+        std::string groupId = faceId;
+        auto groupIt = mesh.faceGroupLeaderByFaceId.find(faceId);
+        if (groupIt != mesh.faceGroupLeaderByFaceId.end()) {
+            groupId = groupIt->second;
+        }
+        outEdges.clear();
+        std::unordered_set<std::string> seenEdges;
+        auto membersIt = mesh.faceGroupMembers.find(groupId);
+        if (membersIt != mesh.faceGroupMembers.end()) {
+            for (const auto& memberId : membersIt->second) {
+                auto topoIt = mesh.faceTopology.find(memberId);
+                if (topoIt == mesh.faceTopology.end()) {
+                    continue;
+                }
+                for (const auto& edgeId : topoIt->second.edgeIds) {
+                    if (!seenEdges.insert(edgeId).second) {
+                        continue;
+                    }
+                    auto polyIt = mesh.edgePolylines.find(edgeId);
+                    if (polyIt != mesh.edgePolylines.end() && polyIt->second.size() >= 2) {
+                        outEdges.push_back(polyIt->second);
+                    }
+                }
+            }
+            return !outEdges.empty();
+        }
+        auto topoIt = mesh.faceTopology.find(faceId);
+        if (topoIt == mesh.faceTopology.end()) {
+            return false;
+        }
+        for (const auto& edgeId : topoIt->second.edgeIds) {
+            auto polyIt = mesh.edgePolylines.find(edgeId);
+            if (polyIt != mesh.edgePolylines.end() && polyIt->second.size() >= 2) {
+                outEdges.push_back(polyIt->second);
+            }
+        }
+        return !outEdges.empty();
     }
     return false;
 }

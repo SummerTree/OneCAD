@@ -1863,8 +1863,10 @@ void Viewport::drawModelSelectionOverlay(const QMatrix4x4& viewProjection) {
         }
         const QColor fill = hovered ? style.faceFillHover : style.faceFillSelected;
         const QColor outline = hovered ? style.faceOutlineHover : style.faceOutlineSelected;
+
+        // Draw filled triangles WITHOUT outline (no internal mesh lines)
+        painter.setPen(Qt::NoPen);
         painter.setBrush(fill);
-        painter.setPen(QPen(outline, hovered ? 1.5 : 2.0));
         for (const auto& tri : triangles) {
             QPolygonF poly;
             bool projected = true;
@@ -1879,6 +1881,26 @@ void Viewport::drawModelSelectionOverlay(const QMatrix4x4& viewProjection) {
             }
             if (projected && poly.size() == 3) {
                 painter.drawPolygon(poly);
+            }
+        }
+
+        // Draw boundary edges only (from OCCT topology, not tessellation)
+        std::vector<std::vector<QVector3D>> boundaryEdges;
+        if (m_modelPicker->getFaceBoundaryEdges(item.id.ownerId, item.id.elementId, boundaryEdges)) {
+            painter.setPen(QPen(outline, hovered ? 1.5 : 2.0));
+            painter.setBrush(Qt::NoBrush);
+            for (const auto& edgePts : boundaryEdges) {
+                QPolygonF line;
+                for (const auto& pt : edgePts) {
+                    QPointF screenPos;
+                    if (projectToScreen(viewProjection, pt, static_cast<float>(m_width),
+                                        static_cast<float>(m_height), &screenPos)) {
+                        line << screenPos;
+                    }
+                }
+                if (line.size() >= 2) {
+                    painter.drawPolyline(line);
+                }
             }
         }
     };
@@ -1927,9 +1949,10 @@ void Viewport::drawModelSelectionOverlay(const QMatrix4x4& viewProjection) {
             return;
         }
         const QColor fill = hovered ? style.faceFillHover : style.faceFillSelected;
-        const QColor outline = hovered ? style.faceOutlineHover : style.faceOutlineSelected;
+
+        // Draw filled triangles WITHOUT outline (no internal mesh lines)
+        painter.setPen(Qt::NoPen);
         painter.setBrush(fill);
-        painter.setPen(QPen(outline, hovered ? 1.2 : 1.8));
         for (const auto& tri : triangles) {
             QPolygonF poly;
             bool projected = true;
@@ -1946,6 +1969,7 @@ void Viewport::drawModelSelectionOverlay(const QMatrix4x4& viewProjection) {
                 painter.drawPolygon(poly);
             }
         }
+        // Note: Body selection doesn't draw boundary edges - just fill
     };
 
     for (const auto& item : selection) {
@@ -2353,6 +2377,7 @@ void Viewport::syncModelMeshes() {
             }
             pickMesh.topologyByFace[faceId] = std::move(faceTopo);
         }
+        pickMesh.faceGroupByFaceId = mesh.faceGroupByFaceId;
         pickMeshes.push_back(std::move(pickMesh));
     });
     setModelPickMeshes(std::move(pickMeshes));

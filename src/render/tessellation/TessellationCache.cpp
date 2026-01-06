@@ -2,23 +2,148 @@
 
 #include <BRepMesh_IncrementalMesh.hxx>
 #include <BRep_Tool.hxx>
+#include <BRepAdaptor_Surface.hxx>
+#include <BRepLProp_SLProps.hxx>
 #include <Poly_Triangulation.hxx>
 #include <BRepAdaptor_Curve.hxx>
 #include <BRepTools_WireExplorer.hxx>
+#include <BRepBndLib.hxx>
+#include <Bnd_Box.hxx>
+#include <Geom2d_Curve.hxx>
+#include <GeomAbs_Shape.hxx>
 #include <GCPnts_AbscissaPoint.hxx>
 #include <GCPnts_UniformAbscissa.hxx>
+#include <Precision.hxx>
 #include <Standard_Failure.hxx>
 #include <TopExp_Explorer.hxx>
 #include <TopExp.hxx>
 #include <TopLoc_Location.hxx>
+#include <TopAbs_Orientation.hxx>
 #include <TopoDS_Edge.hxx>
 #include <TopoDS_Wire.hxx>
 #include <TopoDS_Vertex.hxx>
 #include <TopTools_ShapeMapHasher.hxx>
+#include <TopTools_IndexedDataMapOfShapeListOfShape.hxx>
+#include <TopTools_ListIteratorOfListOfShape.hxx>
 
+#include <cmath>
 #include <limits>
 #include <unordered_map>
 #include <unordered_set>
+
+namespace {
+
+constexpr double kSmoothEdgeAngleDeg = 5.0;
+constexpr double kDegToRad = 3.14159265358979323846 / 180.0;
+const double kSmoothEdgeCos = std::cos(kSmoothEdgeAngleDeg * kDegToRad);
+
+bool sampleFaceNormal(const TopoDS_Edge& edge, const TopoDS_Face& face, gp_Dir* outNormal) {
+    if (!outNormal) {
+        return false;
+    }
+    Standard_Real first = 0.0;
+    Standard_Real last = 0.0;
+    Handle(Geom2d_Curve) curve2d = BRep_Tool::CurveOnSurface(edge, face, first, last);
+    if (curve2d.IsNull()) {
+        return false;
+    }
+    Standard_Real mid = 0.5 * (first + last);
+    gp_Pnt2d uv;
+    gp_Vec2d d1;
+    curve2d->D1(mid, uv, d1);
+
+    BRepAdaptor_Surface surface(face, true);
+    BRepLProp_SLProps props(surface, uv.X(), uv.Y(), 1, Precision::Confusion());
+    if (!props.IsNormalDefined()) {
+        return false;
+    }
+    gp_Dir normal = props.Normal();
+    if (face.Orientation() == TopAbs_REVERSED) {
+        normal.Reverse();
+    }
+    *outNormal = normal;
+    return true;
+}
+
+bool isSharpEdgeByAngle(const TopoDS_Edge& edge, const TopoDS_Face& f1, const TopoDS_Face& f2) {
+    gp_Dir n1;
+    gp_Dir n2;
+    if (!sampleFaceNormal(edge, f1, &n1) || !sampleFaceNormal(edge, f2, &n2)) {
+        return true;
+    }
+    double dot = std::abs(n1.Dot(n2));
+    return dot < kSmoothEdgeCos;
+}
+
+bool isVisibleEdge(const TopoDS_Edge& edge, const TopTools_ListOfShape& faces) {
+    std::vector<TopoDS_Face> adjacentFaces;
+    adjacentFaces.reserve(static_cast<size_t>(faces.Extent()));
+    for (TopTools_ListIteratorOfListOfShape it(faces); it.More(); it.Next()) {
+        TopoDS_Face face = TopoDS::Face(it.Value());
+        if (!face.IsNull()) {
+            adjacentFaces.push_back(face);
+        }
+    }
+
+    if (adjacentFaces.empty()) {
+        return false;
+    }
+    if (adjacentFaces.size() == 1) {
+        if (BRep_Tool::IsClosed(edge, adjacentFaces[0])) {
+            return false;
+        }
+        return true;
+    }
+
+    for (size_t i = 0; i + 1 < adjacentFaces.size(); ++i) {
+        for (size_t j = i + 1; j < adjacentFaces.size(); ++j) {
+            GeomAbs_Shape continuity = BRep_Tool::Continuity(edge, adjacentFaces[i], adjacentFaces[j]);
+            if (continuity >= GeomAbs_G1) {
+                continue;
+            }
+            if (isSharpEdgeByAngle(edge, adjacentFaces[i], adjacentFaces[j])) {
+                return true;
+            }
+        }
+    }
+
+    return false;
+}
+
+struct FaceDisjointSet {
+    std::unordered_map<std::string, std::string> parent;
+
+    void add(const std::string& id) {
+        parent.emplace(id, id);
+    }
+
+    std::string find(const std::string& id) {
+        auto it = parent.find(id);
+        if (it == parent.end()) {
+            return id;
+        }
+        if (it->second == id) {
+            return id;
+        }
+        it->second = find(it->second);
+        return it->second;
+    }
+
+    void unite(const std::string& a, const std::string& b) {
+        std::string rootA = find(a);
+        std::string rootB = find(b);
+        if (rootA == rootB) {
+            return;
+        }
+        if (rootA < rootB) {
+            parent[rootB] = rootA;
+        } else {
+            parent[rootA] = rootB;
+        }
+    }
+};
+
+} // namespace
 
 namespace onecad::render {
 
@@ -33,12 +158,46 @@ SceneMeshStore::Mesh TessellationCache::buildMesh(const std::string& bodyId,
         return mesh;
     }
 
-    BRepMesh_IncrementalMesh mesher(shape, settings_.linearDeflection,
+    // Compute adaptive deflection based on bounding box
+    double linearDeflection = settings_.linearDeflection;
+    if (settings_.adaptive) {
+        Bnd_Box bbox;
+        BRepBndLib::Add(shape, bbox);
+        if (!bbox.IsVoid()) {
+            double xmin, ymin, zmin, xmax, ymax, zmax;
+            bbox.Get(xmin, ymin, zmin, xmax, ymax, zmax);
+            double diagonal = std::sqrt(std::pow(xmax - xmin, 2) +
+                                        std::pow(ymax - ymin, 2) +
+                                        std::pow(zmax - zmin, 2));
+            // Scale deflection: smaller models get finer tessellation
+            linearDeflection = std::min(settings_.linearDeflection, diagonal * 0.001);
+            // Ensure minimum quality
+            linearDeflection = std::max(linearDeflection, 0.001);
+        }
+    }
+
+    BRepMesh_IncrementalMesh mesher(shape, linearDeflection,
                                     settings_.parallel, settings_.angularDeflection, true);
     mesher.Perform();
     if (!mesher.IsDone()) {
         return mesh;
     }
+
+    // Build edge-to-faces ancestor map to identify visible (sharp) edges
+    TopTools_IndexedDataMapOfShapeListOfShape edgeToFacesMap;
+    TopExp::MapShapesAndAncestors(shape, TopAbs_EDGE, TopAbs_FACE, edgeToFacesMap);
+
+    // Collect only edges that represent real boundaries (sharp or open edges)
+    VisibleEdgeSet visibleEdges;
+    for (int i = 1; i <= edgeToFacesMap.Extent(); ++i) {
+        const TopoDS_Edge& edge = TopoDS::Edge(edgeToFacesMap.FindKey(i));
+        const TopTools_ListOfShape& faces = edgeToFacesMap.FindFromIndex(i);
+        if (isVisibleEdge(edge, faces)) {
+            visibleEdges.insert(edge);
+        }
+    }
+
+    std::unordered_map<TopoDS_Face, std::string, TopTools_ShapeMapHasher, TopTools_ShapeMapHasher> faceIdByShape;
 
     for (TopExp_Explorer faceExp(shape, TopAbs_FACE); faceExp.More(); faceExp.Next()) {
         TopoDS_Face face = TopoDS::Face(faceExp.Current());
@@ -58,7 +217,9 @@ SceneMeshStore::Mesh TessellationCache::buildMesh(const std::string& bodyId,
             faceId = bodyId + "/face/unknown_" + std::to_string(mesh.triangles.size());
         }
 
-        SceneMeshStore::FaceTopology topology = buildFaceTopology(bodyId, face, elementMap);
+        faceIdByShape.emplace(face, faceId);
+
+        SceneMeshStore::FaceTopology topology = buildFaceTopology(bodyId, face, elementMap, visibleEdges);
         topology.faceId = faceId;
         mesh.topologyByFace[faceId] = std::move(topology);
 
@@ -89,13 +250,45 @@ SceneMeshStore::Mesh TessellationCache::buildMesh(const std::string& bodyId,
         }
     }
 
+    FaceDisjointSet faceGroups;
+    for (const auto& entry : faceIdByShape) {
+        faceGroups.add(entry.second);
+    }
+
+    for (int i = 1; i <= edgeToFacesMap.Extent(); ++i) {
+        const TopoDS_Edge& edge = TopoDS::Edge(edgeToFacesMap.FindKey(i));
+        if (visibleEdges.find(edge) != visibleEdges.end()) {
+            continue;
+        }
+        const TopTools_ListOfShape& faces = edgeToFacesMap.FindFromIndex(i);
+        std::string firstId;
+        for (TopTools_ListIteratorOfListOfShape it(faces); it.More(); it.Next()) {
+            TopoDS_Face face = TopoDS::Face(it.Value());
+            auto faceIdIt = faceIdByShape.find(face);
+            if (faceIdIt == faceIdByShape.end()) {
+                continue;
+            }
+            if (firstId.empty()) {
+                firstId = faceIdIt->second;
+            } else {
+                faceGroups.unite(firstId, faceIdIt->second);
+            }
+        }
+    }
+
+    for (const auto& entry : faceIdByShape) {
+        const std::string& faceId = entry.second;
+        mesh.faceGroupByFaceId[faceId] = faceGroups.find(faceId);
+    }
+
     return mesh;
 }
 
 SceneMeshStore::FaceTopology TessellationCache::buildFaceTopology(
     const std::string& bodyId,
     const TopoDS_Face& face,
-    kernel::elementmap::ElementMap& elementMap) const {
+    kernel::elementmap::ElementMap& elementMap,
+    const VisibleEdgeSet& visibleEdges) const {
     SceneMeshStore::FaceTopology topology;
 
     std::unordered_set<std::string> seenEdges;
@@ -111,6 +304,11 @@ SceneMeshStore::FaceTopology TessellationCache::buildFaceTopology(
         TopoDS_Wire wire = TopoDS::Wire(wireExp.Current());
         for (BRepTools_WireExplorer edgeExp(wire, face); edgeExp.More(); edgeExp.Next()) {
             TopoDS_Edge edge = edgeExp.Current();
+
+            // Skip edges that are not visible boundaries (tangent/seam edges)
+            if (visibleEdges.find(edge) == visibleEdges.end()) {
+                continue;
+            }
 
             std::string edgeId;
             auto edgeIds = elementMap.findIdsByShape(edge);

@@ -6,17 +6,21 @@
 
 #include <TopoDS_Shape.hxx>
 #include <TopoDS_Face.hxx>
+#include <TopoDS_Edge.hxx>
+#include <TopTools_ShapeMapHasher.hxx>
 
 #include <string>
+#include <unordered_set>
 
 namespace onecad::render {
 
 class TessellationCache {
 public:
     struct Settings {
-        double linearDeflection = 0.1;
-        double angularDeflection = 0.5;
+        double linearDeflection = 0.05;   // Tighter for smoother curves (was 0.1)
+        double angularDeflection = 0.2;   // Smoother cylinder segments (was 0.5)
         bool parallel = true;
+        bool adaptive = true;             // Auto-adjust based on model bounding box
     };
 
     TessellationCache() = default;
@@ -29,9 +33,12 @@ public:
                                    kernel::elementmap::ElementMap& elementMap) const;
 
 private:
+    using VisibleEdgeSet = std::unordered_set<TopoDS_Edge, TopTools_ShapeMapHasher, TopTools_ShapeMapHasher>;
+
     SceneMeshStore::FaceTopology buildFaceTopology(const std::string& bodyId,
                                                    const TopoDS_Face& face,
-                                                   kernel::elementmap::ElementMap& elementMap) const;
+                                                   kernel::elementmap::ElementMap& elementMap,
+                                                   const VisibleEdgeSet& visibleEdges) const;
     Settings settings_{};
 };
 

@@ -43,6 +43,7 @@ public:
         std::vector<QVector3D> vertices;
         std::vector<Triangle> triangles;
         std::unordered_map<std::string, FaceTopology> topologyByFace;
+        std::unordered_map<std::string, std::string> faceGroupByFaceId;
     };
 
     void setBodyMesh(const std::string& bodyId, Mesh mesh);

@@ -44,6 +44,7 @@ public:
         std::vector<QVector3D> vertices;
         std::vector<Triangle> triangles;
         std::unordered_map<std::string, FaceTopology> topologyByFace;
+        std::unordered_map<std::string, std::string> faceGroupByFaceId;
     };
 
     struct Ray {
@@ -76,6 +77,10 @@ public:
                            const std::string& vertexId,
                            QVector3D& outVertex) const;
 
+    bool getFaceBoundaryEdges(const std::string& bodyId,
+                              const std::string& faceId,
+                              std::vector<std::vector<QVector3D>>& outEdges) const;
+
 private:
     struct MeshCache {
         std::string bodyId;
@@ -84,6 +89,8 @@ private:
         std::unordered_set<std::string> pickableVertices;
         std::unordered_map<std::string, std::vector<QVector3D>> edgePolylines;
         std::unordered_map<std::string, std::vector<std::array<QVector3D, 3>>> faceMap;
+        std::unordered_map<std::string, std::string> faceGroupLeaderByFaceId;
+        std::unordered_map<std::string, std::vector<std::string>> faceGroupMembers;
         struct FaceTopologyCache {
             std::vector<std::string> edgeIds;
             std::vector<std::string> vertexIds;
