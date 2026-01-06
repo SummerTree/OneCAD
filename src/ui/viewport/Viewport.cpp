@@ -1571,16 +1571,22 @@ void Viewport::handleModelSelectionChanged() {
     // Forward selection change to tool manager (e.g. for Revolve axis picking)
     m_modelingToolManager->onSelectionChanged(selection);
 
-    if (selection.size() == 1 &&
+    if (m_revolveToolActive) {
+        return;
+    }
+
+    const bool canExtrude = selection.size() == 1 &&
         selection.front().kind == app::selection::SelectionKind::SketchRegion &&
-        m_referenceSketch && !m_revolveToolActive) {
-        // Only auto-activate Extrude if Revolve isn't active
+        m_referenceSketch;
+
+    if (canExtrude) {
         m_modelingToolManager->activateExtrude(selection.front());
         setExtrudeToolActive(true);
-    } else if (!m_revolveToolActive && !m_extrudeToolActive) {
-        m_modelingToolManager->cancelActiveTool();
-        setExtrudeToolActive(false);
+        return;
     }
+
+    m_modelingToolManager->cancelActiveTool();
+    setExtrudeToolActive(false);
 }
 
 void Viewport::setExtrudeToolActive(bool active) {

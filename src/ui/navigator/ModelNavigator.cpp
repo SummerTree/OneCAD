@@ -6,10 +6,12 @@
 #include <QIcon>
 #include <QLabel>
 #include <QMenu>
+#include <QMouseEvent>
 #include <QPainter>
 #include <QPropertyAnimation>
 #include <QSizePolicy>
 #include <QItemSelectionModel>
+#include <QItemSelection>
 #include <QAbstractItemView>
 #include <QToolButton>
 #include <QTreeWidget>
@@ -79,6 +81,7 @@ void ModelNavigator::setupUi() {
     m_treeWidget->setFocusPolicy(Qt::NoFocus);
     m_treeWidget->header()->setSectionResizeMode(QHeaderView::Stretch);
     m_treeWidget->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    m_treeWidget->viewport()->installEventFilter(this);
 
     connect(m_treeWidget, &QTreeWidget::itemClicked,
             this, &ModelNavigator::onItemClicked);
@@ -92,7 +95,14 @@ void ModelNavigator::setupUi() {
         }
     });
     connect(m_treeWidget->selectionModel(), &QItemSelectionModel::selectionChanged,
-            this, [this]() { updateSelectionState(); });
+            this, [this](const QItemSelection& selected, const QItemSelection& deselected) {
+                Q_UNUSED(selected);
+                Q_UNUSED(deselected);
+                updateSelectionState();
+                if (m_treeWidget->selectedItems().isEmpty()) {
+                    emit sketchSelected(QString());
+                }
+            });
 
     panelLayout->addWidget(m_treeWidget, 1);
 
@@ -443,6 +453,23 @@ void ModelNavigator::onItemClicked(QTreeWidgetItem* item, int column) {
             emit bodySelected(itemId);
         }
     }
+}
+
+bool ModelNavigator::eventFilter(QObject* obj, QEvent* event) {
+    if (obj == m_treeWidget->viewport() && event->type() == QEvent::MouseButtonPress) {
+        auto* mouseEvent = static_cast<QMouseEvent*>(event);
+        if (mouseEvent->button() == Qt::LeftButton) {
+            if (!m_treeWidget->itemAt(mouseEvent->pos())) {
+                if (!m_treeWidget->selectedItems().isEmpty()) {
+                    m_treeWidget->clearSelection();
+                    m_treeWidget->setCurrentItem(nullptr);
+                }
+                return true;
+            }
+        }
+    }
+
+    return QWidget::eventFilter(obj, event);
 }
 
 void ModelNavigator::onItemDoubleClicked(QTreeWidgetItem* item, int column) {

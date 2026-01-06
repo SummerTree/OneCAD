@@ -15,6 +15,7 @@ class QFrame;
 class QPropertyAnimation;
 class QLabel;
 class QToolButton;
+class QEvent;
 
 namespace onecad {
 namespace ui {
@@ -60,6 +61,9 @@ public slots:
 private slots:
     void onItemClicked(QTreeWidgetItem* item, int column);
     void onItemDoubleClicked(QTreeWidgetItem* item, int column);
+
+protected:
+    bool eventFilter(QObject* obj, QEvent* event) override;
 
 private:
     struct ItemCollection {
