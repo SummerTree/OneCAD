@@ -136,6 +136,10 @@ ThemeDefinition makeLightTheme() {
     theme.viewport.selection.vertexSelected = theme.viewport.selection.faceOutlineSelected;
     theme.viewport.body.base = QColor(176, 184, 194);
     theme.viewport.body.edge = QColor(70, 78, 88);
+    theme.viewport.body.specular = QColor(255, 255, 255);
+    theme.viewport.body.rim = QColor(210, 220, 232);
+    theme.viewport.body.glow = QColor(kAccent.red(), kAccent.green(), kAccent.blue());
+    theme.viewport.body.highlight = QColor(210, 220, 232);
 
     theme.sketch.normalGeometry = QColor(255, 255, 255);
     theme.sketch.constructionGeometry = QColor(130, 150, 190);
@@ -270,6 +274,10 @@ ThemeDefinition makeDarkTheme() {
     theme.viewport.selection.vertexSelected = theme.viewport.selection.faceOutlineSelected;
     theme.viewport.body.base = QColor(150, 158, 168);
     theme.viewport.body.edge = QColor(210, 214, 220);
+    theme.viewport.body.specular = QColor(255, 255, 255);
+    theme.viewport.body.rim = QColor(196, 206, 218);
+    theme.viewport.body.glow = QColor(kAccent.red(), kAccent.green(), kAccent.blue());
+    theme.viewport.body.highlight = QColor(196, 206, 218);
 
     theme.sketch.normalGeometry = QColor(245, 245, 245);
     theme.sketch.constructionGeometry = QColor(120, 138, 170);

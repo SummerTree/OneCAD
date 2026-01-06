@@ -141,6 +141,10 @@ struct ThemeViewportSelectionColors {
 struct ThemeViewportBodyColors {
     QColor base;
     QColor edge;
+    QColor specular;
+    QColor rim;
+    QColor glow;
+    QColor highlight;
 };
 
 struct ThemeViewportColors {

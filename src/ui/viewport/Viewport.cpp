@@ -411,6 +411,13 @@ void Viewport::paintGL() {
         const ThemeDefinition& theme = ThemeManager::instance().currentTheme();
         style.baseColor = theme.viewport.body.base;
         style.edgeColor = theme.viewport.body.edge;
+        style.specularColor = theme.viewport.body.specular;
+        style.rimColor = theme.viewport.body.rim;
+        style.glowColor = theme.viewport.body.glow;
+        style.highlightColor = theme.viewport.body.highlight;
+        style.highlightStrength = 0.08f;
+        style.drawGlow = true;
+        style.glowAlpha = 0.18f;
         style.drawEdges = true;
         style.previewAlpha = 0.35f;
         if (m_inSketchMode) {
@@ -418,6 +425,8 @@ void Viewport::paintGL() {
             style.ghostFactor = 0.6f;
             style.baseAlpha = 0.25f;
             style.edgeAlpha = 0.5f;
+            style.glowAlpha = 0.12f;
+            style.highlightStrength = 0.04f;
         }
 
         QVector3D lightDir = -m_camera->forward();
@@ -426,7 +435,13 @@ void Viewport::paintGL() {
         } else {
             lightDir.normalize();
         }
-        m_bodyRenderer->render(viewProjection, lightDir, style);
+        QVector3D viewDir = -m_camera->forward();
+        if (viewDir.lengthSquared() < 1e-6f) {
+            viewDir = QVector3D(0.0f, 0.0f, 1.0f);
+        } else {
+            viewDir.normalize();
+        }
+        m_bodyRenderer->render(viewProjection, lightDir, viewDir, style);
     }
 
     // Render sketch(es)

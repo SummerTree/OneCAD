@@ -20,12 +20,24 @@ public:
     struct RenderStyle {
         QColor baseColor{200, 200, 200};
         QColor edgeColor{0, 0, 0};
+        QColor specularColor{255, 255, 255};
+        QColor rimColor{255, 255, 255};
+        QColor glowColor{0, 148, 198};
+        QColor highlightColor{255, 255, 255};
         float baseAlpha = 1.0f;
         float edgeAlpha = 1.0f;
         float previewAlpha = 0.35f;
         float ghostFactor = 1.0f;
+        float specularIntensity = 0.35f;
+        float specularPower = 48.0f;
+        float rimIntensity = 0.2f;
+        float rimPower = 2.0f;
+        float glowAlpha = 0.2f;
+        float highlightStrength = 0.0f;
         bool ghosted = false;
         bool drawEdges = true;
+        bool drawGlow = false;
+        bool useMatcap = false;
     };
 
     BodyRenderer();
@@ -46,6 +58,7 @@ public:
 
     void render(const QMatrix4x4& viewProjection,
                 const QVector3D& lightDir,
+                const QVector3D& viewDir,
                 const RenderStyle& style);
 
 private:
@@ -73,6 +86,7 @@ private:
     void renderBatch(RenderBuffers& buffers,
                      const QMatrix4x4& viewProjection,
                      const QVector3D& lightDir,
+                     const QVector3D& viewDir,
                      const RenderStyle& style,
                      float alphaOverride);
 

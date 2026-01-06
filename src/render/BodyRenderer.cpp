@@ -35,18 +35,52 @@ const char* kTriangleFragmentShader = R"(
 in vec3 vNormal;
 
 uniform vec3 uBaseColor;
+uniform vec3 uSpecColor;
+uniform vec3 uRimColor;
+uniform vec3 uHighlightColor;
 uniform vec3 uLightDir;
+uniform vec3 uViewDir;
 uniform float uAlpha;
 uniform float uAmbient;
+uniform float uSpecIntensity;
+uniform float uSpecPower;
+uniform float uRimIntensity;
+uniform float uRimPower;
+uniform float uHighlightStrength;
+uniform float uMatcapFactor;
 
 out vec4 FragColor;
 
 void main() {
     vec3 n = normalize(vNormal);
     vec3 lightDir = normalize(uLightDir);
+    vec3 viewDir = normalize(uViewDir);
+
     float diffuse = max(dot(n, lightDir), 0.0);
+
+    float specular = 0.0;
+    if (diffuse > 0.0 && uSpecIntensity > 0.0) {
+        vec3 h = normalize(lightDir + viewDir);
+        specular = pow(max(dot(n, h), 0.0), uSpecPower) * uSpecIntensity;
+    }
+
+    float rim = 0.0;
+    if (uRimIntensity > 0.0) {
+        rim = pow(1.0 - max(dot(n, viewDir), 0.0), uRimPower) * uRimIntensity;
+    }
+
     float intensity = max(diffuse, uAmbient);
-    vec3 color = uBaseColor * intensity;
+    vec3 color = uBaseColor * intensity + uSpecColor * specular + uRimColor * rim;
+
+    if (uMatcapFactor > 0.0) {
+        float hemi = clamp(n.z * 0.5 + 0.5, 0.0, 1.0);
+        vec3 matcap = mix(uBaseColor * 0.8, uBaseColor * 1.2, hemi);
+        color = mix(color, matcap, clamp(uMatcapFactor, 0.0, 1.0));
+    }
+
+    if (uHighlightStrength > 0.0) {
+        color = mix(color, uHighlightColor, clamp(uHighlightStrength, 0.0, 1.0));
+    }
     FragColor = vec4(color, uAlpha);
 }
 )";
@@ -179,6 +213,7 @@ void BodyRenderer::clearPreview() {
 
 void BodyRenderer::render(const QMatrix4x4& viewProjection,
                           const QVector3D& lightDir,
+                          const QVector3D& viewDir,
                           const RenderStyle& style) {
     if (!m_initialized || !m_triangleShader || !m_edgeShader) {
         return;
@@ -193,9 +228,9 @@ void BodyRenderer::render(const QMatrix4x4& viewProjection,
         m_previewDirty = false;
     }
 
-    renderBatch(m_mainBuffers, viewProjection, lightDir, style, -1.0f);
+    renderBatch(m_mainBuffers, viewProjection, lightDir, viewDir, style, -1.0f);
     if (m_previewBuffers.triangles.vertexCount > 0 || m_previewBuffers.edges.vertexCount > 0) {
-        renderBatch(m_previewBuffers, viewProjection, lightDir, style, style.previewAlpha);
+        renderBatch(m_previewBuffers, viewProjection, lightDir, viewDir, style, style.previewAlpha);
     }
 }
 
@@ -396,13 +431,19 @@ void BodyRenderer::uploadBuffers(const CpuBuffers& cpu, RenderBuffers* buffers) 
 void BodyRenderer::renderBatch(RenderBuffers& buffers,
                                const QMatrix4x4& viewProjection,
                                const QVector3D& lightDir,
+                               const QVector3D& viewDir,
                                const RenderStyle& style,
                                float alphaOverride) {
     const float colorScale = style.ghosted ? style.ghostFactor : 1.0f;
     const QVector3D baseColor = colorToVec(style.baseColor, colorScale);
     const QVector3D edgeColor = colorToVec(style.edgeColor, colorScale);
-    const float baseAlpha = alphaOverride >= 0.0f ? alphaOverride : style.baseAlpha;
-    const float edgeAlpha = alphaOverride >= 0.0f ? alphaOverride : style.edgeAlpha;
+    const QVector3D specColor = colorToVec(style.specularColor, colorScale);
+    const QVector3D rimColor = colorToVec(style.rimColor, colorScale);
+    const QVector3D glowColor = colorToVec(style.glowColor, colorScale);
+    const QVector3D highlightColor = colorToVec(style.highlightColor, 1.0f);
+    const float baseAlpha = (alphaOverride >= 0.0f ? alphaOverride : style.baseAlpha);
+    const float edgeAlpha = (alphaOverride >= 0.0f ? alphaOverride : style.edgeAlpha);
+    const float glowAlpha = (alphaOverride >= 0.0f ? alphaOverride : style.glowAlpha);
 
     if (buffers.triangles.vertexCount > 0) {
         glEnable(GL_DEPTH_TEST);
@@ -421,9 +462,20 @@ void BodyRenderer::renderBatch(RenderBuffers& buffers,
         m_triangleShader->bind();
         m_triangleShader->setUniformValue("uMVP", viewProjection);
         m_triangleShader->setUniformValue("uBaseColor", baseColor);
+        m_triangleShader->setUniformValue("uSpecColor", specColor);
+        m_triangleShader->setUniformValue("uRimColor", rimColor);
+        m_triangleShader->setUniformValue("uHighlightColor", highlightColor);
         m_triangleShader->setUniformValue("uLightDir", lightDir);
+        m_triangleShader->setUniformValue("uViewDir", viewDir);
         m_triangleShader->setUniformValue("uAlpha", baseAlpha);
         m_triangleShader->setUniformValue("uAmbient", kAmbient);
+        m_triangleShader->setUniformValue("uSpecIntensity", style.specularIntensity);
+        m_triangleShader->setUniformValue("uSpecPower", style.specularPower);
+        m_triangleShader->setUniformValue("uRimIntensity", style.rimIntensity);
+        m_triangleShader->setUniformValue("uRimPower", style.rimPower);
+        m_triangleShader->setUniformValue("uHighlightStrength", style.highlightStrength);
+        // Matcap intentionally disabled until view-space normals are wired; prevents world-up artifacts.
+        m_triangleShader->setUniformValue("uMatcapFactor", 0.0f);
 
         buffers.triangles.vao.bind();
         glDrawArrays(GL_TRIANGLES, 0, buffers.triangles.vertexCount);
@@ -432,6 +484,28 @@ void BodyRenderer::renderBatch(RenderBuffers& buffers,
         m_triangleShader->release();
 
         glDisable(GL_POLYGON_OFFSET_FILL);
+        glDisable(GL_BLEND);
+    }
+
+    if (style.drawGlow && buffers.edges.vertexCount > 0 && glowAlpha > 0.0f) {
+        glEnable(GL_DEPTH_TEST);
+        glDepthFunc(GL_LEQUAL);
+
+        glEnable(GL_BLEND);
+        glBlendFunc(GL_SRC_ALPHA, GL_ONE);
+
+        m_edgeShader->bind();
+        m_edgeShader->setUniformValue("uMVP", viewProjection);
+        m_edgeShader->setUniformValue("uColor", QVector4D(glowColor, glowAlpha));
+
+        glLineWidth(3.0f);
+        buffers.edges.vao.bind();
+        glDrawArrays(GL_LINES, 0, buffers.edges.vertexCount);
+        buffers.edges.vao.release();
+        glLineWidth(1.0f);
+
+        m_edgeShader->release();
+
         glDisable(GL_BLEND);
     }
 
