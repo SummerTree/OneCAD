@@ -1,4 +1,5 @@
 #include "DimensionEditor.h"
+#include "../theme/ThemeManager.h"
 
 #include <QKeyEvent>
 #include <QFocusEvent>
@@ -15,21 +16,9 @@ DimensionEditor::DimensionEditor(QWidget* parent)
     setAlignment(Qt::AlignCenter);
     setFrame(true);
 
-    // Style the editor
-    setStyleSheet(R"(
-        QLineEdit {
-            background-color: #ffffff;
-            border: 2px solid #0078d4;
-            border-radius: 4px;
-            padding: 4px 8px;
-            font-size: 12px;
-            font-weight: bold;
-            min-width: 80px;
-        }
-        QLineEdit:focus {
-            border-color: #005a9e;
-        }
-    )");
+    m_themeConnection = connect(&ThemeManager::instance(), &ThemeManager::themeChanged,
+                                this, &DimensionEditor::updateTheme, Qt::UniqueConnection);
+    updateTheme();
 
     // Connect return pressed to confirmation
     connect(this, &QLineEdit::returnPressed, this, &DimensionEditor::confirmValue);
@@ -226,6 +215,27 @@ double DimensionEditor::parseExpression(const QString& text) const {
         return std::nan("");
     }
     return values.top();
+}
+
+void DimensionEditor::updateTheme() {
+    const ThemeDimensionEditorColors& colors = ThemeManager::instance().currentTheme().dimensionEditor;
+    setStyleSheet(QStringLiteral(R"(
+        QLineEdit {
+            background-color: %1;
+            border: 2px solid %2;
+            border-radius: 4px;
+            padding: 4px 8px;
+            font-size: 12px;
+            font-weight: bold;
+            min-width: 80px;
+        }
+        QLineEdit:focus {
+            border-color: %3;
+        }
+    )")
+    .arg(toQssColor(colors.background),
+         toQssColor(colors.border),
+         toQssColor(colors.borderFocus)));
 }
 
 } // namespace onecad::ui

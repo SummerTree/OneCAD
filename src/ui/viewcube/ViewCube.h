@@ -102,6 +102,10 @@ private:
     QColor m_textHoverColor;
     QColor m_edgeHoverColor;
     QColor m_cornerHoverColor;
+    QColor m_faceBorderColor;
+    QColor m_axisXColor;
+    QColor m_axisYColor;
+    QColor m_axisZColor;
 
     // Signal connection management
     QMetaObject::Connection m_themeConnection;

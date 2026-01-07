@@ -3,7 +3,7 @@
 
 #include <QWidget>
 
-class QVBoxLayout;
+class QHBoxLayout;
 namespace onecad {
 namespace ui {
 class SidebarToolButton;
@@ -30,10 +30,14 @@ public:
 
 public slots:
     void setContext(Context context);
+    void setExtrudeActive(bool active);
+    void setRevolveActive(bool active);
 
 signals:
     void contextChanged();
     void newSketchRequested();
+    void extrudeRequested();
+    void revolveRequested();
     void exitSketchRequested();
     void importRequested();
     void lineToolActivated();
@@ -49,8 +53,10 @@ private:
     void updateVisibleButtons();
 
     Context m_currentContext = Context::Default;
-    QVBoxLayout* m_layout = nullptr;
+    QHBoxLayout* m_layout = nullptr;
     SidebarToolButton* m_newSketchButton = nullptr;
+    SidebarToolButton* m_extrudeButton = nullptr;
+    SidebarToolButton* m_revolveButton = nullptr;
     SidebarToolButton* m_importButton = nullptr;
     SidebarToolButton* m_exitSketchButton = nullptr;
     SidebarToolButton* m_lineButton = nullptr;

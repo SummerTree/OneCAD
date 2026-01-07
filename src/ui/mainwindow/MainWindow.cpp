@@ -1,9 +1,16 @@
 #include "MainWindow.h"
 #include "../theme/ThemeManager.h"
 #include "../viewport/Viewport.h"
+#include "../viewport/RenderDebugPanel.h"
 #include "../../render/Camera3D.h"
 #include "../../core/sketch/Sketch.h"
 #include "../../core/sketch/tools/SketchToolManager.h"
+#include "../../app/commands/CommandProcessor.h"
+#include "../../app/commands/DeleteBodyCommand.h"
+#include "../../app/commands/DeleteSketchCommand.h"
+#include "../../app/commands/RenameBodyCommand.h"
+#include "../../app/commands/RenameSketchCommand.h"
+#include "../../app/commands/ToggleVisibilityCommand.h"
 #include "../../app/document/Document.h"
 #include "../navigator/ModelNavigator.h"
 #include "../toolbar/ContextToolbar.h"
@@ -11,7 +18,6 @@
 #include "../sketch/SketchModePanel.h"
 #include "../../core/sketch/SketchRenderer.h"
 #include "../../core/sketch/SketchTypes.h"
-
 #include <QMenuBar>
 #include <QStatusBar>
 #include <QLabel>
@@ -47,12 +53,15 @@ MainWindow::MainWindow(QWidget* parent)
 
     // Create document model (no Qt parent - unique_ptr manages lifetime)
     m_document = std::make_unique<app::Document>();
+    m_commandProcessor = std::make_unique<app::commands::CommandProcessor>();
 
     applyTheme();
     setupMenuBar();
     setupViewport();
     setupToolBar();
     setupStatusBar();
+    connect(&ThemeManager::instance(), &ThemeManager::themeChanged,
+            this, &MainWindow::applyDofStatusStyle, Qt::UniqueConnection);
 
     // Connect document signals to navigator
     connect(m_document.get(), &app::Document::sketchAdded,
@@ -61,6 +70,42 @@ MainWindow::MainWindow(QWidget* parent)
             m_navigator, &ModelNavigator::onSketchRemoved);
     connect(m_document.get(), &app::Document::sketchRenamed,
             m_navigator, &ModelNavigator::onSketchRenamed);
+    connect(m_document.get(), &app::Document::bodyAdded,
+            m_navigator, &ModelNavigator::onBodyAdded);
+    connect(m_document.get(), &app::Document::bodyRemoved,
+            m_navigator, &ModelNavigator::onBodyRemoved);
+    connect(m_document.get(), &app::Document::bodyRenamed,
+            m_navigator, &ModelNavigator::onBodyRenamed);
+
+    // Connect navigator item actions
+    connect(m_navigator, &ModelNavigator::deleteRequested,
+            this, &MainWindow::onDeleteItem);
+    connect(m_navigator, &ModelNavigator::renameRequested,
+            this, &MainWindow::onRenameItem);
+    connect(m_navigator, &ModelNavigator::renameCommitted, this,
+            [this](const QString& itemId, const QString& newName) {
+                std::string id = itemId.toStdString();
+                bool isBody = m_document->getBodyShape(id) != nullptr;
+                if (isBody) {
+                    auto cmd = std::make_unique<app::commands::RenameBodyCommand>(
+                        m_document.get(), id, newName.toStdString());
+                    m_commandProcessor->execute(std::move(cmd));
+                } else {
+                    auto cmd = std::make_unique<app::commands::RenameSketchCommand>(
+                        m_document.get(), id, newName.toStdString());
+                    m_commandProcessor->execute(std::move(cmd));
+                }
+            });
+    connect(m_navigator, &ModelNavigator::visibilityToggled,
+            this, &MainWindow::onVisibilityToggled);
+    connect(m_navigator, &ModelNavigator::isolateRequested,
+            this, &MainWindow::onIsolateItem);
+
+    // Connect visibility changes from document back to navigator
+    connect(m_document.get(), &app::Document::bodyVisibilityChanged,
+            m_navigator, &ModelNavigator::onBodyVisibilityChanged);
+    connect(m_document.get(), &app::Document::sketchVisibilityChanged,
+            m_navigator, &ModelNavigator::onSketchVisibilityChanged);
 
     loadSettings();
 }
@@ -71,6 +116,7 @@ MainWindow::~MainWindow() {
 
 void MainWindow::applyTheme() {
     ThemeManager::instance().applyTheme();
+    applyDofStatusStyle();
 }
 
 void MainWindow::updateDofStatus(core::sketch::Sketch* sketch) {
@@ -81,20 +127,34 @@ void MainWindow::updateDofStatus(core::sketch::Sketch* sketch) {
     if (!sketch) {
         m_dofStatus->setText(tr("DOF: —"));
         m_dofStatus->setStyleSheet("");
+        m_hasCachedDof = false;
         return;
     }
 
     int dof = sketch->getDegreesOfFreedom();
     bool overConstrained = sketch->isOverConstrained();
     m_dofStatus->setText(tr("DOF: %1").arg(dof));
+    m_cachedDof = dof;
+    m_cachedOverConstrained = overConstrained;
+    m_hasCachedDof = true;
 
-    if (overConstrained) {
-        m_dofStatus->setStyleSheet("color: red;");
-    } else if (dof == 0) {
-        m_dofStatus->setStyleSheet("color: green;");
-    } else {
-        m_dofStatus->setStyleSheet("color: orange;");
+    applyDofStatusStyle();
+}
+
+void MainWindow::applyDofStatusStyle() {
+    if (!m_dofStatus || !m_hasCachedDof) {
+        return;
     }
+
+    const ThemeStatusColors& status = ThemeManager::instance().currentTheme().status;
+    QColor color = status.dofWarning;
+    if (m_cachedOverConstrained) {
+        color = status.dofError;
+    } else if (m_cachedDof == 0) {
+        color = status.dofOk;
+    }
+
+    m_dofStatus->setStyleSheet(QStringLiteral("color: %1;").arg(toQssColor(color)));
 }
 
 void MainWindow::setupMenuBar() {
@@ -115,8 +175,32 @@ void MainWindow::setupMenuBar() {
     
     // Edit menu
     QMenu* editMenu = menuBar->addMenu(tr("&Edit"));
-    editMenu->addAction(tr("&Undo"), QKeySequence::Undo, this, []() {});
-    editMenu->addAction(tr("&Redo"), QKeySequence::Redo, this, []() {});
+    m_undoAction = editMenu->addAction(tr("&Undo"), QKeySequence::Undo, this, [this]() {
+        if (m_commandProcessor) {
+            m_commandProcessor->undo();
+        }
+    });
+    m_redoAction = editMenu->addAction(tr("&Redo"), QKeySequence::Redo, this, [this]() {
+        if (m_commandProcessor) {
+            m_commandProcessor->redo();
+        }
+    });
+    if (m_undoAction) {
+        m_undoAction->setEnabled(false);
+    }
+    if (m_redoAction) {
+        m_redoAction->setEnabled(false);
+    }
+    if (m_commandProcessor) {
+        if (m_undoAction) {
+            connect(m_commandProcessor.get(), &app::commands::CommandProcessor::canUndoChanged,
+                    m_undoAction, &QAction::setEnabled);
+        }
+        if (m_redoAction) {
+            connect(m_commandProcessor.get(), &app::commands::CommandProcessor::canRedoChanged,
+                    m_redoAction, &QAction::setEnabled);
+        }
+    }
     editMenu->addSeparator();
     editMenu->addAction(tr("&Delete"), QKeySequence::Delete, this, []() {});
     editMenu->addAction(tr("Select &All"), QKeySequence::SelectAll, this, []() {});
@@ -148,7 +232,9 @@ void MainWindow::setupMenuBar() {
     viewMenu->addAction(tr("&Isometric"), QKeySequence(Qt::Key_7), this, [this]() {
         m_viewport->setIsometricView();
     });
+
     viewMenu->addSeparator();
+
     viewMenu->addAction(tr("Toggle &Grid"), QKeySequence(Qt::Key_G), this, [this]() {
         m_viewport->toggleGrid();
     });
@@ -156,35 +242,40 @@ void MainWindow::setupMenuBar() {
 
     // Theme Submenu
     QMenu* themeMenu = viewMenu->addMenu(tr("&Theme"));
-    
-    QAction* lightAction = themeMenu->addAction(tr("&Light"));
-    lightAction->setCheckable(true);
-    connect(lightAction, &QAction::triggered, this, [](){
-        ThemeManager::instance().setThemeMode(ThemeManager::ThemeMode::Light);
-    });
-
-    QAction* darkAction = themeMenu->addAction(tr("&Dark"));
-    darkAction->setCheckable(true);
-    connect(darkAction, &QAction::triggered, this, [](){
-        ThemeManager::instance().setThemeMode(ThemeManager::ThemeMode::Dark);
-    });
+    QActionGroup* themeGroup = new QActionGroup(this);
+    themeGroup->setExclusive(true);
 
     QAction* systemAction = themeMenu->addAction(tr("&System"));
     systemAction->setCheckable(true);
+    themeGroup->addAction(systemAction);
     connect(systemAction, &QAction::triggered, this, [](){
         ThemeManager::instance().setThemeMode(ThemeManager::ThemeMode::System);
     });
 
-    QActionGroup* themeGroup = new QActionGroup(this);
-    themeGroup->addAction(lightAction);
-    themeGroup->addAction(darkAction);
-    themeGroup->addAction(systemAction);
-    
-    // Set initial state
-    auto currentMode = ThemeManager::instance().themeMode();
-    if (currentMode == ThemeManager::ThemeMode::Light) lightAction->setChecked(true);
-    else if (currentMode == ThemeManager::ThemeMode::Dark) darkAction->setChecked(true);
-    else systemAction->setChecked(true);
+    themeMenu->addSeparator();
+
+    QAction* checkedAction = nullptr;
+    const auto& themes = ThemeManager::instance().availableThemes();
+    for (const auto& theme : themes) {
+        QAction* action = themeMenu->addAction(theme.displayName);
+        action->setCheckable(true);
+        action->setData(theme.id);
+        themeGroup->addAction(action);
+        connect(action, &QAction::triggered, this, [themeId = theme.id]() {
+            ThemeManager::instance().setThemeId(themeId);
+        });
+
+        if (ThemeManager::instance().themeMode() == ThemeManager::ThemeMode::Fixed &&
+            ThemeManager::instance().themeId() == theme.id) {
+            checkedAction = action;
+        }
+    }
+
+    if (ThemeManager::instance().themeMode() == ThemeManager::ThemeMode::System || !checkedAction) {
+        systemAction->setChecked(true);
+    } else {
+        checkedAction->setChecked(true);
+    }
 
     viewMenu->addSeparator();
     
@@ -293,6 +384,34 @@ void MainWindow::setupToolBar() {
 
     connect(m_toolbar, &ContextToolbar::newSketchRequested,
             this, &MainWindow::onNewSketch);
+    connect(m_toolbar, &ContextToolbar::extrudeRequested, this, [this]() {
+        if (!m_viewport) {
+            return;
+        }
+        const bool activated = m_viewport->activateExtrudeTool();
+        if (m_toolStatus) {
+            m_toolStatus->setText(activated
+                ? tr("Extrude tool active")
+                : tr("Select a sketch region to extrude"));
+        }
+        if (m_toolbar) {
+            m_toolbar->setExtrudeActive(activated);
+        }
+    });
+    connect(m_toolbar, &ContextToolbar::revolveRequested, this, [this]() {
+        if (!m_viewport) {
+            return;
+        }
+        const bool activated = m_viewport->activateRevolveTool();
+        if (m_toolStatus) {
+            m_toolStatus->setText(activated
+                ? tr("Revolve tool active - Select axis")
+                : tr("Select a sketch region or face to revolve"));
+        }
+        if (m_toolbar) {
+            m_toolbar->setRevolveActive(activated);
+        }
+    });
     connect(m_toolbar, &ContextToolbar::exitSketchRequested,
             this, &MainWindow::onExitSketch);
     connect(m_toolbar, &ContextToolbar::importRequested,
@@ -313,6 +432,11 @@ void MainWindow::setupToolBar() {
                 m_viewport, &Viewport::activateTrimTool);
         connect(m_toolbar, &ContextToolbar::mirrorToolActivated,
                 m_viewport, &Viewport::activateMirrorTool);
+
+        connect(m_viewport, &Viewport::extrudeToolActiveChanged,
+                m_toolbar, &ContextToolbar::setExtrudeActive);
+        connect(m_viewport, &Viewport::revolveToolActiveChanged,
+                m_toolbar, &ContextToolbar::setRevolveActive);
     }
 
     // Reposition toolbar when context changes (button visibility affects height)
@@ -366,6 +490,135 @@ void MainWindow::positionNavigatorOverlayButton() {
     m_navigatorOverlayButton->raise();
 }
 
+void MainWindow::setupRenderDebugOverlay() {
+    if (!m_viewport) {
+        return;
+    }
+
+    m_renderDebugButton = new SidebarToolButton(QStringLiteral("D"),
+                                                tr("Toggle render debug panel"),
+                                                m_viewport);
+    m_renderDebugButton->setFixedSize(42, 42);
+
+    connect(m_renderDebugButton, &SidebarToolButton::clicked, this, [this]() {
+        if (!m_renderDebugPanel) {
+            return;
+        }
+        const bool visible = !m_renderDebugPanel->isVisible();
+        m_renderDebugPanel->setVisible(visible);
+        positionRenderDebugPanel();
+    });
+
+    m_renderDebugPanel = new RenderDebugPanel(m_viewport);
+    m_renderDebugPanel->setVisible(false);
+
+    connect(m_renderDebugPanel, &RenderDebugPanel::debugTogglesChanged, this, [this]() {
+        if (!m_viewport || !m_renderDebugPanel) {
+            return;
+        }
+        const auto toggles = m_renderDebugPanel->debugToggles();
+        m_viewport->setDebugToggles(toggles.normals,
+                                    toggles.depth,
+                                    toggles.wireframe,
+                                    toggles.disableGamma,
+                                    toggles.matcap);
+    });
+
+    connect(m_renderDebugPanel, &RenderDebugPanel::lightRigChanged, this, [this]() {
+        if (!m_viewport || !m_renderDebugPanel) {
+            return;
+        }
+        const auto rig = m_renderDebugPanel->lightRig();
+        m_viewport->setRenderLightRig(rig.keyDir,
+                                      rig.fillDir,
+                                      rig.fillIntensity,
+                                      rig.ambientIntensity,
+                                      rig.hemiUpDir,
+                                      rig.gradientDir,
+                                      rig.gradientStrength);
+    });
+
+    connect(m_renderDebugPanel, &RenderDebugPanel::resetToThemeRequested, this, [this]() {
+        applyRenderDebugDefaults();
+    });
+
+    connect(m_viewport, &Viewport::debugTogglesChanged, this,
+            [this](bool normals, bool depth, bool wireframe, bool disableGamma, bool matcap) {
+                if (!m_renderDebugPanel) {
+                    return;
+                }
+                RenderDebugPanel::DebugToggles toggles;
+                toggles.normals = normals;
+                toggles.depth = depth;
+                toggles.wireframe = wireframe;
+                toggles.disableGamma = disableGamma;
+                toggles.matcap = matcap;
+                m_renderDebugPanel->setDebugToggles(toggles);
+            });
+
+    RenderDebugPanel::DebugToggles toggles;
+    toggles.normals = m_viewport->debugNormalsEnabled();
+    toggles.depth = m_viewport->debugDepthEnabled();
+    toggles.wireframe = m_viewport->wireframeOnlyEnabled();
+    toggles.disableGamma = m_viewport->gammaDisabled();
+    toggles.matcap = m_viewport->matcapEnabled();
+    m_renderDebugPanel->setDebugToggles(toggles);
+
+    applyRenderDebugDefaults();
+    positionRenderDebugButton();
+}
+
+void MainWindow::positionRenderDebugButton() {
+    if (!m_viewport || !m_renderDebugButton) {
+        return;
+    }
+    const int margin = 20;
+    int x = margin;
+    int y = margin;
+    if (m_navigatorOverlayButton) {
+        y = m_navigatorOverlayButton->y() + m_navigatorOverlayButton->height() + 10;
+    }
+    m_renderDebugButton->move(x, y);
+    m_renderDebugButton->raise();
+}
+
+void MainWindow::positionRenderDebugPanel() {
+    if (!m_viewport || !m_renderDebugPanel || !m_renderDebugPanel->isVisible()) {
+        return;
+    }
+    const int margin = 20;
+    int x = margin;
+    int y = margin;
+    if (m_renderDebugButton) {
+        y = m_renderDebugButton->y() + m_renderDebugButton->height() + 10;
+    }
+    m_renderDebugPanel->move(x, y);
+    m_renderDebugPanel->raise();
+}
+
+void MainWindow::applyRenderDebugDefaults() {
+    if (!m_viewport || !m_renderDebugPanel) {
+        return;
+    }
+    const auto& body = ThemeManager::instance().currentTheme().viewport.body;
+    RenderDebugPanel::LightRig rig;
+    rig.keyDir = body.keyLightDir;
+    rig.fillDir = body.fillLightDir;
+    rig.fillIntensity = body.fillLightIntensity;
+    rig.ambientIntensity = body.ambientIntensity;
+    rig.hemiUpDir = body.hemiUpDir;
+    rig.gradientDir = body.ambientGradientDir;
+    rig.gradientStrength = body.ambientGradientStrength;
+    m_renderDebugPanel->setLightRig(rig);
+    m_viewport->setRenderLightRig(rig.keyDir,
+                                  rig.fillDir,
+                                  rig.fillIntensity,
+                                  rig.ambientIntensity,
+                                  rig.hemiUpDir,
+                                  rig.gradientDir,
+                                  rig.gradientStrength);
+}
+
 void MainWindow::positionConstraintPanel() {
     if (!m_viewport || !m_constraintPanel) {
         return;
@@ -412,6 +665,7 @@ void MainWindow::setupViewport() {
 
     // Set document for rendering sketches in 3D mode
     m_viewport->setDocument(m_document.get());
+    m_viewport->setCommandProcessor(m_commandProcessor.get());
 
     connect(m_viewport, &Viewport::mousePositionChanged,
             this, &MainWindow::onMousePositionChanged);
@@ -424,7 +678,14 @@ void MainWindow::setupViewport() {
     connect(m_viewport, &Viewport::sketchUpdated,
             this, &MainWindow::onSketchUpdated);
 
+    connect(m_navigator, &ModelNavigator::sketchSelected, this, [this](const QString& id) {
+        if (m_viewport) {
+            m_viewport->setReferenceSketch(id);
+        }
+    });
+
     setupNavigatorOverlayButton();
+    setupRenderDebugOverlay();
 
     // Create constraint panel (hidden initially)
     m_constraintPanel = new ConstraintPanel(m_viewport);
@@ -445,10 +706,10 @@ void MainWindow::positionToolbarOverlay() {
     }
 
     const int margin = 20;
-    const int xOffset = margin;
-    const int availableHeight = m_viewport->height();
-    const int toolbarHeight = m_toolbar->height();
-    int yOffset = qMax(margin, (availableHeight - toolbarHeight) / 2);
+    const int availableWidth = m_viewport->width();
+    const int toolbarWidth = m_toolbar->width();
+    int xOffset = qMax(margin, (availableWidth - toolbarWidth) / 2);
+    int yOffset = margin;
 
     m_toolbar->move(xOffset, yOffset);
     m_toolbar->raise();
@@ -458,6 +719,8 @@ bool MainWindow::eventFilter(QObject* obj, QEvent* event) {
     if (obj == m_viewport && event->type() == QEvent::Resize) {
         positionToolbarOverlay();
         positionNavigatorOverlayButton();
+        positionRenderDebugButton();
+        positionRenderDebugPanel();
         positionConstraintPanel();
         positionSketchModePanel();
     }
@@ -816,6 +1079,78 @@ void MainWindow::onConstraintRequested(core::sketch::ConstraintType constraintTy
     } else {
         m_toolStatus->setText(tr("Cannot apply constraint to selection"));
     }
+}
+
+void MainWindow::onDeleteItem(const QString& itemId) {
+    std::string id = itemId.toStdString();
+
+    // Determine item type
+    bool isBody = m_document->getBodyShape(id) != nullptr;
+    bool isSketch = m_document->getSketch(id) != nullptr;
+
+    if (!isBody && !isSketch) {
+        return;
+    }
+
+    // Get item name for confirmation
+    QString itemName = isBody
+        ? QString::fromStdString(m_document->getBodyName(id))
+        : QString::fromStdString(m_document->getSketchName(id));
+
+    // Always show confirmation dialog
+    if (QMessageBox::question(this, tr("Confirm Delete"),
+            tr("Delete '%1'?").arg(itemName),
+            QMessageBox::Yes | QMessageBox::No) != QMessageBox::Yes) {
+        return;
+    }
+
+    // If deleting active sketch, exit sketch mode first
+    if (isSketch && m_activeSketchId == id) {
+        onExitSketch();
+    }
+
+    // Create and execute command
+    if (isBody) {
+        auto cmd = std::make_unique<app::commands::DeleteBodyCommand>(m_document.get(), id);
+        m_commandProcessor->execute(std::move(cmd));
+    } else {
+        auto cmd = std::make_unique<app::commands::DeleteSketchCommand>(m_document.get(), id);
+        m_commandProcessor->execute(std::move(cmd));
+    }
+
+    m_viewport->update();
+}
+
+void MainWindow::onRenameItem(const QString& itemId) {
+    // Trigger inline edit in navigator
+    m_navigator->startInlineEdit(itemId);
+}
+
+void MainWindow::onVisibilityToggled(const QString& itemId, bool visible) {
+    std::string id = itemId.toStdString();
+    bool isBody = m_document->getBodyShape(id) != nullptr;
+
+    auto cmd = std::make_unique<app::commands::ToggleVisibilityCommand>(
+        m_document.get(), id,
+        isBody ? app::commands::ToggleVisibilityCommand::ItemType::Body
+               : app::commands::ToggleVisibilityCommand::ItemType::Sketch,
+        visible);
+    m_commandProcessor->execute(std::move(cmd));
+
+    m_viewport->update();
+}
+
+void MainWindow::onIsolateItem(const QString& itemId) {
+    std::string id = itemId.toStdString();
+
+    // Toggle isolation
+    if (m_document->isolatedItemId() == id) {
+        m_document->clearIsolation();
+    } else {
+        m_document->isolateItem(id);
+    }
+
+    m_viewport->update();
 }
 
 void MainWindow::loadSettings() {

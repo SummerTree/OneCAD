@@ -5,22 +5,41 @@
 #include <QOpenGLFunctions>
 #include <QPoint>
 #include <QElapsedTimer>
+#include <QTimer>
 #include <QMatrix4x4>
 #include <QVector3D>
 #include <QVariantAnimation>
+#include <QStringList>
+#include <QSize>
+#include "selection/ModelPickerAdapter.h"
+#include "../../render/scene/SceneMeshStore.h"
+#include "../../app/selection/SelectionTypes.h"
 #include <memory>
+#include <string>
+#include <vector>
 
 namespace onecad {
 namespace app {
     class Document;
+    namespace commands {
+        class CommandProcessor;
+    }
+    namespace selection {
+        class SelectionManager;
+        struct SelectionItem;
+        struct ClickModifiers;
+        struct PickResult;
+    }
 }
 namespace render {
     class Camera3D;
     class Grid3D;
+    class BodyRenderer;
 }
 namespace core::sketch {
     class Sketch;
     class SketchRenderer;
+    struct SketchPlane;
     struct Vec2d;
     namespace tools {
         class SketchToolManager;
@@ -33,6 +52,13 @@ namespace onecad {
 namespace ui {
     class ViewCube; // Forward declaration
     class DimensionEditor; // Forward declaration
+    namespace selection {
+        class DeepSelectPopup;
+        class SketchPickerAdapter;
+    }
+    namespace tools {
+        class ModelingToolManager;
+    }
 
     struct CameraState {
         QVector3D position;
@@ -57,6 +83,7 @@ public:
     ~Viewport() override;
 
     render::Camera3D* camera() const { return m_camera.get(); }
+    double pixelScale() const { return m_pixelScale; }
 
     // Plane selection
     bool isPlaneSelectionActive() const { return m_planeSelectionActive; }
@@ -73,8 +100,19 @@ public:
     // Sketch update notification
     void notifySketchUpdated();
 
+    // Debug state accessors
+    bool debugNormalsEnabled() const { return m_debugNormals; }
+    bool debugDepthEnabled() const { return m_debugDepth; }
+    bool wireframeOnlyEnabled() const { return m_wireframeOnly; }
+    bool gammaDisabled() const { return m_disableGamma; }
+    bool matcapEnabled() const { return m_useMatcap; }
+
     // Document access (for rendering all sketches in 3D mode)
     void setDocument(app::Document* document);
+    void setCommandProcessor(app::commands::CommandProcessor* processor);
+    void setModelPickMeshes(std::vector<selection::ModelPickerAdapter::Mesh>&& meshes);
+    void setModelPreviewMeshes(const std::vector<render::SceneMeshStore::Mesh>& meshes);
+    void clearModelPreviewMeshes();
 
 signals:
     void mousePositionChanged(double x, double y, double z);
@@ -83,6 +121,9 @@ signals:
     void sketchPlanePicked(int planeIndex);
     void planeSelectionCancelled();
     void sketchUpdated();  // Emitted when geometry/constraints change
+    void extrudeToolActiveChanged(bool active);
+    void revolveToolActiveChanged(bool active);
+    void debugTogglesChanged(bool normals, bool depth, bool wireframe, bool disableGamma, bool matcap);
 
 public slots:
     void beginPlaneSelection();
@@ -101,6 +142,17 @@ public slots:
     void activateTrimTool();
     void activateMirrorTool();
     void deactivateTool();
+    void setReferenceSketch(const QString& sketchId);
+    bool activateExtrudeTool();
+    bool activateRevolveTool();
+    void setDebugToggles(bool normals, bool depth, bool wireframe, bool disableGamma, bool matcap);
+    void setRenderLightRig(const QVector3D& keyDir,
+                           const QVector3D& fillDir,
+                           float fillIntensity,
+                           float ambientIntensity,
+                           const QVector3D& hemiUpDir,
+                           const QVector3D& gradientDir,
+                           float gradientStrength);
 
     // Views
     void setFrontView();
@@ -135,6 +187,22 @@ protected:
     bool event(QEvent* event) override;
 
 private:
+    struct RenderTuning {
+        QVector3D keyLightDir{ -0.4f, 0.5f, 0.75f };
+        QVector3D fillLightDir{ 0.6f, -0.2f, 0.55f };
+        float fillLightIntensity = 0.35f;
+        float ambientIntensity = 0.25f;
+        QVector3D hemiUpDir{ 0.0f, 1.0f, 0.0f };
+        QVector3D gradientDir{ 0.0f, 1.0f, 0.0f };
+        float gradientStrength = 0.08f;
+    };
+
+    void updateModelSelectionFilter();
+    void handleModelSelectionChanged();
+    core::sketch::Vec2d screenToSketchPlane(const QPoint& screenPos,
+                                            const core::sketch::SketchPlane& plane) const;
+    app::selection::PickResult buildReferenceSketchPickResult(const QPoint& screenPos);
+    app::selection::PickResult buildModelPickResult(const QPoint& screenPos);
     void updateSketchRenderingState();
     void handlePan(float dx, float dy);
     void handleOrbit(float dx, float dy);
@@ -143,20 +211,47 @@ private:
     void updatePlaneSelectionHover(const QPoint& screenPos);
     bool pickPlaneSelection(const QPoint& screenPos, int* outIndex) const;
     void drawPlaneSelectionOverlay(const QMatrix4x4& viewProjection);
+    void drawModelSelectionOverlay(const QMatrix4x4& viewProjection);
+    void drawModelToolOverlay(const QMatrix4x4& viewProjection);
+    QMatrix4x4 buildViewProjection() const;
+    QSize viewportSize() const;
+    void syncModelMeshes();
+    std::string resolveActiveSketchId() const;
+    void updateSketchSelectionFromManager();
+    void updateSketchHoverFromManager();
+    app::selection::PickResult buildSketchPickResult(const QPoint& screenPos) const;
+    QStringList buildDeepSelectLabels(const std::vector<app::selection::SelectionItem>& candidates) const;
     
     // Animation
     void animateCamera(const CameraState& targetState);
+    void setExtrudeToolActive(bool active);
+    void setRevolveToolActive(bool active);
 
     std::unique_ptr<render::Camera3D> m_camera;
     std::unique_ptr<render::Grid3D> m_grid;
+    std::unique_ptr<render::BodyRenderer> m_bodyRenderer;
     std::unique_ptr<core::sketch::SketchRenderer> m_sketchRenderer;
     std::unique_ptr<core::sketch::tools::SketchToolManager> m_toolManager;
+    std::unique_ptr<ui::tools::ModelingToolManager> m_modelingToolManager;
+    app::commands::CommandProcessor* m_commandProcessor = nullptr;
+    bool m_extrudeToolActive = false;
+    bool m_revolveToolActive = false;
     ViewCube* m_viewCube = nullptr;
     DimensionEditor* m_dimensionEditor = nullptr;
     QVariantAnimation* m_cameraAnimation = nullptr;
+    app::selection::SelectionManager* m_selectionManager = nullptr;
+    selection::DeepSelectPopup* m_deepSelectPopup = nullptr;
+    std::unique_ptr<selection::SketchPickerAdapter> m_sketchPicker;
+    std::unique_ptr<selection::ModelPickerAdapter> m_modelPicker;
+    std::vector<app::selection::SelectionItem> m_pendingCandidates;
+    app::selection::ClickModifiers m_pendingModifiers;
+    QPoint m_pendingClickPos;
 
     // Sketch mode
     core::sketch::Sketch* m_activeSketch = nullptr;
+    std::string m_activeSketchId;
+    core::sketch::Sketch* m_referenceSketch = nullptr;
+    std::string m_referenceSketchId;
     bool m_inSketchMode = false;
     bool m_planeSelectionActive = false;
     int m_planeHoverIndex = -1;
@@ -186,6 +281,19 @@ private:
     // Viewport size
     int m_width = 1;
     int m_height = 1;
+    double m_pixelScale = 1.0;
+
+    // Debug rendering modes (F1-F4 toggles)
+    bool m_debugNormals = false;
+    bool m_debugDepth = false;
+    bool m_wireframeOnly = false;
+    bool m_disableGamma = false;
+    bool m_useMatcap = false;  // F5: MatCap shading mode
+    RenderTuning m_renderTuning;
+
+    // Dynamic quality during navigation
+    bool m_isNavigating = false;
+    QTimer* m_navigationTimer = nullptr;
 
     // Signal connection management
     QMetaObject::Connection m_themeConnection;

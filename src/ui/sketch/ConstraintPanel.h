@@ -6,6 +6,8 @@
 #ifndef ONECAD_UI_SKETCH_CONSTRAINTPANEL_H
 #define ONECAD_UI_SKETCH_CONSTRAINTPANEL_H
 
+#include <QColor>
+#include <QMetaObject>
 #include <QWidget>
 
 class QListWidget;
@@ -55,6 +57,7 @@ signals:
 private:
     void setupUi();
     void populateList();
+    void updateTheme();
     QString getConstraintIcon(int type) const;
     QString getConstraintTypeName(int type) const;
 
@@ -63,6 +66,8 @@ private:
     QLabel* m_titleLabel = nullptr;
     QListWidget* m_listWidget = nullptr;
     QLabel* m_emptyLabel = nullptr;
+    QColor m_unsatisfiedColor;
+    QMetaObject::Connection m_themeConnection;
 };
 
 } // namespace onecad::ui

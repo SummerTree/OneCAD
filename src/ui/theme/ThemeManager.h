@@ -3,7 +3,9 @@
 
 #include <QObject>
 #include <QString>
-#include <QColor>
+#include <vector>
+
+#include "ThemeConfig.h"
 
 namespace onecad {
 namespace ui {
@@ -12,7 +14,7 @@ namespace ui {
  * @brief Centralized theme management system for OneCAD.
  * 
  * Provides application-wide theming with support for:
- * - Light and Dark themes
+ * - Named themes from ThemeConfig
  * - System theme synchronization (Qt 6.5+)
  * - Theme persistence across sessions
  * - Runtime theme switching with signal notifications
@@ -20,7 +22,7 @@ namespace ui {
  * Usage:
  * @code
  * // Set theme
- * ThemeManager::instance().setThemeMode(ThemeManager::ThemeMode::Dark);
+ * ThemeManager::instance().setThemeId("Dark");
  * 
  * // React to theme changes
  * connect(&ThemeManager::instance(), &ThemeManager::themeChanged,
@@ -35,12 +37,11 @@ class ThemeManager : public QObject {
 
 public:
     /**
-     * @brief Available theme modes.
+     * @brief Theme selection modes.
      */
     enum class ThemeMode {
-        Light,   ///< Force light theme regardless of system setting
-        Dark,    ///< Force dark theme regardless of system setting
-        System   ///< Follow system appearance preference (default)
+        System, ///< Follow system appearance preference (default)
+        Fixed   ///< Use the explicitly selected theme
     };
 
     /**
@@ -59,6 +60,19 @@ public:
     void setThemeMode(ThemeMode mode);
 
     /**
+     * @brief Set the explicit theme by id.
+     * @param id Theme identifier from ThemeConfig
+     *
+     * Switches the mode to Fixed and applies the theme.
+     */
+    void setThemeId(const QString& id);
+
+    /**
+     * @brief Get the current explicit theme id.
+     */
+    QString themeId() const;
+
+    /**
      * @brief Get the current theme mode setting.
      * @return The configured theme mode (may differ from actual appearance in System mode)
      */
@@ -71,6 +85,16 @@ public:
      * In System mode, this reflects the current OS appearance.
      */
     bool isDark() const;
+
+    /**
+     * @brief Get the currently applied theme.
+     */
+    const ThemeDefinition& currentTheme() const;
+
+    /**
+     * @brief Get available theme definitions.
+     */
+    const std::vector<ThemeDefinition>& availableThemes() const;
 
     /**
      * @brief Force re-application of the current theme.
@@ -125,18 +149,22 @@ private:
     void updateAppStyle();
 
     /**
-     * @brief Get the dark theme stylesheet.
-     * @return Cached dark theme QSS string
+     * @brief Resolve the theme based on current mode and settings.
      */
-    static const QString& getDarkStyleSheet();
+    const ThemeDefinition& resolveTheme() const;
 
     /**
-     * @brief Get the light theme stylesheet.
-     * @return Cached light theme QSS string
+     * @brief Determine system theme preference.
      */
-    static const QString& getLightStyleSheet();
+    bool systemPrefersDark() const;
+
+    /**
+     * @brief Build the application stylesheet from theme colors.
+     */
+    static QString buildStyleSheet(const ThemeDefinition& theme);
 
     ThemeMode m_mode = ThemeMode::System;
+    QString m_themeId;
 };
 
 } // namespace ui

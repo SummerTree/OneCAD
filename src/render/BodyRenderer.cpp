@@ -1,0 +1,727 @@
+#include "BodyRenderer.h"
+
+#include <QDebug>
+#include <QVector4D>
+#include <algorithm>
+#include <array>
+#include <cmath>
+#include <limits>
+#include <unordered_map>
+#include <unordered_set>
+#include <utility>
+
+namespace onecad::render {
+
+namespace {
+constexpr float kPolygonOffsetFactor = 1.0f;
+constexpr float kPolygonOffsetUnits = 1.0f;
+
+QVector3D normalizeOrFallback(const QVector3D& v, const QVector3D& fallback) {
+    if (v.lengthSquared() < 1e-6f) {
+        return fallback;
+    }
+    return v.normalized();
+}
+
+float computeGradientRange(const QMatrix4x4& view,
+                           const QVector3D& dir,
+                           const QVector3D& boundsMin,
+                           const QVector3D& boundsMax,
+                           float* outOffset) {
+    if (!outOffset) {
+        return 0.0f;
+    }
+
+    std::array<QVector3D, 8> corners = {
+        QVector3D(boundsMin.x(), boundsMin.y(), boundsMin.z()),
+        QVector3D(boundsMin.x(), boundsMin.y(), boundsMax.z()),
+        QVector3D(boundsMin.x(), boundsMax.y(), boundsMin.z()),
+        QVector3D(boundsMin.x(), boundsMax.y(), boundsMax.z()),
+        QVector3D(boundsMax.x(), boundsMin.y(), boundsMin.z()),
+        QVector3D(boundsMax.x(), boundsMin.y(), boundsMax.z()),
+        QVector3D(boundsMax.x(), boundsMax.y(), boundsMin.z()),
+        QVector3D(boundsMax.x(), boundsMax.y(), boundsMax.z())
+    };
+
+    float minProj = std::numeric_limits<float>::infinity();
+    float maxProj = -std::numeric_limits<float>::infinity();
+    for (const auto& corner : corners) {
+        QVector4D vs = view * QVector4D(corner, 1.0f);
+        float proj = QVector3D::dotProduct(vs.toVector3D(), dir);
+        minProj = std::min(minProj, proj);
+        maxProj = std::max(maxProj, proj);
+    }
+
+    float range = maxProj - minProj;
+    if (range < 1e-5f) {
+        *outOffset = 0.0f;
+        return 0.0f;
+    }
+    float scale = 1.0f / range;
+    *outOffset = -minProj * scale;
+    return scale;
+}
+
+const char* kTriangleVertexShader = R"(
+#version 410 core
+layout(location = 0) in vec3 aPos;
+layout(location = 1) in vec3 aNormal;
+
+uniform mat4 uMVP;
+uniform mat4 uView;
+uniform mat3 uViewNormal;
+
+out vec3 vNormalVS;
+out vec3 vPosVS;
+
+void main() {
+    gl_Position = uMVP * vec4(aPos, 1.0);
+    vec4 posVS = uView * vec4(aPos, 1.0);
+    vPosVS = posVS.xyz;
+    vNormalVS = normalize(uViewNormal * aNormal);
+}
+)";
+
+const char* kTriangleFragmentShader = R"(
+#version 410 core
+in vec3 vNormalVS;
+in vec3 vPosVS;
+
+uniform vec3 uBaseColor;
+uniform vec3 uSpecColor;
+uniform vec3 uRimColor;
+uniform vec3 uHighlightColor;
+uniform vec3 uLightDir;
+uniform float uAlpha;
+uniform float uAmbient;
+uniform float uSpecIntensity;
+uniform float uSpecPower;
+uniform float uRimIntensity;
+uniform float uRimPower;
+uniform float uHighlightStrength;
+uniform float uMatcapFactor;
+uniform vec3 uAmbientGradientDir;
+uniform float uAmbientGradientScale;
+uniform float uAmbientGradientOffset;
+uniform float uAmbientGradientStrength;
+// Multi-light uniforms
+uniform vec3 uFillDir;       // Secondary fill light direction
+uniform float uFillIntensity;
+uniform vec3 uHemiUp;        // Hemisphere up direction (view space)
+uniform vec3 uHemiSky;       // Sky color (top hemisphere)
+uniform vec3 uHemiGround;    // Ground color (bottom hemisphere)
+// Debug uniforms
+uniform bool uDebugNormals;
+uniform bool uDebugDepth;
+uniform bool uDisableGamma;
+uniform float uNear;
+uniform float uFar;
+uniform bool uIsOrtho;
+
+out vec4 FragColor;
+
+void main() {
+    vec3 n = normalize(vNormalVS);
+
+    // Debug: show normals as RGB
+    if (uDebugNormals) {
+        FragColor = vec4(n * 0.5 + 0.5, uAlpha);
+        return;
+    }
+
+    // Debug: show linearized depth
+    if (uDebugDepth) {
+        float z = gl_FragCoord.z;
+        float linearDepth = 0.0;
+        if (uIsOrtho) {
+            linearDepth = mix(uNear, uFar, z);
+        } else {
+            float ndc = z * 2.0 - 1.0;
+            linearDepth = (2.0 * uNear * uFar) / (uFar + uNear - ndc * (uFar - uNear));
+        }
+        float denom = max(uFar - uNear, 1e-6);
+        float normalized = (linearDepth - uNear) / denom;
+        FragColor = vec4(vec3(clamp(normalized, 0.0, 1.0)), uAlpha);
+        return;
+    }
+
+    vec3 baseColor = pow(uBaseColor, vec3(2.2));
+    vec3 specColor = pow(uSpecColor, vec3(2.2));
+    vec3 rimColor = pow(uRimColor, vec3(2.2));
+    vec3 highlightColor = pow(uHighlightColor, vec3(2.2));
+
+    vec3 lightDir = normalize(uLightDir);
+    vec3 viewDir = uIsOrtho ? vec3(0.0, 0.0, 1.0) : normalize(-vPosVS);
+
+    // Key light (main directional)
+    float keyDiffuse = max(dot(n, lightDir), 0.0);
+
+    // Fill light (secondary, softer)
+    vec3 fillDir = normalize(uFillDir);
+    float fillDiffuse = max(dot(n, fillDir), 0.0) * uFillIntensity;
+
+    // Combined diffuse
+    float diffuse = keyDiffuse + fillDiffuse;
+
+    // Hemisphere ambient (sky/ground blend)
+    float hemiBlend = dot(n, normalize(uHemiUp)) * 0.5 + 0.5;
+    vec3 hemiAmbient = mix(uHemiGround, uHemiSky, hemiBlend);
+    float gradient = dot(vPosVS, uAmbientGradientDir) * uAmbientGradientScale + uAmbientGradientOffset;
+    float gradientClamped = clamp(gradient, 0.0, 1.0);
+    float gradientFactor = 1.0 + (gradientClamped - 0.5) * 2.0 * uAmbientGradientStrength;
+    hemiAmbient *= gradientFactor;
+
+    float specular = 0.0;
+    if (keyDiffuse > 0.0 && uSpecIntensity > 0.0) {
+        vec3 h = normalize(lightDir + viewDir);
+        specular = pow(max(dot(n, h), 0.0), uSpecPower) * uSpecIntensity;
+    }
+
+    float rim = 0.0;
+    if (uRimIntensity > 0.0) {
+        rim = pow(1.0 - max(dot(n, viewDir), 0.0), uRimPower) * uRimIntensity;
+    }
+
+    // Combine: base color with diffuse + hemisphere ambient + specular + rim
+    float intensity = max(diffuse, uAmbient);
+    vec3 color = baseColor * intensity * 0.85 + baseColor * hemiAmbient * 0.15
+               + specColor * specular + rimColor * rim;
+
+    if (uMatcapFactor > 0.0) {
+        float hemi = clamp(n.z * 0.5 + 0.5, 0.0, 1.0);
+        vec3 matcap = mix(baseColor * 0.8, baseColor * 1.2, hemi);
+        color = mix(color, matcap, clamp(uMatcapFactor, 0.0, 1.0));
+    }
+
+    if (uHighlightStrength > 0.0) {
+        color = mix(color, highlightColor, clamp(uHighlightStrength, 0.0, 1.0));
+    }
+
+    // Gamma correction (sRGB output)
+    if (!uDisableGamma) {
+        color = pow(color, vec3(1.0 / 2.2));
+    }
+
+    FragColor = vec4(color, uAlpha);
+}
+)";
+
+const char* kEdgeVertexShader = R"(
+#version 410 core
+layout(location = 0) in vec3 aPos;
+
+uniform mat4 uMVP;
+
+void main() {
+    gl_Position = uMVP * vec4(aPos, 1.0);
+}
+)";
+
+const char* kEdgeFragmentShader = R"(
+#version 410 core
+uniform vec4 uColor;
+out vec4 FragColor;
+
+void main() {
+    FragColor = uColor;
+}
+)";
+
+QVector3D colorToVec(const QColor& color, float scale) {
+    return QVector3D(color.redF() * scale,
+                     color.greenF() * scale,
+                     color.blueF() * scale);
+}
+
+} // namespace
+
+BodyRenderer::BodyRenderer() = default;
+
+BodyRenderer::~BodyRenderer() {
+    cleanup();
+}
+
+void BodyRenderer::initialize() {
+    if (m_initialized) {
+        return;
+    }
+
+    initializeOpenGLFunctions();
+
+    m_triangleShader = std::make_unique<QOpenGLShaderProgram>();
+    if (!m_triangleShader->addShaderFromSourceCode(QOpenGLShader::Vertex, kTriangleVertexShader)) {
+        qWarning() << "BodyRenderer: Triangle vertex shader compile failed:" << m_triangleShader->log();
+        m_triangleShader.reset();
+        return;
+    }
+    if (!m_triangleShader->addShaderFromSourceCode(QOpenGLShader::Fragment, kTriangleFragmentShader)) {
+        qWarning() << "BodyRenderer: Triangle fragment shader compile failed:" << m_triangleShader->log();
+        m_triangleShader.reset();
+        return;
+    }
+    if (!m_triangleShader->link()) {
+        qWarning() << "BodyRenderer: Triangle shader link failed:" << m_triangleShader->log();
+        m_triangleShader.reset();
+        return;
+    }
+
+    m_edgeShader = std::make_unique<QOpenGLShaderProgram>();
+    if (!m_edgeShader->addShaderFromSourceCode(QOpenGLShader::Vertex, kEdgeVertexShader)) {
+        qWarning() << "BodyRenderer: Edge vertex shader compile failed:" << m_edgeShader->log();
+        m_edgeShader.reset();
+        m_triangleShader.reset();
+        return;
+    }
+    if (!m_edgeShader->addShaderFromSourceCode(QOpenGLShader::Fragment, kEdgeFragmentShader)) {
+        qWarning() << "BodyRenderer: Edge fragment shader compile failed:" << m_edgeShader->log();
+        m_edgeShader.reset();
+        m_triangleShader.reset();
+        return;
+    }
+    if (!m_edgeShader->link()) {
+        qWarning() << "BodyRenderer: Edge shader link failed:" << m_edgeShader->log();
+        m_edgeShader.reset();
+        m_triangleShader.reset();
+        return;
+    }
+
+    ensureBuffers(&m_mainBuffers, QOpenGLBuffer::StaticDraw);
+    ensureBuffers(&m_previewBuffers, QOpenGLBuffer::DynamicDraw);
+
+    m_initialized = true;
+}
+
+void BodyRenderer::cleanup() {
+    if (!m_initialized) {
+        return;
+    }
+
+    m_mainBuffers.triangles.vao.destroy();
+    m_mainBuffers.triangles.vbo.destroy();
+    m_mainBuffers.edges.vao.destroy();
+    m_mainBuffers.edges.vbo.destroy();
+
+    m_previewBuffers.triangles.vao.destroy();
+    m_previewBuffers.triangles.vbo.destroy();
+    m_previewBuffers.edges.vao.destroy();
+    m_previewBuffers.edges.vbo.destroy();
+
+    m_triangleShader.reset();
+    m_edgeShader.reset();
+    m_initialized = false;
+}
+
+void BodyRenderer::setMeshes(const std::vector<SceneMeshStore::Mesh>& meshes) {
+    buildBuffers(meshes, &m_mainCpu);
+    m_mainDirty = true;
+}
+
+void BodyRenderer::setMeshes(const SceneMeshStore& store) {
+    buildBuffers(store, &m_mainCpu);
+    m_mainDirty = true;
+}
+
+void BodyRenderer::setPreviewMeshes(const std::vector<SceneMeshStore::Mesh>& meshes) {
+    buildBuffers(meshes, &m_previewCpu);
+    m_previewDirty = true;
+}
+
+void BodyRenderer::clearPreview() {
+    m_previewCpu.triangles.clear();
+    m_previewCpu.edges.clear();
+    m_previewCpu.bounds.valid = false;
+    m_previewDirty = true;
+}
+
+void BodyRenderer::render(const QMatrix4x4& viewProjection,
+                          const QMatrix4x4& view,
+                          const RenderStyle& style) {
+    if (!m_initialized || !m_triangleShader || !m_edgeShader) {
+        return;
+    }
+
+    if (m_mainDirty) {
+        uploadBuffers(m_mainCpu, &m_mainBuffers);
+        m_mainDirty = false;
+    }
+    if (m_previewDirty) {
+        uploadBuffers(m_previewCpu, &m_previewBuffers);
+        m_previewDirty = false;
+    }
+
+    const QMatrix3x3 viewNormal = view.normalMatrix();
+    renderBatch(m_mainBuffers, viewProjection, view, viewNormal, m_mainCpu.bounds, style, -1.0f);
+    if (m_previewBuffers.triangles.vertexCount > 0 || m_previewBuffers.edges.vertexCount > 0) {
+        renderBatch(m_previewBuffers, viewProjection, view, viewNormal, m_previewCpu.bounds, style, style.previewAlpha);
+    }
+}
+
+void BodyRenderer::buildBuffers(const std::vector<SceneMeshStore::Mesh>& meshes,
+                                CpuBuffers* outBuffers) const {
+    if (!outBuffers) {
+        return;
+    }
+    outBuffers->triangles.clear();
+    outBuffers->edges.clear();
+    outBuffers->bounds.valid = false;
+
+    for (const auto& mesh : meshes) {
+        appendMeshBuffers(mesh, outBuffers);
+    }
+}
+
+void BodyRenderer::buildBuffers(const SceneMeshStore& store, CpuBuffers* outBuffers) const {
+    if (!outBuffers) {
+        return;
+    }
+    outBuffers->triangles.clear();
+    outBuffers->edges.clear();
+    outBuffers->bounds.valid = false;
+
+    store.forEachMesh([&](const SceneMeshStore::Mesh& mesh) {
+        appendMeshBuffers(mesh, outBuffers);
+    });
+}
+
+void BodyRenderer::appendMeshBuffers(const SceneMeshStore::Mesh& mesh, CpuBuffers* outBuffers) const {
+    if (!outBuffers) {
+        return;
+    }
+
+    // Check if we have precomputed smooth normals
+    const bool hasPrecomputedNormals = !mesh.normals.empty() &&
+                                       mesh.normals.size() == mesh.vertices.size();
+
+    // Transform vertices
+    std::vector<QVector3D> transformedVertices;
+    transformedVertices.reserve(mesh.vertices.size());
+    QVector3D boundsMin = outBuffers->bounds.min;
+    QVector3D boundsMax = outBuffers->bounds.max;
+    bool boundsValid = outBuffers->bounds.valid;
+    for (const auto& v : mesh.vertices) {
+        QVector4D transformed = mesh.modelMatrix * QVector4D(v, 1.0f);
+        QVector3D position(transformed.x(), transformed.y(), transformed.z());
+        transformedVertices.push_back(position);
+        if (!boundsValid) {
+            boundsMin = position;
+            boundsMax = position;
+            boundsValid = true;
+        } else {
+            boundsMin.setX(std::min(boundsMin.x(), position.x()));
+            boundsMin.setY(std::min(boundsMin.y(), position.y()));
+            boundsMin.setZ(std::min(boundsMin.z(), position.z()));
+            boundsMax.setX(std::max(boundsMax.x(), position.x()));
+            boundsMax.setY(std::max(boundsMax.y(), position.y()));
+            boundsMax.setZ(std::max(boundsMax.z(), position.z()));
+        }
+    }
+    outBuffers->bounds.min = boundsMin;
+    outBuffers->bounds.max = boundsMax;
+    outBuffers->bounds.valid = boundsValid;
+
+    // Transform normals (rotation only, no translation)
+    std::vector<QVector3D> transformedNormals;
+    if (hasPrecomputedNormals) {
+        QMatrix3x3 normalMatrix = mesh.modelMatrix.normalMatrix();
+        transformedNormals.reserve(mesh.normals.size());
+        for (const auto& n : mesh.normals) {
+            QVector3D tn(
+                normalMatrix(0, 0) * n.x() + normalMatrix(0, 1) * n.y() + normalMatrix(0, 2) * n.z(),
+                normalMatrix(1, 0) * n.x() + normalMatrix(1, 1) * n.y() + normalMatrix(1, 2) * n.z(),
+                normalMatrix(2, 0) * n.x() + normalMatrix(2, 1) * n.y() + normalMatrix(2, 2) * n.z()
+            );
+            transformedNormals.push_back(tn.normalized());
+        }
+    }
+
+    for (const auto& tri : mesh.triangles) {
+        if (tri.i0 >= transformedVertices.size() ||
+            tri.i1 >= transformedVertices.size() ||
+            tri.i2 >= transformedVertices.size()) {
+            continue;
+        }
+        const QVector3D& v0 = transformedVertices[tri.i0];
+        const QVector3D& v1 = transformedVertices[tri.i1];
+        const QVector3D& v2 = transformedVertices[tri.i2];
+
+        // Use precomputed normals if available, otherwise compute flat normal
+        QVector3D n0, n1, n2;
+        if (hasPrecomputedNormals) {
+            n0 = transformedNormals[tri.i0];
+            n1 = transformedNormals[tri.i1];
+            n2 = transformedNormals[tri.i2];
+        } else {
+            // Fallback: compute flat normal
+            QVector3D flatNormal = QVector3D::crossProduct(v1 - v0, v2 - v0);
+            if (flatNormal.lengthSquared() < 1e-8f) {
+                flatNormal = QVector3D(0.0f, 0.0f, 1.0f);
+            } else {
+                flatNormal.normalize();
+            }
+            n0 = n1 = n2 = flatNormal;
+        }
+
+        // Emit vertices with per-vertex normals
+        outBuffers->triangles.push_back(v0.x());
+        outBuffers->triangles.push_back(v0.y());
+        outBuffers->triangles.push_back(v0.z());
+        outBuffers->triangles.push_back(n0.x());
+        outBuffers->triangles.push_back(n0.y());
+        outBuffers->triangles.push_back(n0.z());
+
+        outBuffers->triangles.push_back(v1.x());
+        outBuffers->triangles.push_back(v1.y());
+        outBuffers->triangles.push_back(v1.z());
+        outBuffers->triangles.push_back(n1.x());
+        outBuffers->triangles.push_back(n1.y());
+        outBuffers->triangles.push_back(n1.z());
+
+        outBuffers->triangles.push_back(v2.x());
+        outBuffers->triangles.push_back(v2.y());
+        outBuffers->triangles.push_back(v2.z());
+        outBuffers->triangles.push_back(n2.x());
+        outBuffers->triangles.push_back(n2.y());
+        outBuffers->triangles.push_back(n2.z());
+    }
+
+    // Only render edges from OCCT topology - no tessellation edge fallback
+    // This ensures cylinders show only their actual edges (top/bottom circles)
+    // and planar faces show only their boundary edges (no internal triangulation)
+    std::unordered_set<std::string> seenEdges;
+    for (const auto& [faceId, topo] : mesh.topologyByFace) {
+        (void)faceId;
+        for (const auto& edge : topo.edges) {
+            if (seenEdges.find(edge.edgeId) != seenEdges.end()) {
+                continue;
+            }
+            seenEdges.insert(edge.edgeId);
+            if (edge.points.size() < 2) {
+                continue;
+            }
+            for (size_t i = 0; i + 1 < edge.points.size(); ++i) {
+                QVector4D p0 = mesh.modelMatrix * QVector4D(edge.points[i], 1.0f);
+                QVector4D p1 = mesh.modelMatrix * QVector4D(edge.points[i + 1], 1.0f);
+                outBuffers->edges.push_back(p0.x());
+                outBuffers->edges.push_back(p0.y());
+                outBuffers->edges.push_back(p0.z());
+                outBuffers->edges.push_back(p1.x());
+                outBuffers->edges.push_back(p1.y());
+                outBuffers->edges.push_back(p1.z());
+            }
+        }
+    }
+}
+
+void BodyRenderer::ensureBuffers(RenderBuffers* buffers, QOpenGLBuffer::UsagePattern usage) {
+    if (!buffers) {
+        return;
+    }
+
+    if (!buffers->triangles.vao.isCreated()) {
+        buffers->triangles.vao.create();
+    }
+    if (!buffers->triangles.vbo.isCreated()) {
+        buffers->triangles.vbo.create();
+        buffers->triangles.vbo.setUsagePattern(usage);
+    }
+    if (!buffers->edges.vao.isCreated()) {
+        buffers->edges.vao.create();
+    }
+    if (!buffers->edges.vbo.isCreated()) {
+        buffers->edges.vbo.create();
+        buffers->edges.vbo.setUsagePattern(usage);
+    }
+}
+
+void BodyRenderer::uploadBuffers(const CpuBuffers& cpu, RenderBuffers* buffers) {
+    if (!buffers) {
+        return;
+    }
+    if (!buffers->triangles.vbo.isCreated() || !buffers->edges.vbo.isCreated() ||
+        !buffers->triangles.vao.isCreated() || !buffers->edges.vao.isCreated()) {
+        return;
+    }
+
+    buffers->triangles.vertexCount = 0;
+    if (!cpu.triangles.empty()) {
+        buffers->triangles.vertexCount = static_cast<int>(cpu.triangles.size() / 6);
+        buffers->triangles.vao.bind();
+        buffers->triangles.vbo.bind();
+        buffers->triangles.vbo.allocate(cpu.triangles.data(),
+                                        static_cast<int>(cpu.triangles.size() * sizeof(float)));
+        glEnableVertexAttribArray(0);
+        glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 6 * sizeof(float),
+                              reinterpret_cast<void*>(0));
+        glEnableVertexAttribArray(1);
+        glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, 6 * sizeof(float),
+                              reinterpret_cast<void*>(3 * sizeof(float)));
+        buffers->triangles.vbo.release();
+        buffers->triangles.vao.release();
+    }
+
+    buffers->edges.vertexCount = 0;
+    if (!cpu.edges.empty()) {
+        buffers->edges.vertexCount = static_cast<int>(cpu.edges.size() / 3);
+        buffers->edges.vao.bind();
+        buffers->edges.vbo.bind();
+        buffers->edges.vbo.allocate(cpu.edges.data(),
+                                    static_cast<int>(cpu.edges.size() * sizeof(float)));
+        glEnableVertexAttribArray(0);
+        glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 3 * sizeof(float),
+                              reinterpret_cast<void*>(0));
+        buffers->edges.vbo.release();
+        buffers->edges.vao.release();
+    }
+}
+
+void BodyRenderer::renderBatch(RenderBuffers& buffers,
+                               const QMatrix4x4& viewProjection,
+                               const QMatrix4x4& view,
+                               const QMatrix3x3& viewNormal,
+                               const Bounds& bounds,
+                               const RenderStyle& style,
+                               float alphaOverride) {
+    const float colorScale = style.ghosted ? style.ghostFactor : 1.0f;
+    const QVector3D baseColor = colorToVec(style.baseColor, colorScale);
+    const QVector3D edgeColor = colorToVec(style.edgeColor, colorScale);
+    const QVector3D specColor = colorToVec(style.specularColor, colorScale);
+    const QVector3D rimColor = colorToVec(style.rimColor, colorScale);
+    const QVector3D glowColor = colorToVec(style.glowColor, colorScale);
+    const QVector3D highlightColor = colorToVec(style.highlightColor, 1.0f);
+    const QVector3D hemiSky = colorToVec(style.hemiSkyColor, 1.0f);
+    const QVector3D hemiGround = colorToVec(style.hemiGroundColor, 1.0f);
+    const float baseAlpha = (alphaOverride >= 0.0f ? alphaOverride : style.baseAlpha);
+    const float edgeAlpha = (alphaOverride >= 0.0f ? alphaOverride : style.edgeAlpha);
+    const float glowAlpha = (alphaOverride >= 0.0f ? alphaOverride : style.glowAlpha);
+    const QVector3D keyLightDir = normalizeOrFallback(style.keyLightDir, QVector3D(0.0f, 0.0f, 1.0f));
+    const QVector3D fillLightDir = normalizeOrFallback(style.fillLightDir, QVector3D(0.0f, 0.0f, 1.0f));
+    const QVector3D hemiUpDir = normalizeOrFallback(style.hemiUpDir, QVector3D(0.0f, 1.0f, 0.0f));
+
+    float gradientStrength = std::max(style.ambientGradientStrength, 0.0f);
+    QVector3D gradientDir = normalizeOrFallback(style.ambientGradientDir, QVector3D(0.0f, 1.0f, 0.0f));
+    float gradientOffset = 0.0f;
+    float gradientScale = 0.0f;
+    if (gradientStrength > 0.0f && bounds.valid) {
+        gradientScale = computeGradientRange(view, gradientDir, bounds.min, bounds.max, &gradientOffset);
+        if (gradientScale <= 0.0f) {
+            gradientStrength = 0.0f;
+        }
+    } else {
+        gradientStrength = 0.0f;
+    }
+
+    // Skip triangle pass in wireframe-only mode
+    if (buffers.triangles.vertexCount > 0 && !style.wireframeOnly) {
+        glEnable(GL_DEPTH_TEST);
+        glDepthFunc(GL_LESS);
+        glDisable(GL_CULL_FACE);
+        glEnable(GL_POLYGON_OFFSET_FILL);
+        glPolygonOffset(kPolygonOffsetFactor, kPolygonOffsetUnits);
+
+        if (baseAlpha < 0.999f) {
+            glEnable(GL_BLEND);
+            glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+        } else {
+            glDisable(GL_BLEND);
+        }
+
+        m_triangleShader->bind();
+        m_triangleShader->setUniformValue("uMVP", viewProjection);
+        m_triangleShader->setUniformValue("uView", view);
+        m_triangleShader->setUniformValue("uViewNormal", viewNormal);
+        m_triangleShader->setUniformValue("uBaseColor", baseColor);
+        m_triangleShader->setUniformValue("uSpecColor", specColor);
+        m_triangleShader->setUniformValue("uRimColor", rimColor);
+        m_triangleShader->setUniformValue("uHighlightColor", highlightColor);
+        m_triangleShader->setUniformValue("uLightDir", keyLightDir);
+        m_triangleShader->setUniformValue("uAlpha", baseAlpha);
+        m_triangleShader->setUniformValue("uAmbient", style.ambientIntensity);
+        m_triangleShader->setUniformValue("uSpecIntensity", style.specularIntensity);
+        m_triangleShader->setUniformValue("uSpecPower", style.specularPower);
+        m_triangleShader->setUniformValue("uRimIntensity", style.rimIntensity);
+        m_triangleShader->setUniformValue("uRimPower", style.rimPower);
+        m_triangleShader->setUniformValue("uHighlightStrength", style.highlightStrength);
+        m_triangleShader->setUniformValue("uAmbientGradientDir", gradientDir);
+        m_triangleShader->setUniformValue("uAmbientGradientScale", gradientScale);
+        m_triangleShader->setUniformValue("uAmbientGradientOffset", gradientOffset);
+        m_triangleShader->setUniformValue("uAmbientGradientStrength", gradientStrength);
+        // MatCap: use style flag (hemisphere-based matcap approximation)
+        m_triangleShader->setUniformValue("uMatcapFactor", style.useMatcap ? 0.5f : 0.0f);
+        // Multi-light uniforms in view space (asymmetric to avoid flat headlight)
+        m_triangleShader->setUniformValue("uFillDir", fillLightDir);
+        m_triangleShader->setUniformValue("uFillIntensity", style.fillLightIntensity);
+        m_triangleShader->setUniformValue("uHemiUp", hemiUpDir);
+        m_triangleShader->setUniformValue("uHemiSky", hemiSky);
+        m_triangleShader->setUniformValue("uHemiGround", hemiGround);
+        // Debug uniforms
+        m_triangleShader->setUniformValue("uDebugNormals", style.debugNormals);
+        m_triangleShader->setUniformValue("uDebugDepth", style.debugDepth);
+        m_triangleShader->setUniformValue("uDisableGamma", style.disableGamma);
+        const float nearPlane = std::max(style.nearPlane, 1e-4f);
+        const float farPlane = std::max(style.farPlane, nearPlane + 1.0f);
+        m_triangleShader->setUniformValue("uNear", nearPlane);
+        m_triangleShader->setUniformValue("uFar", farPlane);
+        m_triangleShader->setUniformValue("uIsOrtho", style.isOrtho);
+
+        buffers.triangles.vao.bind();
+        glDrawArrays(GL_TRIANGLES, 0, buffers.triangles.vertexCount);
+        buffers.triangles.vao.release();
+
+        m_triangleShader->release();
+
+        glDisable(GL_POLYGON_OFFSET_FILL);
+        glDisable(GL_BLEND);
+    }
+
+    if (style.drawGlow && buffers.edges.vertexCount > 0 && glowAlpha > 0.0f) {
+        glEnable(GL_DEPTH_TEST);
+        glDepthFunc(GL_LEQUAL);
+
+        glEnable(GL_BLEND);
+        glBlendFunc(GL_SRC_ALPHA, GL_ONE);
+
+        m_edgeShader->bind();
+        m_edgeShader->setUniformValue("uMVP", viewProjection);
+        m_edgeShader->setUniformValue("uColor", QVector4D(glowColor, glowAlpha));
+
+        glLineWidth(3.0f);
+        buffers.edges.vao.bind();
+        glDrawArrays(GL_LINES, 0, buffers.edges.vertexCount);
+        buffers.edges.vao.release();
+        glLineWidth(1.0f);
+
+        m_edgeShader->release();
+
+        glDisable(GL_BLEND);
+    }
+
+    if (style.drawEdges && buffers.edges.vertexCount > 0) {
+        glEnable(GL_DEPTH_TEST);
+        glDepthFunc(GL_LEQUAL);
+
+        if (edgeAlpha < 0.999f) {
+            glEnable(GL_BLEND);
+            glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+        } else {
+            glDisable(GL_BLEND);
+        }
+
+        m_edgeShader->bind();
+        m_edgeShader->setUniformValue("uMVP", viewProjection);
+        m_edgeShader->setUniformValue("uColor", QVector4D(edgeColor, edgeAlpha));
+
+        glLineWidth(1.5f);
+        buffers.edges.vao.bind();
+        glDrawArrays(GL_LINES, 0, buffers.edges.vertexCount);
+        buffers.edges.vao.release();
+        glLineWidth(1.0f);
+
+        m_edgeShader->release();
+
+        glDisable(GL_BLEND);
+    }
+
+    glDepthFunc(GL_LESS);
+}
+
+} // namespace onecad::render

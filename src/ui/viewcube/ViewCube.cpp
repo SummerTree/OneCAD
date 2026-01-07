@@ -28,25 +28,17 @@ ViewCube::ViewCube(QWidget* parent)
 }
 
 void ViewCube::updateTheme() {
-    bool isDark = ThemeManager::instance().isDark();
-    
-    if (isDark) {
-        m_faceColor = QColor(220, 220, 220, 191);
-        m_faceHoverColor = QColor(64, 128, 255, 191);
-        m_textColor = Qt::black;
-        m_textHoverColor = Qt::white;
-        m_edgeHoverColor = QColor(64, 128, 255, 191);
-        m_cornerHoverColor = QColor(64, 128, 255, 191);
-    } else {
-        // Light theme - adjust if needed, but the cube usually stands out
-        // keeping similar high-contrast colors for the cube itself
-        m_faceColor = QColor(200, 200, 200, 191); 
-        m_faceHoverColor = QColor(0, 122, 204, 191);
-        m_textColor = Qt::black;
-        m_textHoverColor = Qt::white;
-        m_edgeHoverColor = QColor(0, 122, 204, 191);
-        m_cornerHoverColor = QColor(0, 122, 204, 191);
-    }
+    const ThemeViewCubeColors& colors = ThemeManager::instance().currentTheme().viewCube;
+    m_faceColor = colors.face;
+    m_faceHoverColor = colors.faceHover;
+    m_textColor = colors.text;
+    m_textHoverColor = colors.textHover;
+    m_edgeHoverColor = colors.edgeHover;
+    m_cornerHoverColor = colors.cornerHover;
+    m_faceBorderColor = colors.faceBorder;
+    m_axisXColor = colors.axisX;
+    m_axisYColor = colors.axisY;
+    m_axisZColor = colors.axisZ;
     update();
 }
 
@@ -386,7 +378,7 @@ void ViewCube::paintEvent(QPaintEvent* event) {
         painter.fillPath(path, fillColor);
         
         // Face border (part of edge, but drawn with face for clean look)
-        painter.setPen(QPen(QColor(150, 150, 150, 191), 1));
+        painter.setPen(QPen(m_faceBorderColor, 1));
         painter.drawPath(path);
 
         // Text
@@ -415,22 +407,22 @@ void ViewCube::paintEvent(QPaintEvent* event) {
         QPointF z = project(zAxisEnd, params);
 
         painter.setBrush(Qt::NoBrush);
-        painter.setPen(QPen(QColor(220, 80, 80, 191), 2, Qt::SolidLine, Qt::RoundCap));
+        painter.setPen(QPen(m_axisXColor, 2, Qt::SolidLine, Qt::RoundCap));
         painter.drawLine(o, x);
-        painter.setPen(QPen(QColor(80, 200, 120, 191), 2, Qt::SolidLine, Qt::RoundCap));
+        painter.setPen(QPen(m_axisYColor, 2, Qt::SolidLine, Qt::RoundCap));
         painter.drawLine(o, y);
-        painter.setPen(QPen(QColor(80, 120, 220, 191), 2, Qt::SolidLine, Qt::RoundCap));
+        painter.setPen(QPen(m_axisZColor, 2, Qt::SolidLine, Qt::RoundCap));
         painter.drawLine(o, z);
 
         QFont axisFont = painter.font();
         axisFont.setPointSize(8);
         axisFont.setBold(true);
         painter.setFont(axisFont);
-        painter.setPen(QColor(220, 80, 80, 191));
+        painter.setPen(m_axisXColor);
         painter.drawText(QRectF(x.x() - 8, x.y() - 8, 16, 16), Qt::AlignCenter, "X");
-        painter.setPen(QColor(80, 200, 120, 191));
+        painter.setPen(m_axisYColor);
         painter.drawText(QRectF(y.x() - 8, y.y() - 8, 16, 16), Qt::AlignCenter, "Y");
-        painter.setPen(QColor(80, 120, 220, 191));
+        painter.setPen(m_axisZColor);
         painter.drawText(QRectF(z.x() - 8, z.y() - 8, 16, 16), Qt::AlignCenter, "Z");
     }
 

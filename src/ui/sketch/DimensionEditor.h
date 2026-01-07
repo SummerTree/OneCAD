@@ -7,6 +7,7 @@
 #define ONECAD_UI_SKETCH_DIMENSIONEDITOR_H
 
 #include <QLineEdit>
+#include <QMetaObject>
 #include <QString>
 #include <QPoint>
 
@@ -71,12 +72,14 @@ protected:
     void focusOutEvent(QFocusEvent* event) override;
 
 private:
+    void updateTheme();
     void confirmValue();
     double parseExpression(const QString& text) const;
 
     QString m_constraintId;
     double m_originalValue = 0.0;
     QString m_units;
+    QMetaObject::Connection m_themeConnection;
 };
 
 } // namespace onecad::ui

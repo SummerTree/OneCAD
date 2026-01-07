@@ -21,7 +21,7 @@ SidebarToolButton::SidebarToolButton(const QString& symbol,
     setToolTip(tooltip);
     setToolButtonStyle(Qt::ToolButtonIconOnly);
     setAutoRaise(false);
-    setIconSize(QSize(22, 22));
+    setIconSize(QSize(24, 24));
     setFixedSize(42, 42);  // Fixed size prevents expansion conflicts
     updateIcon();
 }

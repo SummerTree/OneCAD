@@ -1,12 +1,12 @@
 #include "ConstraintPanel.h"
 #include "../../core/sketch/Sketch.h"
 #include "../../core/sketch/SketchConstraint.h"
+#include "../theme/ThemeManager.h"
 
 #include <QVBoxLayout>
 #include <QLabel>
 #include <QListWidget>
 #include <QListWidgetItem>
-#include <QColor>
 
 namespace onecad::ui {
 
@@ -14,6 +14,9 @@ ConstraintPanel::ConstraintPanel(QWidget* parent)
     : QWidget(parent)
 {
     setupUi();
+    m_themeConnection = connect(&ThemeManager::instance(), &ThemeManager::themeChanged,
+                                this, &ConstraintPanel::updateTheme, Qt::UniqueConnection);
+    updateTheme();
 }
 
 void ConstraintPanel::setupUi() {
@@ -119,13 +122,18 @@ void ConstraintPanel::populateList() {
         // Color based on satisfaction
         bool satisfied = constraint->isSatisfied(*m_sketch, core::sketch::constants::SOLVER_TOLERANCE);
         if (!satisfied) {
-            item->setForeground(QColor(255, 100, 100)); // Red for unsatisfied
+            item->setForeground(m_unsatisfiedColor);
         }
     }
 
     // Update panel height based on content
     int contentHeight = 40 + constraints.size() * 28; // title + items
     setFixedHeight(qMin(contentHeight, 300));
+}
+
+void ConstraintPanel::updateTheme() {
+    m_unsatisfiedColor = ThemeManager::instance().currentTheme().constraints.unsatisfiedText;
+    populateList();
 }
 
 QString ConstraintPanel::getConstraintIcon(int type) const {

@@ -27,22 +27,26 @@ public:
     ~Grid3D();
 
     void initialize();
-    void render(const QMatrix4x4& viewProjection, float cameraDistance,
-                const QVector3D& cameraPosition);
+    void render(const QMatrix4x4& viewProjection, float pixelScale, float viewExtent);
     void cleanup();
     
     // Appearance
     void setMajorColor(const QColor& color) { m_majorColor = color; }
     void setMinorColor(const QColor& color) { m_minorColor = color; }
+    void setAxisColors(const QColor& xColor, const QColor& yColor, const QColor& zColor) {
+        m_xAxisColor = xColor;
+        m_yAxisColor = yColor;
+        m_zAxisColor = zColor;
+    }
     void setVisible(bool visible) { m_visible = visible; }
     bool isVisible() const { return m_visible; }
     
     // Force grid rebuild (e.g. after color change)
-    void forceUpdate() { m_lastSpacing = -1.0f; }
+    void forceUpdate() { m_lastSpacing = -1.0f; m_lastExtent = -1.0f; }
 
 private:
-    float calculateSpacing(float cameraDistance) const;
-    void buildGrid(float spacing, float extent);
+    float calculateSpacing(float pixelScale) const;
+    void buildGrid(float minorSpacing, float majorSpacing, float extent);
     
     bool m_initialized = false;
     bool m_visible = true;

@@ -93,7 +93,7 @@
 | Fillet & chamfer (variable radius) | ✅ | | |
 | Linear & circular patterns | ✅ | | |
 | Pattern along path | | ✅ | |
-| Shell operation | | ✅ | |
+| Shell operation (basic) | ✅ | | |
 | Spline/Bezier curves | | ✅ | |
 | Text in sketches | | ✅ | |
 | STEP import/export | ✅ | | |
@@ -317,18 +317,18 @@ When user types a value with different unit than document default, the system au
 
 ## 5. Sketch System
 
-**IMPLEMENTATION STATUS: PHASE 2 COMPLETE** ✅ (Updated 2026-01-04 via comprehensive codebase audit)
+**IMPLEMENTATION STATUS: PHASE 2 COMPLETE** ✅ (Updated 2026-01-06)
 
 | Component | Lines of Code | Status | Verification |
 |-----------|---------------|--------|--------------|
-| **Sketch Core** | Sketch.h/cpp (1370) | ✅ Complete | Production-ready entity management |
+| **Sketch Core** | Sketch.h/cpp (1719) | ✅ Complete | Production-ready entity management |
 | **Entity Types** | Point (277), Line (350), Arc (477), Circle (282), Ellipse (414) | ✅ All 5 Complete | Non-copyable, movable, UUID-based |
-| **Constraints** | Constraints.h/cpp (1875) | ✅ 15 types Complete | Fixed, Midpoint, Coincident, H/V, Parallel, Perp, Tangent, Concentric, Equal, Distance, Angle, Radius, Diameter, PointOnCurve |
-| **PlaneGCS Solver** | ConstraintSolver.cpp (1450 total) | ✅ Complete | 42MB static lib, runtime verified, DogLeg+LM, DOF calc |
-| **Rendering** | SketchRenderer.cpp (1955) | ✅ Complete | VBO, adaptive tessellation, viewport culling, regions |
-| **Snap System** | SnapManager.cpp (1166) | ✅ Complete | 8 snap types, 2mm radius, priority-based |
-| **Auto-Constrainer** | AutoConstrainer.cpp (1091) | ✅ Complete | 7 inference rules, ±5° tolerance, confidence scoring |
-| **Loop Detection** | LoopDetector (1985), FaceBuilder (719) | ✅ Complete | DFS cycles, shoelace area, hole detection, OCCT bridge |
+| **Constraints** | Constraints.h/cpp (1315 cpp) | ✅ 15 types Complete | Fixed, Midpoint, Coincident, H/V, Parallel, Perp, Tangent, Concentric, Equal, Distance, Angle, Radius, Diameter, PointOnCurve |
+| **PlaneGCS Solver** | ConstraintSolver.cpp (1014) | ✅ Complete | 42MB static lib, runtime verified, DogLeg+LM, DOF calc |
+| **Rendering** | SketchRenderer (2472 total) | ✅ Complete | VBO, adaptive tessellation, viewport culling, regions |
+| **Snap System** | SnapManager (1166 total) | ✅ Complete | 8 snap types, 2mm radius, priority-based |
+| **Auto-Constrainer** | AutoConstrainer (1091 total) | ✅ Complete | 7 inference rules, ±5° tolerance, confidence scoring |
+| **Loop Detection** | LoopDetector (1506), FaceBuilder (524 cpp) | ✅ Complete | DFS cycles, shoelace area, hole detection, OCCT bridge |
 | **Tools** | Line (322), Circle (226), Rectangle (206), Arc (369), Ellipse (268), Trim (219), Mirror (444) | ✅ All 7 Complete | Total 2618 LOC, UI integrated |
 | **UI Integration** | ConstraintPanel (182), DimensionEditor (232), SketchModePanel (189), ContextToolbar (127) | ✅ Complete | All panels functional, math parser in DimensionEditor |
 
@@ -1219,11 +1219,172 @@ struct SketchPoint {
 };
 ```
 
+### 5.21 Constraint Applicability Matrix
+
+**Selection-Aware Constraint Availability**
+
+Constraint buttons are enabled/disabled based on current selection. Invalid constraints appear grayed out (not hidden) with tooltips explaining why.
+
+| Selection | Enabled Constraints |
+|-----------|---------------------|
+| **1 Point** | Fixed |
+| **2 Points** | Coincident, Horizontal, Vertical, Distance, Midpoint (if on same line) |
+| **1 Line** | Horizontal, Vertical, Distance (line length) |
+| **2 Lines** | Parallel, Perpendicular, Angle, Equal (length), Distance (between parallel lines) |
+| **1 Arc/Circle** | Radius, Diameter, Fixed (center position) |
+| **2 Arcs/Circles** | Concentric, Equal (radius), Tangent, Distance (center to center) |
+| **Point + Line** | PointOnCurve, Midpoint, Distance (point to line) |
+| **Point + Arc/Circle** | PointOnCurve, Coincident (center) |
+| **Line + Arc/Circle** | Tangent, Distance |
+| **3+ Entities** | Only constraints valid for ALL entities in selection |
+
+**UI Behavior:**
+- **Invalid constraints**: Grayed out button, visible but disabled
+- **Shortcut hints**: Always visible on/near buttons
+- **Constraint panel**: Shows list of constraints for selected entities
+
+### 5.22 Constraint Behavior Specifications
+
+#### 5.22.1 Solver Failure Visual Feedback
+
+| State | Visual |
+|-------|--------|
+| **Constraint satisfied** | Green icon, normal entity color |
+| **Constraint unsatisfied** | Red icon |
+| **Conflicting entities** | Red highlighted geometry |
+
+**When solve fails:** Entities involved in unsolvable constraints are highlighted red. Constraint icons turn red.
+
+#### 5.22.2 Coincident Constraint Behavior
+
+| Property | Behavior |
+|----------|----------|
+| **During drag** | Points visually merge in real-time (live merge) |
+| **After constraint applied** | Single point displayed, both entities reference same position |
+
+#### 5.22.3 Horizontal/Vertical Guide Lines
+
+When drawing a line near horizontal or vertical:
+- **Full guide line** extends across viewport as dashed line
+- Line turns special color (blue) when within ±5° of H/V
+- Ghost constraint icon appears at 50% opacity
+
+#### 5.22.4 Tangent Constraint Behavior
+
+When tangent constraint is applied between arc and line:
+- **Both entities adjust equally** to satisfy tangent condition
+- Neither entity is treated as "fixed" reference
+
+#### 5.22.5 Entity Deletion with Constraints
+
+When deleting an entity that has constraints:
+- **All related constraints are automatically deleted**
+- No prompt; constraints are removed silently with the entity
+
+#### 5.22.6 Dimension Constraint Editing
+
+| Property | Behavior |
+|----------|----------|
+| **Trigger** | Double-click on dimension value |
+| **Display** | Numeric value always visible on constraint |
+| **Editor** | Inline QLineEdit appears at dimension location |
+| **Confirm** | Enter key applies, Escape cancels |
+
+#### 5.22.7 Perpendicular Constraint Behavior
+
+When applying perpendicular constraint:
+- **No auto-extension**: Lines maintain their lengths, only angle changes
+- Lines do not extend to intersect automatically
+
+#### 5.22.8 Equal Constraint Visual
+
+- **= symbol** displayed on both constrained entities
+- Symbol positioned at entity midpoint
+
+#### 5.22.9 Fixed Constraint Visual
+
+- **Lock icon only** displayed at fixed point
+- No coordinate values shown (clean visual)
+
+#### 5.22.10 Overconstraint Handling
+
+When sketch reaches 0 DOF (fully constrained):
+- **Further constraints blocked** with warning message
+- "Sketch is fully constrained" notification shown
+- Redundant constraints not allowed
+
+#### 5.22.11 Solver Performance
+
+| Property | Specification |
+|----------|---------------|
+| **Frame rate target** | Adaptive (start fast, add accuracy when stable) |
+| **During drag** | Prioritize responsiveness over perfect accuracy |
+| **After mouse release** | Full accuracy solve |
+
+#### 5.22.12 Bulk Constraint Operations
+
+- **"Remove All Constraints" button** available in ConstraintPanel
+- Single click removes all constraints from selected entities (or entire sketch if nothing selected)
+
+### 5.23 Dimension Variables System
+
+#### 5.23.1 Variable Scope
+
+| Scope | Description |
+|-------|-------------|
+| **Document-global** | Variables shared across all sketches in document |
+
+Variables are NOT sketch-local; they can be referenced from any sketch.
+
+#### 5.23.2 Expression Support
+
+Dimension values support expressions with variables and basic math:
+
+| Feature | Supported |
+|---------|-----------|
+| **Basic math** | +, -, *, /, parentheses |
+| **Named variables** | `width`, `height`, `thickness` |
+| **Examples** | `width/2`, `thickness + 5`, `(width - 10) / 2` |
+
+#### 5.23.3 Variable Definition
+
+Variables are defined by:
+1. Typing a name when entering a dimension value (e.g., `width = 50`)
+2. Future: Variables panel (v2.0)
+
+### 5.24 Construction Geometry Toggle
+
+| Property | Specification |
+|----------|---------------|
+| **Toggle location** | Toolbar button (not just keyboard shortcut) |
+| **Shortcut** | X key |
+| **Behavior** | Toggles between normal and construction mode for next drawn entity |
+| **Visual** | Button shows current mode state |
+
+### 5.25 Open Wire Feedback
+
+When sketch contains open wires (not closed loops):
+- **Endpoints highlighted** in different color (orange/yellow)
+- Helps user identify where to close the sketch
+
+### 5.26 Snap Distance Display
+
+When cursor approaches a snap target:
+- **Show distance** when within 2× snap radius
+- Distance displayed near cursor as small numeric value
+
+### 5.27 Polyline Tool Behavior
+
+For continuous line drawing (polyline chaining):
+- **Double-click** ends the polyline chain
+- Click on start point closes the loop
+- Escape cancels current segment
+
 ---
 
 ## 6. Construction Geometry & Face Creation
 
-**IMPLEMENTATION STATUS: PRODUCTION-READY** ✅ (Updated 2026-01-04)
+**IMPLEMENTATION STATUS: PRODUCTION-READY** ✅ (Updated 2026-01-06)
 
 | Component | Lines of Code | Status | Features |
 |-----------|---------------|--------|----------|
@@ -1343,20 +1504,18 @@ private:
 | Overlapping loops | Resolved by region detection |
 | Self-intersecting loops | Detected and flagged as invalid |
 
-### 6.5 Face Selection for Operations
+### 6.5 Face/Region Selection for Operations (v1a)
 
 **Workflow:**
 1. System detects all valid regions in sketch
 2. User hovers to preview individual regions
-3. User clicks to select region(s)
-4. User can select multiple regions (Shift+Click or box select)
-5. Each region can be extruded separately or together
+3. User clicks to select a region
+4. In modeling mode, selecting a sketch in the navigator enables region picking on the reference sketch
 
 | Selection | Extrude Result |
 |-----------|----------------|
-| Single region | Single body |
-| Multiple regions (same height) | Multiple bodies or single compound |
-| Multiple regions (different heights) | Separate operations |
+| Single region | Single body (implemented) |
+| Multiple regions | Planned (multi-select + batch extrude) |
 
 ### 6.6 Construction Geometry Visibility After Face Creation
 
@@ -1377,13 +1536,13 @@ private:
 
 ## 7. Grid System
 
-**⚠️ IMPLEMENTATION STATUS: SPEC DEVIATION** (Updated 2026-01-04)
+**IMPLEMENTATION STATUS: COMPLETE** ✅ (Updated 2026-01-06)
 
-Grid3D.cpp (250 LOC) exists but **does NOT implement adaptive spacing**:
-- **Current**: Fixed 10mm spacing (hardcoded in `calculateSpacing()`)
-- **Spec**: Adaptive tiers based on camera distance (7 tiers from 0.1mm to 100mm)
-- **Issue**: Header claims "adaptive" but implementation ignores `cameraDistance` parameter
-- **Action Required**: Refactor to match spec section 7.2
+Grid3D now uses pixel-scale adaptive spacing:
+- **Target minor spacing**: ~10 px on screen
+- **Target major spacing**: ~50 px on screen
+- **Snapping**: 1/2/5 × 10^n world-unit steps for stable transitions
+- **Extent**: scales with viewport to bound line count
 
 ### 7.1 Grid Specification
 
@@ -1393,9 +1552,9 @@ Grid3D.cpp (250 LOC) exists but **does NOT implement adaptive spacing**:
 | **Toggle** | View menu or keyboard shortcut (G) | ✅ Implemented |
 | **Snap-to-Grid** | Enabled by default | ✅ Implemented |
 | **Snap Toggle** | Hold Alt to temporarily disable | ✅ Implemented |
-| **Grid Spacing** | Adaptive to zoom level | ⚠️ **NOT IMPLEMENTED** (fixed 10mm) |
+| **Grid Spacing** | Adaptive to zoom level (pixel-targeted) | ✅ Implemented |
 
-### 7.2 Adaptive Grid Spacing (⚠️ SPEC ONLY, NOT IMPLEMENTED)
+### 7.2 Adaptive Grid Spacing (Implemented)
 
 ```mermaid
 flowchart LR
@@ -1404,22 +1563,10 @@ flowchart LR
     S --> D[Render grid]
 ```
 
-**Spacing Tiers:**
-
-| Visible Area Width | Grid Spacing |
-|-------------------|--------------|
-| < 10 mm | 0.1 mm |
-| 10 - 50 mm | 0.5 mm |
-| 50 - 100 mm | 1 mm |
-| 100 - 500 mm | 5 mm |
-| 500 mm - 1 m | 10 mm |
-| 1 - 5 m | 50 mm |
-| > 5 m | 100 mm |
-
 **Spacing Selection Logic:**
-- Target ~30-50 grid lines visible on screen
-- Smooth transitions during zoom (no jarring changes)
-- Major/minor grid line distinction
+- Target minor spacing ~10 px and major spacing ~50 px
+- Snap spacing to 1/2/5 × 10^n in world units
+- Major/minor grid line distinction (major every 5 minor lines)
 
 ### 7.3 Grid Appearance
 
@@ -1434,6 +1581,19 @@ flowchart LR
 ---
 
 ## 8. 3D Modeling Operations
+
+**IMPLEMENTATION STATUS: PHASE 3 IN PROGRESS** (~25% complete, updated 2026-01-06)
+
+| Operation | Status | Notes |
+|-----------|--------|-------|
+| **Extrude v1a** | ✅ Complete (282 LOC) | SketchRegion input, preview, draft angle working |
+| **Extrude v1b** | ⏳ Planned | Face input, smart boolean |
+| **Revolve** | ⏳ In Progress | Profile+Axis, drag interaction, preview working |
+| **Boolean Ops** | ⏳ Partial | Union/Cut via BRepAlgoAPI, Intersect pending |
+| **Push/Pull** | ❌ Not started | |
+| **Fillet/Chamfer** | ❌ Not started | |
+| **Shell** | ❌ Not started | |
+| **Patterns** | ❌ Not started | |
 
 ### 8.1 Operations Overview — v1.0
 
@@ -1455,6 +1615,7 @@ mindmap
     Modification
       Fillet — variable radius
       Chamfer — variable distance
+      Shell — hollow solid
     Pattern
       Linear Pattern
       Circular Pattern
@@ -1466,24 +1627,32 @@ mindmap
 
 | Property | Specification |
 |----------|---------------|
+| **Activation** | Modeling mode only; auto-activates on single sketch-region selection (reference sketch); toolbar button available |
+| **Input** | SketchRegion (v1a). Face input reserved for same tool (v1b) |
 | **Direction** | Positive normal to sketch plane (default) |
-| **Flip Direction** | User drags in opposite direction |
-| **Distance Input** | Drag with on-screen editable value |
-| **Draft Angle** | Secondary parameter (0° to 89°) |
-| **Multi-face** | User selects which faces to extrude |
+| **Flip Direction** | Drag in opposite direction (negative distance) |
+| **Distance Input** | Drag with on-screen value + arrow; commit on mouse release; Esc cancels |
+| **Draft Angle** | Fully working (BRepOffsetAPI_DraftAngle); default 0°; UI pending |
+| **Multi-step** | Tool stays active after commit; new selection changes the input |
+
+**v1a Limitation:** Only one sketch region is extruded per activation; multi-region extrude is planned.
 
 #### 8.2.2 Direction Determination
 
 ```mermaid
 flowchart TD
-    A[User activates Extrude] --> B[Show drag handle on positive normal]
+    A[User selects region] --> B[Show arrow handle on normal]
     B --> C[User drags handle]
     C --> D{Drag direction?}
     D -->|Positive| E[Extrude in positive normal]
     D -->|Negative| F[Flip to negative normal]
-    E --> G[Preview with low opacity shading]
+    E --> G[Preview with low opacity shading + distance label]
     F --> G
+    G --> H{Mouse release?}
+    H -->|Yes| I[Auto-commit operation]
 ```
+
+**Implementation Note (v1a):** The arrow handle moves with the preview face while dragging. The distance label is display-only during drag; numeric entry is planned.
 
 #### 8.2.3 Smart Boolean Integration
 
@@ -1495,17 +1664,22 @@ Shapr3D-style automatic boolean determination:
 | Extrude away from body | Assume Add (Union) |
 | No intersection | New Body |
 
-**Boolean Override Badge:** Small popup menu next to distance label allows explicit selection of Union, Subtract, Intersect, or New Body.
+**Boolean Override Badge:** Planned (v1b). Small popup menu next to distance label allows explicit selection of Union, Subtract, Intersect, or New Body.
+
+**Implementation Note (v1a):** Extrude commits as **New Body** only. Boolean enum exists in the data model for future smart-boolean support.
 
 #### 8.2.4 Draft Angle
+
+**IMPLEMENTATION STATUS: WORKING** (via BRepOffsetAPI_DraftAngle)
 
 | Property | Specification |
 |----------|---------------|
 | Range | 0° to 89° |
 | Default | 0° (no draft) |
-| Input method | Secondary field in panel OR select axis/sketch line |
+| Input method | Programmatic (UI slider pending); parameter stored in OperationRecord |
 | Positive angle | Tapers inward (for mold release) |
 | Negative angle | Tapers outward |
+| Algorithm | Side faces identified via normal dot product; draft applied per-face |
 
 #### 8.2.5 v2.0 Additions
 
@@ -1545,11 +1719,30 @@ Shapr3D-style automatic boolean determination:
 
 | Property | Specification |
 |----------|---------------|
+| **Activation** | **Auto-activates** when user selects a planar face in modeling mode |
 | **Input** | Selected planar face |
+| **Visual Indicator** | Drag arrow appears on face center immediately upon selection |
 | **Positive Distance** | Extrude outward (union with body) |
 | **Negative Distance** | Cut inward (subtract from body) |
 | **Multi-body scenario** | User selects which body to modify |
 | **Adjacent Faces** | Automatically extended/trimmed |
+| **Commit** | Mouse release commits operation |
+| **Cancel** | Esc key cancels and reverts to selection |
+
+**Auto-Activate Behavior:**
+
+```mermaid
+flowchart TD
+    A[User clicks face in viewport] --> B[Face becomes selected]
+    B --> C[Drag arrow appears on face center]
+    C --> D{User action?}
+    D -->|Drags arrow| E[Preview push/pull with distance label]
+    D -->|Clicks elsewhere| F[Deselect, no operation]
+    D -->|Presses Esc| F
+    E --> G{Mouse release?}
+    G -->|Yes| H[Commit operation]
+    G -->|No| E
+```
 
 **Body Selection for Push/Pull:**
 ```mermaid
@@ -1561,6 +1754,13 @@ flowchart TD
     E --> F[User clicks desired body]
     F --> C
 ```
+
+**Offset Face (Combined with Push/Pull):**
+
+Push/Pull and Offset Face are unified into a single tool:
+- Dragging a face **outward** creates new volume (union)
+- Dragging a face **inward** removes volume (cut)
+- The tool automatically determines whether to add or subtract based on drag direction
 
 ### 8.6 Fillet Operation
 
@@ -1629,7 +1829,51 @@ flowchart TD
 | **Style** | Full shaded preview |
 | **Opacity** | Low opacity (30-40%) |
 | **Update** | Real-time during parameter changes |
-| **Performance** | Use coarse tessellation for preview |
+| **Performance** | Coarse preview tessellation planned; current preview uses standard tessellation |
+
+**Implementation Status (2026-01-05):** Preview meshes render via the BodyRenderer with ~0.35 alpha during drag.
+
+### 8.10 Shell Operation
+
+Creates a hollow solid by removing material from inside a solid body, leaving walls of specified thickness.
+
+| Property | Specification |
+|----------|---------------|
+| **Input** | Selected solid body |
+| **Faces to Remove** | User selects one or more faces to open (remove) |
+| **Thickness** | Wall thickness (single value for v1.0) |
+| **Direction** | Inward (default) — material removed from inside |
+| **Minimum Thickness** | 0.1mm (prevents degenerate geometry) |
+| **Maximum Thickness** | Limited by geometry — auto-clamped to valid range |
+| **OCCT API** | `BRepOffsetAPI_MakeThickSolid` |
+
+**Workflow:**
+
+```mermaid
+flowchart TD
+    A[User selects body] --> B[User activates Shell tool]
+    B --> C[User selects faces to remove/open]
+    C --> D[User sets wall thickness via drag or input]
+    D --> E[Preview shows hollow result]
+    E --> F{Valid geometry?}
+    F -->|Yes| G[Commit on mouse release]
+    F -->|No| H[Show error, clamp thickness]
+    H --> D
+```
+
+**Face Selection for Shell:**
+- Selected faces become **openings** (removed entirely)
+- Typical use: select top face of a box to create open-top container
+- Multiple faces can be selected for multiple openings
+
+**Visual Feedback:**
+- Selected open faces highlighted in **orange**
+- Preview shows resulting hollow geometry with wall thickness
+- Thickness value displayed near cursor during drag
+
+**Error Handling:**
+- If thickness exceeds geometry limits, silently clamp to maximum valid value
+- If resulting shell is invalid, show toast error and cancel operation
 
 ---
 
@@ -1652,13 +1896,19 @@ flowchart TD
     J --> K[User chooses from list]
 ```
 
+**Implementation Status (2026-01-05):**
+- Sketch and model picking implemented via `SketchPickerAdapter` and `ModelPickerAdapter`.
+- Model picking raycasts tessellated meshes, collects all hits, and promotes vertex/edge hits using screen-space tolerance.
+- Reference sketch regions are included in modeling picks when a sketch is selected in the navigator.
+
 ### 9.2 Selection Priority by Context
 
 **Sketch Mode:**
-1. Sketch vertex (highest)
-2. Sketch edge
-3. Sketch region
-4. Construction geometry
+1. Constraint icon (highest; sketch mode only)
+2. Sketch vertex
+3. Sketch edge
+4. Sketch region
+5. Construction geometry
 
 **Modeling Mode:**
 1. Vertex (highest)
@@ -1678,13 +1928,13 @@ When click is ambiguous (multiple entities at same pixel):
 └─────────────────┘
 ```
 
-- Small list appears under cursor
+- Small list appears under cursor (offset to avoid occluding the pick point)
 - Hover to preview highlight entity
 - Click to confirm selection
 
 ### 9.4 Click Cycling (Alternative)
 
-When multiple entities overlap at cursor position:
+When multiple entities overlap at cursor position (deep select disabled):
 - First click: Select highest priority entity
 - Second click (same position): Select next entity
 - Continue clicking: Cycle through all entities
@@ -1699,13 +1949,15 @@ When multiple entities overlap at cursor position:
 | **Secondary selection** | Violet (#8040FF) | Violet (#A060FF) | Tool body in boolean |
 | **Invalid selection** | Orange (#FF8020) | Orange (#FFA040) | Cannot apply operation |
 
+**Highlight Style (Current):** Faces and bodies use a translucent fill + outline overlay; edges are drawn as thicker polylines; vertices as screen-space discs.
+
 ### 9.6 Selection Modifiers
 
 | Modifier | Behavior |
 |----------|----------|
 | **None** | Replace current selection |
 | **Shift + Click** | Add to selection |
-| **Cmd + Click** | Toggle in selection |
+| **Cmd/Ctrl + Click** | Toggle in selection |
 
 ### 9.7 Box Selection
 
@@ -1716,6 +1968,8 @@ When multiple entities overlap at cursor position:
 
 **User Configurable:** Preference to swap behaviors or set single mode.
 
+**Implementation Note (v1a):** Box selection is not implemented yet.
+
 ### 9.8 Selection Persistence
 
 | Scenario | Behavior |
@@ -1724,6 +1978,80 @@ When multiple entities overlap at cursor position:
 | Switch to incompatible tool | Selection cleared |
 | Enter sketch mode | 3D selection cleared |
 | Exit sketch mode | Sketch selection cleared |
+
+### 9.9 Selection Information Display
+
+Selection info is displayed in **three locations** simultaneously:
+
+| Location | Content | Visibility |
+|----------|---------|------------|
+| **Tooltip (hover)** | Entity type + key measurement | On hover, 500ms delay |
+| **Status Bar** | Full details (type, dimensions, IDs) | Always when selected |
+| **Property Inspector** | Editable properties + computed values | When panel is open |
+
+#### 9.9.1 Edge Information
+
+| Property | Display | Example |
+|----------|---------|---------|
+| **Edge Type** | Line, Arc, Circle, Ellipse, Spline | "Arc" |
+| **Length** | Total arc/line length | "42.5mm" |
+| **Radius** | For arcs/circles only | "R: 15mm" |
+| **Curvature** | For arcs: concave/convex indicator | "⌒ (convex)" |
+| **Endpoint Coordinates** | Start and end positions | "(0,0,0) → (10,5,0)" |
+
+**Tooltip Format for Edge:** `Line: 42.5mm` or `Arc: 25.1mm (R: 15mm)`
+
+#### 9.9.2 Face Information
+
+| Property | Display | Example |
+|----------|---------|---------|
+| **Face Type** | Plane, Cylinder, Cone, Sphere, Torus, Freeform | "Plane" |
+| **Area** | Surface area | "Area: 125.0 mm²" |
+| **Normal** | Direction vector (for planar faces) | "Normal: (0,0,1)" |
+| **Bounding Edges** | Count of boundary edges | "6 edges" |
+
+**Tooltip Format for Face:** `Plane: 125.0 mm²` or `Cylinder: 314.2 mm²`
+
+#### 9.9.3 Body Information
+
+| Property | Display | Example |
+|----------|---------|---------|
+| **Body Name** | User-assigned or auto-generated | "Body 1" |
+| **Volume** | Total volume | "Vol: 1,250 mm³" |
+| **Surface Area** | Total surface area | "Surf: 650 mm²" |
+| **Bounding Box** | Dimensions | "50×25×10 mm" |
+| **Face Count** | Number of faces | "12 faces" |
+
+**Tooltip Format for Body:** `Body 1: 50×25×10 mm`
+
+#### 9.9.4 Sketch Entity Information
+
+| Entity | Tooltip Display |
+|--------|-----------------|
+| **Point** | Coordinates: `(X, Y)` in sketch plane |
+| **Line** | Length: `L: 42.5mm` |
+| **Arc** | Length + radius: `Arc: 15.7mm (R: 10mm)` |
+| **Circle** | Radius + circumference: `⭕ R: 25mm` |
+| **Ellipse** | Major/minor axes: `Ellipse: 30×20mm` |
+
+#### 9.9.5 Multi-Selection Information
+
+When multiple entities are selected:
+
+| Selection | Display |
+|-----------|---------|
+| **Multiple edges** | Total combined length: `5 edges: 127.5mm total` |
+| **Multiple faces** | Total combined area: `3 faces: 450.0 mm² total` |
+| **Mixed selection** | Count by type: `2 edges, 1 face` |
+
+#### 9.9.6 Coordinate Display in Status Bar
+
+| Mode | Display Format |
+|------|----------------|
+| **3D Modeling** | World coordinates: `X: 45.0  Y: 23.5  Z: 0.0` |
+| **Sketch Mode** | Local sketch coordinates: `U: 45.0  V: 23.5` |
+
+Coordinates update in real-time as cursor moves.
 
 ---
 
@@ -1913,6 +2241,7 @@ Traditional hierarchical context menu:
 **Interactions:**
 - Click: Select item
 - Double-click body: Isolate (hide all others)
+- Click sketch: Set as reference sketch for modeling selection
 - Double-click sketch: Enter sketch edit mode
 - Right-click: Context menu
 - Eye icon: Toggle visibility
@@ -1956,7 +2285,9 @@ stateDiagram-v2
 - User presses Escape
 - User selects different tool
 
-### 11.2 Dimension Input — Hybrid Drag + Type
+**Implementation Note (v1a):** In modeling mode, selecting a single sketch region auto-activates Extrude to match direct-manipulation workflow.
+
+### 11.2 Dimension Input — Drag (v1a)
 
 ```mermaid
 flowchart TD
@@ -1964,23 +2295,11 @@ flowchart TD
     B --> C[User drags]
     C --> D[Update preview + show value near cursor]
     D --> E{User action?}
-    E -->|Release mouse| F[Accept dragged value]
-    E -->|Click on value| G[Edit field active]
-    E -->|Type number| H[Replace current value]
-    G --> I[User types new value]
-    H --> I
-    I --> J{Key pressed?}
-    J -->|Enter| F
-    J -->|Escape| K[Cancel operation]
-    J -->|Tab| L[Move to next parameter]
-    F --> M[Execute operation]
+    E -->|Release mouse| F[Auto-commit operation]
+    E -->|Escape| G[Cancel operation]
 ```
 
-**Key Behavior:**
-- Typing a number **replaces** the current value (not append)
-- Tab moves between parameters (e.g., distance → draft angle)
-- Unit suffix in different unit auto-converts (e.g., "2.5 cm" → 25 mm)
-- Supports basic formulas and variables (e.g., "width/2")
+**Implementation Note (v1a):** Numeric entry and parameter cycling are planned, but current operations commit on drag release with a display-only value label.
 
 ### 11.3 Mouse/Trackpad Navigation
 
@@ -2332,6 +2651,51 @@ flowchart TD
     E -->|Cancel| H[Cancel deletion]
 ```
 
+### 14.4 Multi-Document Support (Tabbed Interface)
+
+OneCAD supports multiple open documents via a tabbed interface.
+
+| Property | Specification |
+|----------|---------------|
+| **Tab Location** | Top of viewport area |
+| **Max Open Documents** | Unlimited (limited by system memory) |
+| **New Document** | Cmd/Ctrl+N creates new tab |
+| **Close Document** | Click X on tab, or Cmd/Ctrl+W |
+| **Tab Reordering** | Drag tabs to reorder |
+| **Tab Title** | Document name + modified indicator (*) |
+
+**Tab Behavior:**
+
+| Action | Behavior |
+|--------|----------|
+| **Click tab** | Switch to that document |
+| **Middle-click tab** | Close document (with save prompt if modified) |
+| **Drag tab** | Reorder tabs |
+| **Close modified doc** | Prompt to save changes (per-tab, not global) |
+
+**Unsaved Changes Handling:**
+
+```mermaid
+flowchart TD
+    A[User closes tab with unsaved changes] --> B{Prompt: Save changes?}
+    B -->|Save| C[Save document]
+    C --> D[Close tab]
+    B -->|Don't Save| D
+    B -->|Cancel| E[Keep tab open]
+```
+
+**Window Close Behavior:**
+- When closing window with multiple modified documents, prompt for **each** unsaved document
+- Order: Current tab first, then left-to-right
+
+**Visual Indicators:**
+
+| Indicator | Meaning |
+|-----------|---------|
+| **Bold title** | Active document |
+| **Asterisk (*)** | Unsaved changes |
+| **Italic title** | Read-only document |
+
 ---
 
 ## 15. Topological Naming System
@@ -2542,7 +2906,7 @@ classDiagram
         +redo() Result
     }
     
-    class CommandProcessor {
+class CommandProcessor {
         -undoStack: ICommand[]
         -redoStack: ICommand[]
         -maxUndoDepth: Int
@@ -2571,6 +2935,14 @@ classDiagram
     CommandProcessor --> ICommand
 ```
 
+**IMPLEMENTATION STATUS: COMPLETE** (197 LOC, updated 2026-01-06)
+- ✅ `CommandProcessor` fully implemented with execute/undo/redo
+- ✅ Full transaction support: beginTransaction/endTransaction/cancelTransaction
+- ✅ `CommandGroup` for grouping multiple commands into single undo unit
+- ✅ `AddBodyCommand` wired for Extrude commits; undo/redo preserves body IDs
+- ✅ Qt signals for UI state updates (canUndoChanged, canRedoChanged)
+- ⏳ Additional modeling commands pending (Revolve, Boolean, Fillet, etc.)
+
 ### 16.2 Undo/Redo Specifications
 
 | Property | Specification |
@@ -2594,6 +2966,11 @@ Operations that create multiple internal commands appear as single undo:
 ---
 
 ## 17. File System
+
+**IMPLEMENTATION STATUS: NOT STARTED** (src/io/ directory empty, updated 2026-01-06)
+- ❌ Native format (.onecad): Not implemented
+- ❌ STEP import/export: Not implemented
+- ⚠️ Document has toJson/fromJson for internal serialization (not file I/O)
 
 ### 17.1 File Locations
 
@@ -2668,15 +3045,17 @@ flowchart TB
 
 ## 18. Rendering System
 
-### 18.1 Qt RHI Configuration
+### 18.1 OpenGL Viewport Configuration (Current)
 
 | Property | Specification |
 |----------|---------------|
-| Backend | OpenGL (for OCCT context sharing) |
+| Backend | QOpenGLWidget (OpenGL 4.1 Core) |
 | Render mode | On-demand (not continuous 60 FPS) |
 | VSync | Enabled |
 | Sample count | 4x MSAA |
-| Reverse-Z | Enabled for depth precision |
+| Reverse-Z | Planned (not implemented) |
+
+**Implementation Note (2026-01-05):** Qt RHI/Metal pipeline is deferred; current renderer uses OpenGL for OCCT compatibility.
 
 ### 18.2 On-Demand Render Loop
 
@@ -2699,8 +3078,10 @@ flowchart LR
 | Mode | Description | Default |
 |------|-------------|:-------:|
 | **Shaded + Edges** | Solid shading with edge overlay | ✅ |
-| **Shaded** | Solid shading only | |
-| **Wireframe** | Edges only | |
+| **Shaded** | Solid shading only | Planned |
+| **Wireframe** | Edges only | Planned |
+
+**Sketch Mode:** Bodies remain visible but are ghosted/dimmed to preserve sketch context.
 
 ### 18.4 Progressive Tessellation
 
