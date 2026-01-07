@@ -1,9 +1,13 @@
 # OneCAD
 
 ![License](https://img.shields.io/badge/license-MIT-blue.svg)
+
 ![C++](https://img.shields.io/badge/C++-20-blue.svg)
+
 ![Platform](https://img.shields.io/badge/platform-macOS-lightgrey.svg)
+
 ![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)
+
 
 
 > **⚠️ VibeCoding Alert**: Full codebase generated with AI. Project in active development—manual review & validation required.
