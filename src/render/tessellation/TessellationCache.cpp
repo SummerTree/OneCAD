@@ -27,13 +27,14 @@
 #include <TopTools_ListIteratorOfListOfShape.hxx>
 
 #include <cmath>
+#include <functional>
 #include <limits>
 #include <unordered_map>
 #include <unordered_set>
 
 namespace {
 
-constexpr double kSmoothEdgeAngleDeg = 5.0;
+constexpr double kSmoothEdgeAngleDeg = 30.0;  // Threshold for visible edges (was 5°)
 constexpr double kDegToRad = 3.14159265358979323846 / 180.0;
 const double kSmoothEdgeCos = std::cos(kSmoothEdgeAngleDeg * kDegToRad);
 
@@ -71,7 +72,7 @@ bool isSharpEdgeByAngle(const TopoDS_Edge& edge, const TopoDS_Face& f1, const To
     if (!sampleFaceNormal(edge, f1, &n1) || !sampleFaceNormal(edge, f2, &n2)) {
         return true;
     }
-    double dot = std::abs(n1.Dot(n2));
+    double dot = n1.Dot(n2);
     return dot < kSmoothEdgeCos;
 }
 
@@ -143,9 +144,148 @@ struct FaceDisjointSet {
     }
 };
 
+// Hash for position-based vertex grouping (quantized to avoid float noise).
+struct QuantizedPosition {
+    int64_t x;
+    int64_t y;
+    int64_t z;
+
+    bool operator==(const QuantizedPosition& other) const {
+        return x == other.x && y == other.y && z == other.z;
+    }
+};
+
+struct QuantizedPositionHash {
+    size_t operator()(const QuantizedPosition& key) const noexcept {
+        size_t h1 = std::hash<int64_t>{}(key.x);
+        size_t h2 = std::hash<int64_t>{}(key.y);
+        size_t h3 = std::hash<int64_t>{}(key.z);
+        size_t seed = h1;
+        seed ^= h2 + 0x9e3779b97f4a7c15ULL + (seed << 6) + (seed >> 2);
+        seed ^= h3 + 0x9e3779b97f4a7c15ULL + (seed << 6) + (seed >> 2);
+        return seed;
+    }
+};
+
+inline QuantizedPosition quantizePosition(const QVector3D& v) {
+    auto quantize = [](float f) -> int64_t {
+        return static_cast<int64_t>(std::llround(static_cast<double>(f) * 10000.0));
+    };
+    return {quantize(v.x()), quantize(v.y()), quantize(v.z())};
+}
+
 } // namespace
 
 namespace onecad::render {
+
+void TessellationCache::computeSmoothNormals(SceneMeshStore::Mesh& mesh) {
+    if (mesh.triangles.empty() || mesh.vertices.empty()) {
+        return;
+    }
+
+    // Step 1: Compute face normals for all triangles
+    std::vector<QVector3D> faceNormals(mesh.triangles.size());
+    std::vector<float> faceAreas(mesh.triangles.size());
+
+    for (size_t ti = 0; ti < mesh.triangles.size(); ++ti) {
+        const auto& tri = mesh.triangles[ti];
+        const QVector3D& v0 = mesh.vertices[tri.i0];
+        const QVector3D& v1 = mesh.vertices[tri.i1];
+        const QVector3D& v2 = mesh.vertices[tri.i2];
+
+        QVector3D edge1 = v1 - v0;
+        QVector3D edge2 = v2 - v0;
+        QVector3D cross = QVector3D::crossProduct(edge1, edge2);
+        float area = cross.length() * 0.5f;
+
+        if (area > 1e-8f) {
+            faceNormals[ti] = cross.normalized();
+            faceAreas[ti] = area;
+        } else {
+            faceNormals[ti] = QVector3D(0, 0, 1);
+            faceAreas[ti] = 0.0f;
+        }
+    }
+
+    // Step 2: Build position -> list of (triangleIdx, vertexSlot) map
+    struct TriVertex {
+        size_t triIdx;
+        int slot;  // 0, 1, or 2
+    };
+    std::unordered_map<QuantizedPosition, std::vector<TriVertex>, QuantizedPositionHash> positionToTriVerts;
+    positionToTriVerts.reserve(mesh.vertices.size());
+
+    for (size_t ti = 0; ti < mesh.triangles.size(); ++ti) {
+        const auto& tri = mesh.triangles[ti];
+        uint32_t indices[3] = {tri.i0, tri.i1, tri.i2};
+        for (int slot = 0; slot < 3; ++slot) {
+            QuantizedPosition posKey = quantizePosition(mesh.vertices[indices[slot]]);
+            positionToTriVerts[posKey].push_back({ti, slot});
+        }
+    }
+
+    // Step 3: For each position, group by smooth group and create split vertices
+    std::vector<QVector3D> newVertices;
+    std::vector<QVector3D> newNormals;
+    newVertices.reserve(mesh.vertices.size());
+    newNormals.reserve(mesh.vertices.size());
+
+    for (const auto& entry : positionToTriVerts) {
+        const auto& triVerts = entry.second;
+        // Group triangles by their smooth group
+        std::unordered_map<std::string, std::vector<TriVertex>> groupToTriVerts;
+        for (const auto& tv : triVerts) {
+            const auto& tri = mesh.triangles[tv.triIdx];
+            std::string group;
+            auto it = mesh.faceGroupByFaceId.find(tri.faceId);
+            if (it != mesh.faceGroupByFaceId.end()) {
+                group = it->second;
+            } else {
+                group = tri.faceId;  // Fallback: each face is its own group
+            }
+            groupToTriVerts[group].push_back(tv);
+        }
+
+        // For each smooth group at this position, create one vertex with averaged normal
+        for (auto& [group, groupTriVerts] : groupToTriVerts) {
+            // Compute area-weighted average normal
+            QVector3D avgNormal(0, 0, 0);
+            QVector3D pos;
+            bool posSet = false;
+
+            for (const auto& tv : groupTriVerts) {
+                const auto& tri = mesh.triangles[tv.triIdx];
+                uint32_t idx = (tv.slot == 0) ? tri.i0 : (tv.slot == 1) ? tri.i1 : tri.i2;
+                if (!posSet) {
+                    pos = mesh.vertices[idx];
+                    posSet = true;
+                }
+                avgNormal += faceNormals[tv.triIdx] * faceAreas[tv.triIdx];
+            }
+
+            if (avgNormal.lengthSquared() > 1e-8f) {
+                avgNormal.normalize();
+            } else {
+                avgNormal = QVector3D(0, 0, 1);
+            }
+
+            uint32_t newIdx = static_cast<uint32_t>(newVertices.size());
+            newVertices.push_back(pos);
+            newNormals.push_back(avgNormal);
+
+            // Update triangle indices to point to new vertex
+            for (const auto& tv : groupTriVerts) {
+                auto& tri = mesh.triangles[tv.triIdx];
+                if (tv.slot == 0) tri.i0 = newIdx;
+                else if (tv.slot == 1) tri.i1 = newIdx;
+                else tri.i2 = newIdx;
+            }
+        }
+    }
+
+    mesh.vertices = std::move(newVertices);
+    mesh.normals = std::move(newNormals);
+}
 
 SceneMeshStore::Mesh TessellationCache::buildMesh(const std::string& bodyId,
                                                   const TopoDS_Shape& shape,
@@ -280,6 +420,9 @@ SceneMeshStore::Mesh TessellationCache::buildMesh(const std::string& bodyId,
         const std::string& faceId = entry.second;
         mesh.faceGroupByFaceId[faceId] = faceGroups.find(faceId);
     }
+
+    // Compute smooth normals with vertex splitting at crease edges
+    computeSmoothNormals(mesh);
 
     return mesh;
 }

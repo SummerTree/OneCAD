@@ -5,6 +5,7 @@ add_library(onecad_ui STATIC
     theme/ThemeConfig.cpp
     theme/ThemeManager.cpp
     viewport/Viewport.cpp
+    viewport/RenderDebugPanel.cpp
     viewport/ViewportRevolve.cpp
     viewcube/ViewCube.cpp
     navigator/ModelNavigator.cpp

@@ -4,6 +4,7 @@
 #include <QColor>
 #include <QString>
 #include <QStringList>
+#include <QVector3D>
 #include <vector>
 
 namespace onecad::ui {
@@ -145,6 +146,15 @@ struct ThemeViewportBodyColors {
     QColor rim;
     QColor glow;
     QColor highlight;
+    QVector3D keyLightDir{ -0.4f, 0.5f, 0.75f };      // View-space light directions
+    QVector3D fillLightDir{ 0.6f, -0.2f, 0.55f };
+    float fillLightIntensity = 0.35f;
+    float ambientIntensity = 0.25f;
+    QVector3D hemiUpDir{ 0.0f, 1.0f, 0.0f };
+    QColor hemiSky = QColor(230, 235, 242);
+    QColor hemiGround = QColor(77, 71, 64);
+    float ambientGradientStrength = 0.08f;
+    QVector3D ambientGradientDir{ 0.0f, 1.0f, 0.0f };
 };
 
 struct ThemeViewportColors {

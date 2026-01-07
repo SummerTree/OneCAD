@@ -33,6 +33,7 @@ class ModelNavigator;
 class ContextToolbar;
 class ConstraintPanel;
 class SketchModePanel;
+class RenderDebugPanel;
 
 /**
  * @brief Main application window for OneCAD.
@@ -73,6 +74,10 @@ private:
     void positionToolbarOverlay();
     void setupNavigatorOverlayButton();
     void positionNavigatorOverlayButton();
+    void setupRenderDebugOverlay();
+    void positionRenderDebugButton();
+    void positionRenderDebugPanel();
+    void applyRenderDebugDefaults();
     void positionConstraintPanel();
     void positionSketchModePanel();
 
@@ -83,8 +88,10 @@ private:
     ModelNavigator* m_navigator = nullptr;
     ContextToolbar* m_toolbar = nullptr;
     SidebarToolButton* m_navigatorOverlayButton = nullptr;
+    SidebarToolButton* m_renderDebugButton = nullptr;
     ConstraintPanel* m_constraintPanel = nullptr;
     SketchModePanel* m_sketchModePanel = nullptr;
+    RenderDebugPanel* m_renderDebugPanel = nullptr;
 
     // Document model (owns all sketches)
     std::unique_ptr<app::Document> m_document;

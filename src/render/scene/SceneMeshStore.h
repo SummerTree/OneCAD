@@ -41,6 +41,7 @@ public:
         std::string bodyId;
         QMatrix4x4 modelMatrix;
         std::vector<QVector3D> vertices;
+        std::vector<QVector3D> normals;  // Per-vertex smoothed normals (same size as vertices)
         std::vector<Triangle> triangles;
         std::unordered_map<std::string, FaceTopology> topologyByFace;
         std::unordered_map<std::string, std::string> faceGroupByFaceId;

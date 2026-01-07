@@ -262,14 +262,17 @@ void Grid3D::render(const QMatrix4x4& viewProjection, float pixelScale, float vi
     m_shader->setUniformValue("uMVP", viewProjection);
     
     m_vao.bind();
-    
+
+    // Disable depth writes so grid never occludes bodies
+    glDepthMask(GL_FALSE);
     glEnable(GL_BLEND);
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-    
+
     glDrawArrays(GL_LINES, 0, m_lineCount);
-    
+
     glDisable(GL_BLEND);
-    
+    glDepthMask(GL_TRUE);  // Restore depth writes
+
     m_vao.release();
     m_shader->release();
 }

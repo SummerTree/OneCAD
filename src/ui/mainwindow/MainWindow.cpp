@@ -1,6 +1,7 @@
 #include "MainWindow.h"
 #include "../theme/ThemeManager.h"
 #include "../viewport/Viewport.h"
+#include "../viewport/RenderDebugPanel.h"
 #include "../../render/Camera3D.h"
 #include "../../core/sketch/Sketch.h"
 #include "../../core/sketch/tools/SketchToolManager.h"
@@ -454,6 +455,135 @@ void MainWindow::positionNavigatorOverlayButton() {
     m_navigatorOverlayButton->raise();
 }
 
+void MainWindow::setupRenderDebugOverlay() {
+    if (!m_viewport) {
+        return;
+    }
+
+    m_renderDebugButton = new SidebarToolButton(QStringLiteral("D"),
+                                                tr("Toggle render debug panel"),
+                                                m_viewport);
+    m_renderDebugButton->setFixedSize(42, 42);
+
+    connect(m_renderDebugButton, &SidebarToolButton::clicked, this, [this]() {
+        if (!m_renderDebugPanel) {
+            return;
+        }
+        const bool visible = !m_renderDebugPanel->isVisible();
+        m_renderDebugPanel->setVisible(visible);
+        positionRenderDebugPanel();
+    });
+
+    m_renderDebugPanel = new RenderDebugPanel(m_viewport);
+    m_renderDebugPanel->setVisible(false);
+
+    connect(m_renderDebugPanel, &RenderDebugPanel::debugTogglesChanged, this, [this]() {
+        if (!m_viewport || !m_renderDebugPanel) {
+            return;
+        }
+        const auto toggles = m_renderDebugPanel->debugToggles();
+        m_viewport->setDebugToggles(toggles.normals,
+                                    toggles.depth,
+                                    toggles.wireframe,
+                                    toggles.disableGamma,
+                                    toggles.matcap);
+    });
+
+    connect(m_renderDebugPanel, &RenderDebugPanel::lightRigChanged, this, [this]() {
+        if (!m_viewport || !m_renderDebugPanel) {
+            return;
+        }
+        const auto rig = m_renderDebugPanel->lightRig();
+        m_viewport->setRenderLightRig(rig.keyDir,
+                                      rig.fillDir,
+                                      rig.fillIntensity,
+                                      rig.ambientIntensity,
+                                      rig.hemiUpDir,
+                                      rig.gradientDir,
+                                      rig.gradientStrength);
+    });
+
+    connect(m_renderDebugPanel, &RenderDebugPanel::resetToThemeRequested, this, [this]() {
+        applyRenderDebugDefaults();
+    });
+
+    connect(m_viewport, &Viewport::debugTogglesChanged, this,
+            [this](bool normals, bool depth, bool wireframe, bool disableGamma, bool matcap) {
+                if (!m_renderDebugPanel) {
+                    return;
+                }
+                RenderDebugPanel::DebugToggles toggles;
+                toggles.normals = normals;
+                toggles.depth = depth;
+                toggles.wireframe = wireframe;
+                toggles.disableGamma = disableGamma;
+                toggles.matcap = matcap;
+                m_renderDebugPanel->setDebugToggles(toggles);
+            });
+
+    RenderDebugPanel::DebugToggles toggles;
+    toggles.normals = m_viewport->debugNormalsEnabled();
+    toggles.depth = m_viewport->debugDepthEnabled();
+    toggles.wireframe = m_viewport->wireframeOnlyEnabled();
+    toggles.disableGamma = m_viewport->gammaDisabled();
+    toggles.matcap = m_viewport->matcapEnabled();
+    m_renderDebugPanel->setDebugToggles(toggles);
+
+    applyRenderDebugDefaults();
+    positionRenderDebugButton();
+}
+
+void MainWindow::positionRenderDebugButton() {
+    if (!m_viewport || !m_renderDebugButton) {
+        return;
+    }
+    const int margin = 20;
+    int x = margin;
+    int y = margin;
+    if (m_navigatorOverlayButton) {
+        y = m_navigatorOverlayButton->y() + m_navigatorOverlayButton->height() + 10;
+    }
+    m_renderDebugButton->move(x, y);
+    m_renderDebugButton->raise();
+}
+
+void MainWindow::positionRenderDebugPanel() {
+    if (!m_viewport || !m_renderDebugPanel || !m_renderDebugPanel->isVisible()) {
+        return;
+    }
+    const int margin = 20;
+    int x = margin;
+    int y = margin;
+    if (m_renderDebugButton) {
+        y = m_renderDebugButton->y() + m_renderDebugButton->height() + 10;
+    }
+    m_renderDebugPanel->move(x, y);
+    m_renderDebugPanel->raise();
+}
+
+void MainWindow::applyRenderDebugDefaults() {
+    if (!m_viewport || !m_renderDebugPanel) {
+        return;
+    }
+    const auto& body = ThemeManager::instance().currentTheme().viewport.body;
+    RenderDebugPanel::LightRig rig;
+    rig.keyDir = body.keyLightDir;
+    rig.fillDir = body.fillLightDir;
+    rig.fillIntensity = body.fillLightIntensity;
+    rig.ambientIntensity = body.ambientIntensity;
+    rig.hemiUpDir = body.hemiUpDir;
+    rig.gradientDir = body.ambientGradientDir;
+    rig.gradientStrength = body.ambientGradientStrength;
+    m_renderDebugPanel->setLightRig(rig);
+    m_viewport->setRenderLightRig(rig.keyDir,
+                                  rig.fillDir,
+                                  rig.fillIntensity,
+                                  rig.ambientIntensity,
+                                  rig.hemiUpDir,
+                                  rig.gradientDir,
+                                  rig.gradientStrength);
+}
+
 void MainWindow::positionConstraintPanel() {
     if (!m_viewport || !m_constraintPanel) {
         return;
@@ -520,6 +650,7 @@ void MainWindow::setupViewport() {
     });
 
     setupNavigatorOverlayButton();
+    setupRenderDebugOverlay();
 
     // Create constraint panel (hidden initially)
     m_constraintPanel = new ConstraintPanel(m_viewport);
@@ -553,6 +684,8 @@ bool MainWindow::eventFilter(QObject* obj, QEvent* event) {
     if (obj == m_viewport && event->type() == QEvent::Resize) {
         positionToolbarOverlay();
         positionNavigatorOverlayButton();
+        positionRenderDebugButton();
+        positionRenderDebugPanel();
         positionConstraintPanel();
         positionSketchModePanel();
     }

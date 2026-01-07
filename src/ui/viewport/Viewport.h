@@ -5,6 +5,7 @@
 #include <QOpenGLFunctions>
 #include <QPoint>
 #include <QElapsedTimer>
+#include <QTimer>
 #include <QMatrix4x4>
 #include <QVector3D>
 #include <QVariantAnimation>
@@ -99,6 +100,13 @@ public:
     // Sketch update notification
     void notifySketchUpdated();
 
+    // Debug state accessors
+    bool debugNormalsEnabled() const { return m_debugNormals; }
+    bool debugDepthEnabled() const { return m_debugDepth; }
+    bool wireframeOnlyEnabled() const { return m_wireframeOnly; }
+    bool gammaDisabled() const { return m_disableGamma; }
+    bool matcapEnabled() const { return m_useMatcap; }
+
     // Document access (for rendering all sketches in 3D mode)
     void setDocument(app::Document* document);
     void setCommandProcessor(app::commands::CommandProcessor* processor);
@@ -115,6 +123,7 @@ signals:
     void sketchUpdated();  // Emitted when geometry/constraints change
     void extrudeToolActiveChanged(bool active);
     void revolveToolActiveChanged(bool active);
+    void debugTogglesChanged(bool normals, bool depth, bool wireframe, bool disableGamma, bool matcap);
 
 public slots:
     void beginPlaneSelection();
@@ -136,6 +145,14 @@ public slots:
     void setReferenceSketch(const QString& sketchId);
     bool activateExtrudeTool();
     bool activateRevolveTool();
+    void setDebugToggles(bool normals, bool depth, bool wireframe, bool disableGamma, bool matcap);
+    void setRenderLightRig(const QVector3D& keyDir,
+                           const QVector3D& fillDir,
+                           float fillIntensity,
+                           float ambientIntensity,
+                           const QVector3D& hemiUpDir,
+                           const QVector3D& gradientDir,
+                           float gradientStrength);
 
     // Views
     void setFrontView();
@@ -170,6 +187,16 @@ protected:
     bool event(QEvent* event) override;
 
 private:
+    struct RenderTuning {
+        QVector3D keyLightDir{ -0.4f, 0.5f, 0.75f };
+        QVector3D fillLightDir{ 0.6f, -0.2f, 0.55f };
+        float fillLightIntensity = 0.35f;
+        float ambientIntensity = 0.25f;
+        QVector3D hemiUpDir{ 0.0f, 1.0f, 0.0f };
+        QVector3D gradientDir{ 0.0f, 1.0f, 0.0f };
+        float gradientStrength = 0.08f;
+    };
+
     void updateModelSelectionFilter();
     void handleModelSelectionChanged();
     core::sketch::Vec2d screenToSketchPlane(const QPoint& screenPos,
@@ -255,6 +282,18 @@ private:
     int m_width = 1;
     int m_height = 1;
     double m_pixelScale = 1.0;
+
+    // Debug rendering modes (F1-F4 toggles)
+    bool m_debugNormals = false;
+    bool m_debugDepth = false;
+    bool m_wireframeOnly = false;
+    bool m_disableGamma = false;
+    bool m_useMatcap = false;  // F5: MatCap shading mode
+    RenderTuning m_renderTuning;
+
+    // Dynamic quality during navigation
+    bool m_isNavigating = false;
+    QTimer* m_navigationTimer = nullptr;
 
     // Signal connection management
     QMetaObject::Connection m_themeConnection;

@@ -140,6 +140,15 @@ ThemeDefinition makeLightTheme() {
     theme.viewport.body.rim = QColor(210, 220, 232);
     theme.viewport.body.glow = QColor(kAccent.red(), kAccent.green(), kAccent.blue());
     theme.viewport.body.highlight = QColor(210, 220, 232);
+    theme.viewport.body.keyLightDir = QVector3D(-0.4f, 0.5f, 0.75f);
+    theme.viewport.body.fillLightDir = QVector3D(0.6f, -0.2f, 0.55f);
+    theme.viewport.body.fillLightIntensity = 0.35f;
+    theme.viewport.body.ambientIntensity = 0.25f;
+    theme.viewport.body.hemiUpDir = QVector3D(0.0f, 1.0f, 0.0f);
+    theme.viewport.body.hemiSky = QColor(230, 235, 242);
+    theme.viewport.body.hemiGround = QColor(77, 71, 64);
+    theme.viewport.body.ambientGradientStrength = 0.08f;
+    theme.viewport.body.ambientGradientDir = QVector3D(0.0f, 1.0f, 0.0f);
 
     theme.sketch.normalGeometry = QColor(255, 255, 255);
     theme.sketch.constructionGeometry = QColor(130, 150, 190);
@@ -278,6 +287,15 @@ ThemeDefinition makeDarkTheme() {
     theme.viewport.body.rim = QColor(196, 206, 218);
     theme.viewport.body.glow = QColor(kAccent.red(), kAccent.green(), kAccent.blue());
     theme.viewport.body.highlight = QColor(196, 206, 218);
+    theme.viewport.body.keyLightDir = QVector3D(-0.4f, 0.5f, 0.75f);
+    theme.viewport.body.fillLightDir = QVector3D(0.6f, -0.2f, 0.55f);
+    theme.viewport.body.fillLightIntensity = 0.35f;
+    theme.viewport.body.ambientIntensity = 0.25f;
+    theme.viewport.body.hemiUpDir = QVector3D(0.0f, 1.0f, 0.0f);
+    theme.viewport.body.hemiSky = QColor(160, 168, 182);
+    theme.viewport.body.hemiGround = QColor(60, 55, 52);
+    theme.viewport.body.ambientGradientStrength = 0.1f;
+    theme.viewport.body.ambientGradientDir = QVector3D(0.0f, 1.0f, 0.0f);
 
     theme.sketch.normalGeometry = QColor(245, 245, 245);
     theme.sketch.constructionGeometry = QColor(120, 138, 170);

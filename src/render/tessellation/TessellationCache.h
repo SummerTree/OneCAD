@@ -39,6 +39,10 @@ private:
                                                    const TopoDS_Face& face,
                                                    kernel::elementmap::ElementMap& elementMap,
                                                    const VisibleEdgeSet& visibleEdges) const;
+
+    // Compute smooth normals with vertex splitting at crease edges
+    static void computeSmoothNormals(SceneMeshStore::Mesh& mesh);
+
     Settings settings_{};
 };
 

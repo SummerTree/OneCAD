@@ -180,6 +180,14 @@ Viewport::Viewport(QWidget* parent)
 
     m_nativeZoomTimer.start();
 
+    // Setup navigation quality timer (debounce end of navigation)
+    m_navigationTimer = new QTimer(this);
+    m_navigationTimer->setSingleShot(true);
+    connect(m_navigationTimer, &QTimer::timeout, this, [this]() {
+        m_isNavigating = false;
+        update();  // Final high-quality redraw
+    });
+
     // Setup ViewCube
     m_viewCube = new ViewCube(this);
     m_viewCube->setCamera(m_camera.get());
@@ -341,6 +349,14 @@ void Viewport::updateTheme() {
         applySketchColors(theme.sketch, &style);
         m_sketchRenderer->setStyle(style);
     }
+    const auto& body = theme.viewport.body;
+    m_renderTuning.keyLightDir = body.keyLightDir;
+    m_renderTuning.fillLightDir = body.fillLightDir;
+    m_renderTuning.fillLightIntensity = body.fillLightIntensity;
+    m_renderTuning.ambientIntensity = body.ambientIntensity;
+    m_renderTuning.hemiUpDir = body.hemiUpDir;
+    m_renderTuning.gradientDir = body.ambientGradientDir;
+    m_renderTuning.gradientStrength = body.ambientGradientStrength;
     update();
 }
 
@@ -415,11 +431,20 @@ void Viewport::paintGL() {
         style.rimColor = theme.viewport.body.rim;
         style.glowColor = theme.viewport.body.glow;
         style.highlightColor = theme.viewport.body.highlight;
+        style.hemiSkyColor = theme.viewport.body.hemiSky;
+        style.hemiGroundColor = theme.viewport.body.hemiGround;
         style.highlightStrength = 0.08f;
         style.drawGlow = true;
         style.glowAlpha = 0.18f;
         style.drawEdges = true;
         style.previewAlpha = 0.35f;
+        style.keyLightDir = m_renderTuning.keyLightDir;
+        style.fillLightDir = m_renderTuning.fillLightDir;
+        style.fillLightIntensity = m_renderTuning.fillLightIntensity;
+        style.ambientIntensity = m_renderTuning.ambientIntensity;
+        style.hemiUpDir = m_renderTuning.hemiUpDir;
+        style.ambientGradientStrength = m_renderTuning.gradientStrength;
+        style.ambientGradientDir = m_renderTuning.gradientDir;
         if (m_inSketchMode) {
             style.ghosted = true;
             style.ghostFactor = 0.6f;
@@ -429,19 +454,23 @@ void Viewport::paintGL() {
             style.highlightStrength = 0.04f;
         }
 
-        QVector3D lightDir = -m_camera->forward();
-        if (lightDir.lengthSquared() < 1e-6f) {
-            lightDir = QVector3D(0.0f, 0.0f, 1.0f);
-        } else {
-            lightDir.normalize();
+        // Debug visualization modes (F1-F5)
+        style.debugNormals = m_debugNormals;
+        style.debugDepth = m_debugDepth;
+        style.wireframeOnly = m_wireframeOnly;
+        style.disableGamma = m_disableGamma;
+        style.useMatcap = m_useMatcap;
+        style.nearPlane = m_camera->nearPlane();
+        style.farPlane = m_camera->farPlane();
+        style.isOrtho = (m_camera->projectionType() == render::Camera3D::ProjectionType::Orthographic);
+
+        // Dynamic quality: reduce during navigation for better responsiveness
+        if (m_isNavigating) {
+            style.drawEdges = false;
+            style.drawGlow = false;
         }
-        QVector3D viewDir = -m_camera->forward();
-        if (viewDir.lengthSquared() < 1e-6f) {
-            viewDir = QVector3D(0.0f, 0.0f, 1.0f);
-        } else {
-            viewDir.normalize();
-        }
-        m_bodyRenderer->render(viewProjection, lightDir, viewDir, style);
+
+        m_bodyRenderer->render(viewProjection, view, style);
     }
 
     // Render sketch(es)
@@ -1032,13 +1061,55 @@ void Viewport::updateSketchRenderingState() {
     m_sketchRenderer->updateConstraints();
 }
 
+void Viewport::setDebugToggles(bool normals, bool depth, bool wireframe, bool disableGamma, bool matcap) {
+    if (normals && depth) {
+        depth = false;
+    }
+    if (m_debugNormals == normals &&
+        m_debugDepth == depth &&
+        m_wireframeOnly == wireframe &&
+        m_disableGamma == disableGamma &&
+        m_useMatcap == matcap) {
+        return;
+    }
+
+    m_debugNormals = normals;
+    m_debugDepth = depth;
+    m_wireframeOnly = wireframe;
+    m_disableGamma = disableGamma;
+    m_useMatcap = matcap;
+    update();
+    emit debugTogglesChanged(m_debugNormals, m_debugDepth, m_wireframeOnly, m_disableGamma, m_useMatcap);
+}
+
+void Viewport::setRenderLightRig(const QVector3D& keyDir,
+                                 const QVector3D& fillDir,
+                                 float fillIntensity,
+                                 float ambientIntensity,
+                                 const QVector3D& hemiUpDir,
+                                 const QVector3D& gradientDir,
+                                 float gradientStrength) {
+    m_renderTuning.keyLightDir = keyDir;
+    m_renderTuning.fillLightDir = fillDir;
+    m_renderTuning.fillLightIntensity = fillIntensity;
+    m_renderTuning.ambientIntensity = ambientIntensity;
+    m_renderTuning.hemiUpDir = hemiUpDir;
+    m_renderTuning.gradientDir = gradientDir;
+    m_renderTuning.gradientStrength = gradientStrength;
+    update();
+}
+
 void Viewport::handlePan(float dx, float dy) {
+    m_isNavigating = true;
+    m_navigationTimer->start(150);  // 150ms debounce
     m_camera->pan(dx, dy);
     update();
     emit cameraChanged();
 }
 
 void Viewport::handleOrbit(float dx, float dy) {
+    m_isNavigating = true;
+    m_navigationTimer->start(150);  // 150ms debounce
     // Sensitivity adjustment
     m_camera->orbit(-dx * kOrbitSensitivity, dy * kOrbitSensitivity);
     update();
@@ -1046,6 +1117,8 @@ void Viewport::handleOrbit(float dx, float dy) {
 }
 
 void Viewport::handleZoom(float delta) {
+    m_isNavigating = true;
+    m_navigationTimer->start(150);  // 150ms debounce
     m_camera->zoom(delta);
     update();
     emit cameraChanged();
@@ -1381,6 +1454,37 @@ void Viewport::keyPressEvent(QKeyEvent* event) {
         cancelPlaneSelection();
         event->accept();
         return;
+    }
+
+    // Debug visualization toggles (F1-F5)
+    switch (event->key()) {
+    case Qt::Key_F1:
+        setDebugToggles(!m_debugNormals, false, m_wireframeOnly, m_disableGamma, m_useMatcap);
+        qDebug() << "Debug normals:" << (m_debugNormals ? "ON" : "OFF");
+        event->accept();
+        return;
+    case Qt::Key_F2:
+        setDebugToggles(false, !m_debugDepth, m_wireframeOnly, m_disableGamma, m_useMatcap);
+        qDebug() << "Debug depth:" << (m_debugDepth ? "ON" : "OFF");
+        event->accept();
+        return;
+    case Qt::Key_F3:
+        setDebugToggles(m_debugNormals, m_debugDepth, !m_wireframeOnly, m_disableGamma, m_useMatcap);
+        qDebug() << "Wireframe only:" << (m_wireframeOnly ? "ON" : "OFF");
+        event->accept();
+        return;
+    case Qt::Key_F4:
+        setDebugToggles(m_debugNormals, m_debugDepth, m_wireframeOnly, !m_disableGamma, m_useMatcap);
+        qDebug() << "Gamma correction:" << (m_disableGamma ? "DISABLED" : "ENABLED");
+        event->accept();
+        return;
+    case Qt::Key_F5:
+        setDebugToggles(m_debugNormals, m_debugDepth, m_wireframeOnly, m_disableGamma, !m_useMatcap);
+        qDebug() << "MatCap shading:" << (m_useMatcap ? "ON" : "OFF");
+        event->accept();
+        return;
+    default:
+        break;
     }
 
     // Forward to sketch tool if active
