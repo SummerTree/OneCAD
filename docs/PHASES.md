@@ -2,7 +2,7 @@
 
 This document outlines the phased implementation strategy for OneCAD, ensuring a robust foundation before adding complexity.
 
-**Last Updated:** 2026-01-09
+**Last Updated:** 2026-01-10
 
 ---
 
@@ -10,37 +10,41 @@ This document outlines the phased implementation strategy for OneCAD, ensuring a
 
 | Phase | Status | Progress |
 |-------|--------|----------|
-| Phase 1.1 Project & Rendering | In Progress | ~95% |
-| Phase 1.2 OCCT Kernel | Partial | ~40% |
-| Phase 1.3 Topological Naming | Substantial | ~90% |
-| Phase 1.4 Command & Document | In Progress | ~85% |
+| Phase 1.1 Project & Rendering | **Complete** | ~98% |
+| Phase 1.2 OCCT Kernel | Partial | ~50% |
+| Phase 1.3 Topological Naming | **Complete** | ~95% |
+| Phase 1.4 Command & Document | **Complete** | **100%** |
 | Phase 2 Sketching Engine | **Complete** | **100%** |
-| **Phase 3 Solid Modeling** | **In Progress** | **~65%** |
-| ↳ 3.1 I/O Foundation | Not Started | 0% |
-| ↳ 3.2 Parametric Engine | Not Started | 0% |
+| **Phase 3 Solid Modeling** | **In Progress** | **~85%** |
+| ↳ 3.1 I/O Foundation | **Complete** | **100%** |
+| ↳ 3.2 Parametric Engine | Partial | ~25% |
 | ↳ 3.3 Modeling Operations | **Complete** | **100%** |
 | ↳ 3.4 Pattern Operations | Not Started | 0% |
-| ↳ 3.5 UI Polish | In Progress | ~20% |
-| Phase 4 Advanced Modeling | Not Started | 0% |
+| ↳ 3.5 UI Polish | In Progress | ~40% |
+| Phase 4 Advanced Modeling | Partial | ~10% |
 | Phase 5 Optimization & Release | Not Started | 0% |
 
 **Key Achievements:**
 - ✅ PlaneGCS solver fully integrated (1450 LOC, all 15 constraint types working)
-- ✅ Loop detection complete (1985 LOC with DFS, shoelace area, hole detection)
-- ✅ All 7 sketch tools production-ready (2618 LOC total)
+- ✅ Loop detection complete (1887 LOC with DFS, shoelace area, hole detection)
+- ✅ All 7 sketch tools production-ready (2054 LOC total)
 - ✅ SketchRenderer complete (2472 LOC with VBO, adaptive tessellation)
 - ✅ SnapManager complete (1166 LOC, 8 snap types)
 - ✅ AutoConstrainer complete (1091 LOC, 7 inference rules)
 - ✅ Extrude v1a complete (SketchRegion → new body, preview, draft angle working)
 - ✅ **Push/Pull Direct Modeling** (Face input, smart boolean Add/Cut detection)
 - ✅ **Fillet/Chamfer Tool** (Variable radius, drag interaction, tangent edge chaining)
-- ✅ **Shell Tool** (Hollow solid, multi-face opening, inward thickening)
+- ✅ **Shell Tool** (Hollow solid, single-face working, multi-face wiring pending)
 - ✅ **Boolean Operations** (Union, Cut, Intersect, smart mode detection)
 - ✅ **EdgeChainer** (Tangent continuity propagation for edge selection)
 - ✅ Revolve tool complete (Profile+Axis, drag interaction, boolean mode)
 - ✅ UI integration complete (ContextToolbar, ConstraintPanel, DimensionEditor, ViewCube)
 - ✅ Render Debug Panel added (visualizing normals, wireframes, bounds)
 - ✅ ModelNavigator enhancements (visibility toggling, selection filtering)
+- ✅ **Full I/O Layer** (OneCAD native format, STEP import/export, ZIP packaging)
+- ✅ **StartOverlay + ProjectTile** (Project browser with thumbnails)
+- ✅ **ThemeManager** (Light/Dark theme system, 885 LOC total)
+- ✅ **9 Commands** (Add/Delete/Modify/Rename Body, Add/Delete/Rename Sketch, Visibility)
 
 ---
 
@@ -78,13 +82,15 @@ This document outlines the phased implementation strategy for OneCAD, ensuring a
     - ⚠️ Missing: chain ops, merge scenarios, pattern operations
 - [x] **Document Integration**: ElementMap wired into Document (body registration + tessellation IDs).
 
-### 1.4 Command & Document Infrastructure
-- [~] **Document Model**: Owns sketches + bodies + operations list; persistence/history replay still pending.
-- [x] **Selection Manager**: Ray-casting picking, deep select, click cycling, hover/selection highlights.
-- [x] **Command Processor**: Execute/undo/redo with full transaction support (begin/end/cancel, command grouping). 197 LOC.
-- [x] **AddBodyCommand**: Working command for adding bodies to document.
-- [x] **ModifyBodyCommand**: Command for applying boolean/feature results to existing bodies.
-- [~] **Additional Commands**: Visibility toggling implemented; others pending.
+### 1.4 Command & Document Infrastructure ✅ COMPLETE
+- [x] **Document Model**: Owns sketches + bodies + operations list. Full CRUD, visibility, isolation, JSON serialization. **Complete**.
+- [x] **Selection Manager**: Ray-casting picking, deep select, click cycling, hover/selection highlights. **Complete**.
+- [x] **Command Processor**: Execute/undo/redo with full transaction support (begin/end/cancel, command grouping, rollback). **Complete**.
+- [x] **All 9 Commands Implemented**:
+    - ✅ AddBodyCommand, DeleteBodyCommand, ModifyBodyCommand, RenameBodyCommand
+    - ✅ DeleteSketchCommand, RenameSketchCommand
+    - ✅ ToggleVisibilityCommand (body + sketch)
+    - ✅ Full undo/redo with state preservation
 
 ---
 
@@ -151,54 +157,87 @@ This document outlines the phased implementation strategy for OneCAD, ensuring a
 
 ## Phase 3: Solid Modeling Operations
 **Focus:** Enabling 3D geometry creation, manipulation, and file I/O.
-**Status:** In Progress (~65% Complete)
-**Estimated Remaining:** ~4,800 LOC across 4 sub-phases
+**Status:** In Progress (~85% Complete)
+**Implemented:** ~6,500 LOC | **Remaining:** ~2,000 LOC (Patterns + Parametric UI)
 
 ### Implementation Status Summary
 
-| Sub-Phase | Focus | Status | Est. LOC |
-|-----------|-------|--------|----------|
-| **3.1 I/O Foundation** | Save/Load + STEP | Not Started | ~1,400 |
-| **3.2 Parametric Engine** | History Replay | Not Started | ~1,900 |
-| **3.3 Modeling Operations** | Fillet/Shell/Push-Pull | **Complete** | - |
-| **3.4 Pattern Operations** | Linear/Circular | Not Started | ~1,300 |
-| **3.5 UI Polish** | Command Search, Box Select | In Progress | ~1,100 |
+| Sub-Phase | Focus | Status | Actual LOC |
+|-----------|-------|--------|------------|
+| **3.1 I/O Foundation** | Save/Load + STEP | **Complete** | ~2,400 |
+| **3.2 Parametric Engine** | History Replay | Partial | ~500 done |
+| **3.3 Modeling Operations** | Fillet/Shell/Push-Pull | **Complete** | ~1,650 |
+| **3.4 Pattern Operations** | Linear/Circular | Not Started | 0 |
+| **3.5 UI Polish** | Command Search, Box Select | In Progress | ~1,400 |
 
 ---
 
-### 3.1 I/O Foundation (Critical Path — P0)
+### 3.1 I/O Foundation ✅ COMPLETE
 **Goal:** Enable save/load + STEP interoperability
-**Dependencies:** None (can start immediately)
+**Status:** **100% Complete** — Full implementation in `src/io/`
 
-| Task | Files | Status | Est. LOC |
-|------|-------|--------|----------|
-| NativeFormat class | `src/io/native/NativeFormat.h/cpp` | [ ] | 400 |
-| Document JSON serialization | Uses `Document.toJson()` | [ ] | 100 |
-| BREP cache writer | `src/io/native/BrepCache.h/cpp` | [ ] | 200 |
-| STEP import | `src/io/step/StepImporter.h/cpp` | [ ] | 350 |
-| STEP export | `src/io/step/StepExporter.h/cpp` | [ ] | 250 |
-| Save/Open UI | MainWindow integration | [ ] | 100 |
+| Task | Files | Status | LOC |
+|------|-------|--------|-----|
+| OneCADFileIO | `src/io/OneCADFileIO.h/cpp` | [x] | 172 |
+| DocumentIO | `src/io/DocumentIO.h/cpp` | [x] | 305 |
+| SketchIO | `src/io/SketchIO.h/cpp` | [x] | 211 |
+| ElementMapIO | `src/io/ElementMapIO.h/cpp` | [x] | 418 |
+| HistoryIO | `src/io/HistoryIO.h/cpp` | [x] | 316 |
+| ManifestIO | `src/io/ManifestIO.h/cpp` | [x] | 157 |
+| JSONUtils | `src/io/JSONUtils.h/cpp` | [x] | 146 |
+| Package abstraction | `src/io/Package.h/cpp` | [x] | 80 |
+| ZipPackage | `src/io/ZipPackage.h/cpp` | [x] | 388 |
+| DirectoryPackage | `src/io/DirectoryPackage.h/cpp` | [x] | 181 |
+| STEP import | `src/io/step/StepImporter.h/cpp` | [x] | 130 |
+| STEP export | `src/io/step/StepExporter.h/cpp` | [x] | 120 |
 
-**File Format:** Hybrid (JSON operations + BREP cache)
-- Primary: JSON-based operation list (parametric, rebuildable)
-- Cache: BREP geometry for fast loading
-- Versioning: Prompt upgrade if newer version
+**File Format:** `.onecad` (ZIP) or `.onecadpkg` (directory)
+- `manifest.json` — Magic number, version, content summary, integrity hash
+- `document.json` — Sketch/body references, file paths
+- `sketches/{uuid}.json` — Full sketch serialization with entity data
+- `bodies/{uuid}.json + bodies/{uuid}.brep` — Metadata + OCCT BREP binary
+- `history/ops.jsonl + history/state.json` — JSONL operation history (Git-friendly)
+- `topology/elementmap.json` — Topological naming data
+- `thumbnail.png` — Optional project thumbnail
+
+**Features:**
+- ✅ Dual package backend (QuaZip primary, system zip fallback)
+- ✅ BREP binary caching for fast loading
+- ✅ Deterministic JSON (sorted keys, consistent indentation)
+- ✅ Legacy schema migration for sketch entities
+- ✅ Full error handling with Result structs
 
 ---
 
-### 3.2 Parametric Engine (Critical Path — P0)
+### 3.2 Parametric Engine (Partial — ~25%)
 **Goal:** Enable edit-and-regenerate workflow
-**Dependencies:** Phase 3.1 (file format stores history)
+**Status:** Data structures implemented, no regeneration logic yet
 
-| Task | Files | Status | Est. LOC |
-|------|-------|--------|----------|
-| DependencyGraph | `src/app/history/DependencyGraph.h/cpp` | [ ] | 400 |
-| RegenerationEngine | `src/app/history/Regeneration.h/cpp` | [ ] | 600 |
-| FeatureHistory class | `src/app/history/FeatureHistory.h/cpp` | [ ] | 300 |
-| History UI panel | `src/ui/history/HistoryPanel.h/cpp` | [ ] | 400 |
-| Feature card widget | `src/ui/history/FeatureCard.h/cpp` | [ ] | 200 |
+| Task | Files | Status | LOC |
+|------|-------|--------|-----|
+| OperationRecord struct | `src/app/document/OperationRecord.h` | [x] | ~150 |
+| HistoryIO serialization | `src/io/HistoryIO.h/cpp` | [x] | 316 |
+| DependencyGraph | `src/app/history/DependencyGraph.h/cpp` | [ ] | - |
+| RegenerationEngine | `src/app/history/Regeneration.h/cpp` | [ ] | - |
+| History UI panel | `src/ui/history/HistoryPanel.h/cpp` | [ ] | - |
+| Feature card widget | `src/ui/history/FeatureCard.h/cpp` | [ ] | - |
 
-**Behaviors:**
+**What's Implemented:**
+- ✅ `OperationRecord` struct with Extrude/Revolve support
+- ✅ `ExtrudeInput` variants: SketchRegionRef, FaceRef
+- ✅ `OperationParams` variants: ExtrudeParams, RevolveParams
+- ✅ BooleanMode enum: NewBody, Add, Cut, Intersect
+- ✅ HistoryIO: JSONL serialization of operations
+- ✅ Document stores operations vector
+
+**What's Missing:**
+- ❌ DependencyGraph for tracking feature relationships
+- ❌ RegenerationEngine for replay/rebuild
+- ❌ History UI panel (no `src/ui/history/` directory exists)
+- ❌ Commands don't create OperationRecords (tools create records directly)
+- ❌ No feature suppression or editing workflow
+
+**Behaviors (Planned):**
 - Regen failure → Rollback to last valid state
 - Feature suppression → Gray + skip in regen
 - Feature reorder → Not allowed (fixed creation order)
@@ -208,26 +247,33 @@ This document outlines the phased implementation strategy for OneCAD, ensuring a
 
 ### 3.3 Modeling Operations (Complete — P1) ✅
 **Goal:** Complete core v1.0 modeling operations
-**Status:** **100% Complete**
+**Status:** **100% Complete** (minor UI wiring TODOs)
 
 #### Completed Operations
-- [x] **Extrude / Push-Pull** (ExtrudeTool.cpp): 
+- [x] **Extrude / Push-Pull** (ExtrudeTool.cpp, 500 LOC):
     - ✅ SketchRegion input with preview & draft angle
     - ✅ Face input (Push/Pull) with auto-boolean detection (Add/Cut)
     - ✅ Smart Boolean override logic
-- [x] **Revolve** (RevolveTool.cpp): Profile+Axis selection, drag interaction, boolean mode.
-- [x] **Fillet/Chamfer** (FilletChamferTool.cpp): 
+    - ✅ Command integration (AddBodyCommand, ModifyBodyCommand)
+- [x] **Revolve** (RevolveTool.cpp, 430 LOC):
+    - ✅ Profile+Axis selection, drag interaction, boolean mode
+    - ✅ Two-step workflow (profile → axis)
+    - ✅ Sketch line or body edge as axis
+- [x] **Fillet/Chamfer** (FilletChamferTool.cpp, 408 LOC):
     - ✅ Combined tool (drag right=fillet, left=chamfer)
     - ✅ Variable radius with real-time preview
     - ✅ Edge chaining via `EdgeChainer` (tangent propagation)
-- [x] **Shell** (ShellTool.cpp):
+    - ⚠️ TODO: Wire Tab key in Viewport for mode toggle
+- [x] **Shell** (ShellTool.cpp, 312 LOC):
     - ✅ Hollow solid creation (`BRepOffsetAPI_MakeThickSolid`)
-    - ✅ Multi-face opening selection
-    - ✅ Inward thickening with validation
-- [x] **Boolean Operations** (BooleanOperation.cpp):
+    - ✅ Single-face opening works
+    - ⚠️ TODO: Wire Shift+click for multi-face selection
+    - ⚠️ TODO: Wire Enter key for face confirmation
+- [x] **Boolean Operations** (BooleanOperation.cpp, 130 LOC):
     - ✅ Union/Cut/Intersect (Add/Subtract/Common)
     - ✅ `ModifyBodyCommand` integration
-- [x] **Utilities**: `EdgeChainer` (BFS tangent search), `BooleanOperation` (mode detection).
+    - ✅ Smart mode detection (overlap → Cut, touching → Add)
+- [x] **Utilities**: `EdgeChainer` (211 LOC, BFS tangent search)
 
 ---
 
@@ -251,24 +297,45 @@ This document outlines the phased implementation strategy for OneCAD, ensuring a
 
 ---
 
-### 3.5 UI Polish (Low Priority — P3)
+### 3.5 UI Polish (In Progress — ~40%)
 **Goal:** UX refinements for v1.0
 
-| Task | Files | Status | Est. LOC |
-|------|-------|--------|----------|
-| Command search | `src/ui/search/CommandSearch.h/cpp` | [ ] | 350 |
-| PropertyInspector full | PropertyInspector.cpp | [ ] | 300 |
-| Camera inertia | Camera3D.cpp | [ ] | 150 |
-| Box selection | SelectionManager + Viewport | [ ] | 200 |
-| DOF color wiring | SketchRenderer + UI | [ ] | 100 |
-| **Model Navigator** | ModelNavigator.cpp | [~] | 200 |
-| **Debug Panel** | RenderDebugPanel.cpp | [x] | 250 |
+| Task | Files | Status | LOC |
+|------|-------|--------|-----|
+| **StartOverlay** | `src/ui/start/StartOverlay.h/cpp` | [x] | 288 |
+| **ProjectTile** | `src/ui/start/ProjectTile.h/cpp` | [x] | 187 |
+| **ThemeManager** | `src/ui/theme/ThemeManager.h/cpp` | [x] | 674 |
+| **ThemeConfig** | `src/ui/theme/ThemeConfig.h/cpp` | [x] | 600 |
+| **Model Navigator** | `src/ui/navigator/ModelNavigator.h/cpp` | [x] | 855 |
+| **Debug Panel** | `src/ui/viewport/RenderDebugPanel.h/cpp` | [x] | 286 |
+| **ViewCube** | `src/ui/viewcube/ViewCube.h/cpp` | [x] | 537 |
+| **DeepSelectPopup** | `src/ui/selection/DeepSelectPopup.h/cpp` | [x] | ~150 |
+| PropertyInspector (stub) | `src/ui/inspector/PropertyInspector.h/cpp` | [~] | 103 |
+| Command search | `src/ui/search/CommandSearch.h/cpp` | [ ] | - |
+| Camera inertia | `src/render/Camera3D.cpp` | [ ] | - |
+| Box selection | SelectionManager + Viewport | [ ] | - |
+| DOF color wiring | SketchRenderer + UI | [~] | - |
+
+**Completed:**
+- ✅ StartOverlay with project browser + Recent Projects
+- ✅ ProjectTile with thumbnail rendering
+- ✅ Full ThemeManager (light/dark modes, CSS variables)
+- ✅ ModelNavigator with visibility toggling, isolation, filtering
+- ✅ RenderDebugPanel for normals/wireframes/bounds
+- ✅ ViewCube for 3D navigation
+- ✅ DeepSelectPopup for ambiguous pick resolution
+
+**Still Needed:**
+- ❌ Command search (Cmd+K palette)
+- ❌ PropertyInspector full implementation (currently stub with placeholder)
+- ❌ Camera inertia physics
+- ❌ Box selection (left-to-right vs right-to-left)
 
 ---
 
 ## Phase 4: Advanced Modeling & Refinement
 **Focus:** Adding depth to modeling capabilities and UI polish.
-**Status:** Not Started
+**Status:** Partial (~10% — ThemeManager complete)
 
 ### 4.1 Advanced Features (v2.0)
 - [ ] **Extrude Advanced**: Symmetric, asymmetric, to face, through all
@@ -278,7 +345,7 @@ This document outlines the phased implementation strategy for OneCAD, ensuring a
 
 ### 4.2 UI/UX Polish
 - [ ] **Visual Styles**: Wireframe, Shaded, Shaded with Edges toggles
-- [ ] **Dark/Light Themes**: Full UI consistency
+- [x] **Dark/Light Themes**: ✅ **Complete** via ThemeManager (885 LOC)
 - [ ] **Transform Gizmo**: Move/rotate/scale handles
 
 ---
@@ -324,33 +391,51 @@ This document outlines the phased implementation strategy for OneCAD, ensuring a
 
 ## Priority Recommendations
 
-### ✅ COMPLETED SINCE LAST UPDATE
+### ✅ COMPLETED SINCE LAST MAJOR UPDATE
 1. ~~Implement Push/Pull Direct Modeling~~ → **DONE** (ExtrudeTool face support)
 2. ~~Implement Fillet/Chamfer Tool~~ → **DONE** (FilletChamferTool)
-3. ~~Implement Shell Tool~~ → **DONE** (ShellTool)
+3. ~~Implement Shell Tool~~ → **DONE** (ShellTool - single face working)
 4. ~~Implement Boolean Operations~~ → **DONE** (Union/Cut/Intersect)
 5. ~~Implement Edge Chaining~~ → **DONE** (EdgeChainer)
-6. ~~Enhance Model Navigator~~ → **DONE** (Visibility/Filtering)
+6. ~~Enhance Model Navigator~~ → **DONE** (Visibility/Filtering/Isolation)
 7. ~~Add Render Debug Panel~~ → **DONE**
+8. ~~Implement Full I/O Layer~~ → **DONE** (Save/Load/STEP/ZIP)
+9. ~~Add StartOverlay + ProjectTile~~ → **DONE** (Project browser)
+10. ~~Implement ThemeManager~~ → **DONE** (Light/Dark themes)
 
-### Immediate Next Steps (High Priority for Phase 3)
-1. **Native `.onecad` save/load v0** — BREP + ElementMap + operation list serialization (P0 Critical).
-2. **History replay + persistence** — DependencyGraph and RegenerationEngine (P0 Critical).
-3. **Step Import/Export** — Interoperability (P1).
+### Immediate Next Steps (High Priority)
+1. **Wire ShellTool multi-face selection** — Shift+click and Enter key in Viewport (P0 Quick Win)
+2. **Wire FilletChamferTool Tab key** — Mode toggle in Viewport (P0 Quick Win)
+3. **DependencyGraph + RegenerationEngine** — Full parametric replay (P1 Critical)
+4. **HistoryPanel UI** — Display operation history (P1)
 
 ### Short-term (Medium Priority - UX Polish)
-1. Add Camera inertia physics and sticky pivot (270 LOC existing base).
-2. Complete DOF color-coding UI wiring (logic exists in SketchRenderer).
-3. Wire PropertyInspector into UI (88 LOC stub exists, not integrated).
-4. Add contextual tool badges (boolean override, direction flip).
+1. Implement Command Search (Cmd+K palette)
+2. Add Camera inertia physics and sticky pivot
+3. Complete PropertyInspector (currently stub)
+4. Implement Box selection (left-to-right / right-to-left modes)
 
-### Blocking Items for Phase 3
+### Blocking Items for Phase 3 Completion
 - ✅ ~~Modeling Operations~~ → COMPLETE (100%)
-- ⚠️ **History replay + persistence** → REQUIRED for robust parametric workflows
-- ⚠️ **I/O layer** → Not implemented (src/io/ empty)
+- ✅ ~~I/O layer~~ → COMPLETE (100%)
+- ⚠️ **Parametric Engine** → PARTIAL (data structures done, no replay/UI)
+- ⚠️ **Pattern Operations** → NOT STARTED
+
+### Codebase Statistics (2026-01-10)
+| Category | Files | LOC |
+|----------|-------|-----|
+| src/app/ | 25 | ~3,000 |
+| src/core/sketch/ | 48 | ~10,000 |
+| src/core/loop/ | 8 | ~2,700 |
+| src/core/modeling/ | 4 | ~400 |
+| src/kernel/ | 1 | ~990 |
+| src/render/ | 10 | ~2,500 |
+| src/io/ | 24 | ~2,400 |
+| src/ui/ | 49 | ~13,000 |
+| **Total** | **~170** | **~41,000** |
 
 ---
 
-*Document Version: 4.3*
-*Last Updated: 2026-01-09*
-*Major Update: Completed Phase 3.3 (All Modeling Ops: Fillet, Shell, Push/Pull, Boolean)*
+*Document Version: 5.0*
+*Last Updated: 2026-01-10*
+*Major Update: Documented complete I/O layer, updated all phase statuses with verified LOC counts*

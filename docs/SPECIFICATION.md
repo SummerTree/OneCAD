@@ -78,41 +78,44 @@
 
 ### 1.4 Version Scope Summary
 
-| Feature | v1.0 | v2.0 | Future |
-|---------|:----:|:----:|:------:|
-| Basic sketch tools (line, arc, circle, rectangle, ellipse) | ✅ | | |
-| Automatic loop detection & region highlighting | ✅ | | |
-| Constraint system with blue/green feedback | ✅ | | |
-| Multi-sketch support with references | ✅ | | |
-| Sketch on face with edge projection | ✅ | | |
-| Extrude (one direction + draft angle) | ✅ | | |
-| Extrude (symmetric, asymmetric, to face) | | ✅ | |
-| Revolve | ✅ | | |
-| Boolean operations | ✅ | | |
-| Push/pull direct modeling | ✅ | | |
-| Fillet & chamfer (variable radius) | ✅ | | |
-| Linear & circular patterns | ✅ | | |
-| Pattern along path | | ✅ | |
-| Shell operation (basic) | ✅ | | |
-| Spline/Bezier curves | | ✅ | |
-| Text in sketches | | ✅ | |
-| STEP import/export | ✅ | | |
-| Native file format | ✅ | | |
-| STL/OBJ export | | ✅ | |
-| Full ElementMap (topological naming) | ✅ | | |
-| Resolution Engine for TNP | ✅ | | |
-| Adaptive UI with tool prediction | ✅ | | |
-| Command Search | ✅ | | |
-| Transformation Gizmo | ✅ | | |
-| View cube | ✅ | | |
-| Inertial camera physics | ✅ | | |
-| Light & dark themes | ✅ | | |
-| Intel Mac support | | ✅ | |
-| Onboarding tutorial | | ✅ | |
-| iCloud preferences sync | | ✅ | |
-| Auto-update | | ✅ | |
-| Plugin API | | | ✅ |
-| AI features | | | ✅ |
+**Updated: 2026-01-10** — Reflects actual implementation status.
+
+| Feature | v1.0 | v2.0 | Future | Status |
+|---------|:----:|:----:|:------:|:------:|
+| Basic sketch tools (line, arc, circle, rectangle, ellipse) | ✅ | | | ✅ Done |
+| Automatic loop detection & region highlighting | ✅ | | | ✅ Done |
+| Constraint system with blue/green feedback | ✅ | | | ✅ Done |
+| Multi-sketch support with references | ✅ | | | ✅ Done |
+| Sketch on face with edge projection | ✅ | | | ⚠️ Partial |
+| Extrude (one direction + draft angle) | ✅ | | | ✅ Done |
+| Extrude (symmetric, asymmetric, to face) | | ✅ | | ❌ |
+| Revolve | ✅ | | | ✅ Done |
+| Boolean operations | ✅ | | | ✅ Done |
+| Push/pull direct modeling | ✅ | | | ✅ Done |
+| Fillet & chamfer (variable radius) | ✅ | | | ✅ Done |
+| Linear & circular patterns | | ✅ | | ❌ Moved |
+| Pattern along path | | | ✅ | ❌ |
+| Shell operation (basic) | ✅ | | | ⚠️ Single-face |
+| Spline/Bezier curves | | ✅ | | ❌ |
+| Text in sketches | | ✅ | | ❌ |
+| STEP import/export | ✅ | | | ✅ Done |
+| Native file format | ✅ | | | ✅ Done |
+| STL/OBJ export | | ✅ | | ❌ |
+| Full ElementMap (topological naming) | ✅ | | | ✅ Done |
+| Resolution Engine for TNP | ✅ | | | ⚠️ Basic |
+| Adaptive UI with tool prediction | | ✅ | | ❌ Deferred |
+| Command Search | | ✅ | | ❌ Deferred |
+| Transformation Gizmo | | ✅ | | ❌ Deferred |
+| View cube | ✅ | | | ✅ Done |
+| Inertial camera physics | | ✅ | | ❌ Deferred |
+| Light & dark themes | ✅ | | | ✅ Done |
+| Start overlay & project browser | ✅ | | | ✅ Done |
+| Intel Mac support | | ✅ | | ❌ |
+| Onboarding tutorial | | ✅ | | ❌ |
+| iCloud preferences sync | | ✅ | | ❌ |
+| Auto-update | | ✅ | | ❌ |
+| Plugin API | | | ✅ | ❌ |
+| AI features | | | ✅ | ❌ |
 
 ---
 
@@ -1591,7 +1594,7 @@ flowchart LR
 | **Revolve** | ✅ Complete | Profile+Axis, drag interaction, boolean mode |
 | **Boolean Ops** | ✅ Complete | Union/Cut/Intersect via `BooleanOperation` + `ModifyBodyCommand` |
 | **Fillet/Chamfer** | ✅ Complete | Variable radius, drag-based mode switching, edge chaining |
-| **Shell** | ✅ Complete | Hollow solid, multi-face opening, validation |
+| **Shell** | ⚠️ Partial | Hollow solid working; multi-face selection needs UI wiring |
 | **Patterns** | ⏳ Phase 3.4 | Not started |
 
 ### 8.1 Operations Overview — v1.0
@@ -1622,7 +1625,7 @@ mindmap
 
 ### 8.2 Extrude & Push/Pull Operation
 
-**Implemented as unified `ExtrudeTool` (282 LOC).**
+**Implemented as unified `ExtrudeTool` (500 LOC).**
 
 #### 8.2.1 Core Behavior
 
@@ -2854,10 +2857,23 @@ Operations that create multiple internal commands appear as single undo:
 
 ## 17. File System
 
-**IMPLEMENTATION STATUS: NOT STARTED** (src/io/ directory empty, updated 2026-01-06)
-- ❌ Native format (.onecad): Not implemented
-- ❌ STEP import/export: Not implemented
-- ⚠️ Document has toJson/fromJson for internal serialization (not file I/O)
+**IMPLEMENTATION STATUS: ✅ COMPLETE** (Updated 2026-01-10)
+
+| Component | Files | Status | LOC |
+|-----------|-------|--------|-----|
+| **OneCADFileIO** | `src/io/OneCADFileIO.h/cpp` | ✅ Complete | 172 |
+| **DocumentIO** | `src/io/DocumentIO.h/cpp` | ✅ Complete | 305 |
+| **SketchIO** | `src/io/SketchIO.h/cpp` | ✅ Complete | 211 |
+| **ElementMapIO** | `src/io/ElementMapIO.h/cpp` | ✅ Complete | 418 |
+| **HistoryIO** | `src/io/HistoryIO.h/cpp` | ✅ Complete | 316 |
+| **ManifestIO** | `src/io/ManifestIO.h/cpp` | ✅ Complete | 157 |
+| **JSONUtils** | `src/io/JSONUtils.h/cpp` | ✅ Complete | 146 |
+| **ZipPackage** | `src/io/ZipPackage.h/cpp` | ✅ Complete | 388 |
+| **DirectoryPackage** | `src/io/DirectoryPackage.h/cpp` | ✅ Complete | 181 |
+| **StepImporter** | `src/io/step/StepImporter.h/cpp` | ✅ Complete | 130 |
+| **StepExporter** | `src/io/step/StepExporter.h/cpp` | ✅ Complete | 120 |
+
+**Total I/O Layer:** ~2,500 LOC across 24 files
 
 ### 17.1 File Locations
 
@@ -2876,38 +2892,36 @@ Operations that create multiple internal commands appear as single undo:
 | **OneCAD Native** | `.onecad` | Read/Write | Full model with history + ElementMap |
 | **STEP** | `.step`, `.stp` | Import/Export | Industry standard exchange |
 
-### 17.3 Native Format Structure
+### 17.3 Native Format Structure ✅ IMPLEMENTED
 
-```mermaid
-flowchart TB
-    subgraph NativeFile[".onecad File Structure"]
-        META[Metadata Section]
-        
-        subgraph Geometry["Geometry Section"]
-            BREP[B-Rep Data — OCCT BRep format]
-            EMAP[ElementMap Data]
-        end
-        
-        subgraph Sketches["Sketches Section"]
-            SKEL[Sketch Geometry]
-            CONS[Constraints]
-            FACES[Face Definitions]
-            PROJ[Projected Edge References]
-        end
-        
-        subgraph History["Feature History Section"]
-            OPS[Operation Sequence]
-            PARAMS[Parameters]
-            DEPS[Dependencies]
-        end
-        
-        subgraph Display["Display State Section"]
-            CAM[Camera Position]
-            VIS[Visibility States]
-            NAMES[Custom Names]
-        end
-    end
+**File Format:** `.onecad` (ZIP archive) or `.onecadpkg` (directory for debugging)
+
 ```
+project.onecad (ZIP) or project.onecadpkg/ (directory)
+├── manifest.json        # Magic number, version, content summary, integrity hash
+├── document.json        # Sketch/body references, file paths
+├── sketches/
+│   └── {uuid}.json      # Full sketch serialization with entity data
+├── bodies/
+│   ├── {uuid}.json      # Body metadata (name, visibility)
+│   └── {uuid}.brep      # OCCT BREP binary geometry
+├── history/
+│   ├── ops.jsonl        # Operation history (JSONL for Git-friendly diffs)
+│   └── state.json       # Current history state
+├── topology/
+│   └── elementmap.json  # Topological naming data
+├── metadata/
+│   └── display.json     # Camera position, visibility states (placeholder)
+└── thumbnail.png        # Optional project thumbnail
+```
+
+**Features:**
+- ✅ Dual package backend (QuaZip primary, system zip fallback)
+- ✅ BREP binary caching for fast geometry loading
+- ✅ Deterministic JSON (sorted keys, consistent indentation for Git)
+- ✅ Legacy schema migration for sketch entities
+- ✅ Full error handling with Result structs
+- ✅ Operation history in JSONL format (one operation per line)
 
 ### 17.4 Autosave
 
