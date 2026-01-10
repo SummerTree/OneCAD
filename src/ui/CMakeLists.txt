@@ -23,6 +23,7 @@ add_library(onecad_ui STATIC
     selection/SketchPickerAdapter.cpp
     selection/ModelPickerAdapter.cpp
     start/StartOverlay.cpp
+    start/ProjectTile.cpp
 )
 
 target_include_directories(onecad_ui PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})

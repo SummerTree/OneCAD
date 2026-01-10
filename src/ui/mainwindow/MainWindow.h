@@ -102,6 +102,7 @@ private:
     bool saveDocumentToPath(const QString& filePath);
     bool hasOpenProject() const;
     void resetDocumentState();
+    bool deleteProjectFromPath(const QString& filePath);
     QString defaultProjectDirectory() const;
     QStringList listProjectsInDefaultDirectory() const;
 

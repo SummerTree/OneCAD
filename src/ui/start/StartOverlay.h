@@ -10,7 +10,7 @@
 #include <QMetaObject>
 
 class QLabel;
-class QVBoxLayout;
+class QGridLayout;
 
 namespace onecad::ui {
 
@@ -26,6 +26,7 @@ signals:
     void newProjectRequested();
     void openProjectRequested();
     void recentProjectRequested(const QString& path);
+    void deleteProjectRequested(const QString& path);
 
 protected:
     void showEvent(QShowEvent* event) override;
@@ -36,10 +37,11 @@ private:
     void handleNewProject();
     void handleOpenProject();
     void handleRecentClicked(const QString& path);
+    void handleDeleteClicked(const QString& path);
 
     QStringList projects_;
     QWidget* recentContainer_ = nullptr;
-    QVBoxLayout* recentLayout_ = nullptr;
+    QGridLayout* recentLayout_ = nullptr;
     QLabel* recentEmptyLabel_ = nullptr;
     QWidget* panel_ = nullptr;
     QMetaObject::Connection themeConnection_;

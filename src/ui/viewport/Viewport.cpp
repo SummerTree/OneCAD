@@ -58,6 +58,7 @@ constexpr float kAngleDeltaToPixels = 1.0f / 8.0f;
 constexpr qint64 kNativeZoomPanSuppressMs = 120;
 constexpr float kPlaneSelectSize = 120.0f;
 constexpr float kPlaneSelectHalf = kPlaneSelectSize * 0.5f;
+constexpr float kThumbnailCameraAngle = 45.0f;
 } // namespace
 
 namespace {
@@ -1568,6 +1569,63 @@ void Viewport::setCameraAngle(float degrees) {
 void Viewport::toggleGrid() {
     m_grid->setVisible(!m_grid->isVisible());
     update();
+}
+
+QImage Viewport::captureThumbnail(int maxSize) {
+    if (maxSize <= 0) {
+        return {};
+    }
+    if (!m_camera) {
+        return {};
+    }
+
+    // Qt6 grabFramebuffer() handles MSAA internally
+    const QVector3D savedPosition = m_camera->position();
+    const QVector3D savedTarget = m_camera->target();
+    const QVector3D savedUp = m_camera->up();
+    const float savedCameraAngle = m_camera->cameraAngle();
+    const float savedFov = m_camera->fov();
+    const float savedOrthoScale = m_camera->orthoScale();
+
+    m_camera->setCameraAngle(kThumbnailCameraAngle);
+    m_camera->setIsometricView();
+
+    QImage frame = grabFramebuffer();
+
+    m_camera->setCameraAngle(savedCameraAngle);
+    m_camera->setFov(savedFov);
+    m_camera->setOrthoScale(savedOrthoScale);
+    m_camera->setPosition(savedPosition);
+    m_camera->setTarget(savedTarget);
+    m_camera->setUp(savedUp);
+
+    if (frame.isNull()) {
+        return {};
+    }
+    frame.setDevicePixelRatio(1.0);
+
+    QImage scaled = frame;
+    if (frame.width() > maxSize || frame.height() > maxSize) {
+        scaled = frame.scaled(maxSize, maxSize,
+                              Qt::KeepAspectRatio,
+                              Qt::SmoothTransformation);
+    }
+
+    QImage result(QSize(maxSize, maxSize), QImage::Format_ARGB32_Premultiplied);
+    if (result.isNull()) {
+        return {};
+    }
+
+    QColor background = m_backgroundColor.isValid() ? m_backgroundColor : QColor(32, 32, 32);
+    background.setAlpha(255);
+    result.fill(background);
+
+    QPainter painter(&result);
+    painter.setRenderHint(QPainter::SmoothPixmapTransform, true);
+    const int x = (maxSize - scaled.width()) / 2;
+    const int y = (maxSize - scaled.height()) / 2;
+    painter.drawImage(QPoint(x, y), scaled);
+    return result;
 }
 
 void Viewport::keyPressEvent(QKeyEvent* event) {

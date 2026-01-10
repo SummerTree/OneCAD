@@ -11,6 +11,7 @@
 #include <QVariantAnimation>
 #include <QStringList>
 #include <QSize>
+#include <QImage>
 #include "selection/ModelPickerAdapter.h"
 #include "../../render/scene/SceneMeshStore.h"
 #include "../../app/selection/SelectionTypes.h"
@@ -107,6 +108,9 @@ public:
     bool wireframeOnlyEnabled() const { return m_wireframeOnly; }
     bool gammaDisabled() const { return m_disableGamma; }
     bool matcapEnabled() const { return m_useMatcap; }
+
+    // Thumbnail capture
+    QImage captureThumbnail(int maxSize = 512);
 
     // Document access (for rendering all sketches in 3D mode)
     void setDocument(app::Document* document);

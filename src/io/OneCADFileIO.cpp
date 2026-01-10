@@ -12,6 +12,7 @@
 #include "../app/document/Document.h"
 
 #include <QJsonDocument>
+#include <QBuffer>
 #include <optional>
 
 namespace onecad::io {
@@ -48,40 +49,55 @@ std::optional<QJsonObject> readAndValidateManifest(Package* package, QString& er
 
 } // namespace
 
-FileIOResult OneCADFileIO::save(const QString& filepath, 
-                                 const app::Document* document) {
+FileIOResult OneCADFileIO::save(const QString& filepath,
+                                 const app::Document* document,
+                                 const QImage& thumbnail) {
     FileIOResult result;
     result.filepath = filepath;
-    
+
     // 1. Create package for writing
     auto package = Package::createForWrite(filepath);
     if (!package) {
         result.errorMessage = QString("Failed to create file: %1").arg(filepath);
         return result;
     }
-    
+
     // 2. Compute operations hash for manifest
     QString opsHash = HistoryIO::computeOpsHash(document->operations());
-    
+
     // 3. Write manifest.json first
     QJsonObject manifest = ManifestIO::createManifest(document, opsHash);
     if (!package->writeFile("manifest.json", JSONUtils::toCanonicalJson(manifest))) {
         result.errorMessage = "Failed to write manifest.json";
         return result;
     }
-    
+
     // 4. Save all document components
     if (!DocumentIO::saveDocument(package.get(), document)) {
         result.errorMessage = "Failed to save document contents: " + package->errorString();
         return result;
     }
-    
-    // 5. Finalize package
+
+    // 5. Write thumbnail if provided
+    if (!thumbnail.isNull()) {
+        QByteArray pngData;
+        QBuffer buffer(&pngData);
+        buffer.open(QIODevice::WriteOnly);
+        thumbnail.save(&buffer, "PNG");
+        buffer.close();
+
+        if (!package->writeFile("thumbnail.png", pngData)) {
+            qWarning() << "Thumbnail write failed:" << package->errorString();
+            // Don't fail save - thumbnail is optional
+        }
+    }
+
+    // 6. Finalize package
     if (!package->finalize()) {
         result.errorMessage = "Failed to finalize file: " + package->errorString();
         return result;
     }
-    
+
     result.success = true;
     return result;
 }
@@ -129,14 +145,28 @@ QString OneCADFileIO::getFileVersion(const QString& filepath) {
     if (!package) {
         return {};
     }
-    
+
     QByteArray manifestData = package->readFile("manifest.json");
     if (manifestData.isEmpty()) {
         return {};
     }
-    
+
     QJsonDocument manifestDoc = QJsonDocument::fromJson(manifestData);
     return ManifestIO::getFormatVersion(manifestDoc.object());
+}
+
+QImage OneCADFileIO::readThumbnail(const QString& filepath) {
+    auto package = Package::openForRead(filepath);
+    if (!package) {
+        return {};
+    }
+
+    QByteArray data = package->readFile("thumbnail.png");
+    if (data.isEmpty()) {
+        return {};  // Graceful if missing
+    }
+
+    return QImage::fromData(data, "PNG");
 }
 
 } // namespace onecad::io

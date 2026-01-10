@@ -6,6 +6,7 @@
 #pragma once
 
 #include <QString>
+#include <QImage>
 #include <memory>
 
 namespace onecad::app {
@@ -37,10 +38,12 @@ public:
      * @brief Save document to .onecad file
      * @param filepath Path to save (creates/overwrites)
      * @param document Document to save
+     * @param thumbnail Optional viewport thumbnail (stored as thumbnail.png)
      * @return Result with success status and any error message
      */
-    static FileIOResult save(const QString& filepath, 
-                             const app::Document* document);
+    static FileIOResult save(const QString& filepath,
+                             const app::Document* document,
+                             const QImage& thumbnail = QImage());
     
     /**
      * @brief Load document from .onecad file
@@ -65,6 +68,13 @@ public:
      * @return Version string (e.g., "1.0.0"), or empty on error
      */
     static QString getFileVersion(const QString& filepath);
+
+    /**
+     * @brief Read thumbnail from .onecad file
+     * @param filepath Path to read
+     * @return Thumbnail image, or null QImage if not present
+     */
+    static QImage readThumbnail(const QString& filepath);
     
 private:
     OneCADFileIO() = delete;

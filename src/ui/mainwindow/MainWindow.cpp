@@ -35,6 +35,7 @@
 #include <QDir>
 #include <QInputDialog>
 #include <QLineEdit>
+#include <QFile>
 #include <QTimer>
 #include <QDebug>
 #include <algorithm>
@@ -821,6 +822,37 @@ void MainWindow::setupViewport() {
         }
     });
 
+    connect(m_startOverlay, &StartOverlay::deleteProjectRequested, this, [this](const QString& path) {
+        if (path.isEmpty()) {
+            return;
+        }
+
+        QFileInfo info(path);
+        QString name = info.fileName();
+        auto choice = QMessageBox::question(this, tr("Delete Project"),
+            tr("Delete \"%1\" from disk? This cannot be undone.").arg(name),
+            QMessageBox::Yes | QMessageBox::No, QMessageBox::No);
+        if (choice != QMessageBox::Yes) {
+            return;
+        }
+
+        if (!deleteProjectFromPath(path)) {
+            QMessageBox::warning(this, tr("Delete Failed"),
+                tr("Could not delete \"%1\".").arg(name));
+            return;
+        }
+
+        QString resolvedPath = info.absoluteFilePath();
+        if (!m_currentFilePath.isEmpty() && QFileInfo(m_currentFilePath).absoluteFilePath() == resolvedPath) {
+            m_currentFilePath.clear();
+            setWindowTitle(tr("OneCAD - Untitled"));
+        }
+
+        if (m_startOverlay) {
+            m_startOverlay->setProjects(listProjectsInDefaultDirectory());
+        }
+    });
+
     central->installEventFilter(this);
 
     // Set document for rendering sketches in 3D mode
@@ -1232,7 +1264,13 @@ bool MainWindow::saveDocumentToPath(const QString& filePath) {
         m_toolStatus->setText(tr("Saving..."));
     }
 
-    auto result = io::OneCADFileIO::save(filePath, m_document.get());
+    // Capture viewport thumbnail
+    QImage thumbnail;
+    if (m_viewport) {
+        thumbnail = m_viewport->captureThumbnail(512);
+    }
+
+    auto result = io::OneCADFileIO::save(filePath, m_document.get(), thumbnail);
     if (!result.success) {
         QMessageBox::critical(this, tr("Save Failed"), result.errorMessage);
         if (m_toolStatus) {
@@ -1368,6 +1406,20 @@ void MainWindow::showStartDialog() {
     positionStartOverlay();
     m_startOverlay->raise();
     m_startOverlay->setFocus(Qt::OtherFocusReason);
+}
+
+bool MainWindow::deleteProjectFromPath(const QString& filePath) {
+    QFileInfo info(filePath);
+    if (!info.exists()) {
+        return true;
+    }
+
+    if (info.isDir()) {
+        QDir dir(info.absoluteFilePath());
+        return dir.removeRecursively();
+    }
+
+    return QFile::remove(info.absoluteFilePath());
 }
 
 QStringList MainWindow::listProjectsInDefaultDirectory() const {

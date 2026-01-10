@@ -70,5 +70,6 @@
         <file alias="ic_pattern_circular.svg">icons/ic_pattern_circular.svg</file>
         <file alias="ic_snap.svg">icons/ic_snap.svg</file>
         <file alias="ic_grid.svg">icons/ic_grid.svg</file>
+        <file alias="ic_project_placeholder.svg">icons/ic_project_placeholder.svg</file>
     </qresource>
 </RCC>

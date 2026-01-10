@@ -4,7 +4,9 @@
  */
 
 #include "StartOverlay.h"
+#include "ProjectTile.h"
 #include "../theme/ThemeManager.h"
+#include "../../io/OneCADFileIO.h"
 
 #include <QDir>
 #include <QFileInfo>
@@ -86,9 +88,9 @@ StartOverlay::StartOverlay(QWidget* parent)
     panelLayout->addWidget(recentLabel);
 
     recentContainer_ = new QWidget(panel_);
-    recentLayout_ = new QVBoxLayout(recentContainer_);
+    recentLayout_ = new QGridLayout(recentContainer_);
     recentLayout_->setContentsMargins(0, 0, 0, 0);
-    recentLayout_->setSpacing(8);
+    recentLayout_->setSpacing(12);
 
     auto* scroll = new QScrollArea(panel_);
     scroll->setWidgetResizable(true);
@@ -207,6 +209,7 @@ void StartOverlay::setProjects(const QStringList& projects) {
 }
 
 void StartOverlay::rebuildRecentGrid() {
+    // Clear existing widgets
     while (QLayoutItem* item = recentLayout_->takeAt(0)) {
         if (item->widget()) {
             item->widget()->deleteLater();
@@ -217,30 +220,35 @@ void StartOverlay::rebuildRecentGrid() {
     if (projects_.isEmpty()) {
         recentEmptyLabel_ = new QLabel(tr("No projects yet."));
         recentEmptyLabel_->setObjectName("emptyState");
-        recentLayout_->addWidget(recentEmptyLabel_);
-        recentLayout_->addStretch();
+        recentLayout_->addWidget(recentEmptyLabel_, 0, 0);
         return;
     }
 
+    constexpr int kColumns = 4;
+    int row = 0;
+    int col = 0;
+
     for (const QString& path : projects_) {
-        QFileInfo info(path);
-        QString title = projectDisplayName(path);
-        QString subtitle = QDir::toNativeSeparators(info.absoluteFilePath());
+        // Load thumbnail (lightweight - only reads thumbnail.png from package)
+        QImage thumbnail = io::OneCADFileIO::readThumbnail(path);
 
-        auto* tile = new QPushButton(QString("%1\n%2").arg(title, subtitle));
-        tile->setObjectName("recentTile");
-        tile->setCursor(Qt::PointingHandCursor);
-        tile->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
-        tile->setFixedHeight(74);
-        tile->setToolTip(subtitle);
+        auto* tile = new ProjectTile(path, thumbnail, recentContainer_);
+        connect(tile, &ProjectTile::clicked,
+                this, &StartOverlay::handleRecentClicked);
+        connect(tile, &ProjectTile::deleteRequested,
+                this, &StartOverlay::handleDeleteClicked);
 
-        connect(tile, &QPushButton::clicked, this, [this, path]() {
-            handleRecentClicked(path);
-        });
+        recentLayout_->addWidget(tile, row, col);
 
-        recentLayout_->addWidget(tile);
+        col++;
+        if (col >= kColumns) {
+            col = 0;
+            row++;
+        }
     }
-    recentLayout_->addStretch();
+
+    // Add stretch at bottom
+    recentLayout_->setRowStretch(row + 1, 1);
 }
 
 void StartOverlay::handleNewProject() {
@@ -253,6 +261,10 @@ void StartOverlay::handleOpenProject() {
 
 void StartOverlay::handleRecentClicked(const QString& path) {
     emit recentProjectRequested(path);
+}
+
+void StartOverlay::handleDeleteClicked(const QString& path) {
+    emit deleteProjectRequested(path);
 }
 
 void StartOverlay::showEvent(QShowEvent* event) {
