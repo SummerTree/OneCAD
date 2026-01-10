@@ -73,6 +73,7 @@ target_link_libraries(test_compile
     PRIVATE
     onecad_app
     onecad_ui
+    onecad_io
     Qt6::Widgets
     Qt6::Gui
     Qt6::Core
@@ -86,6 +87,7 @@ add_executable(proto_model_picker prototypes/proto_model_picker.cpp)
 target_link_libraries(proto_model_picker
     PRIVATE
     onecad_ui
+    onecad_io
     onecad_app
     Qt6::Gui
     Qt6::Core
@@ -106,6 +108,7 @@ add_executable(proto_pickmesh_integration prototypes/proto_pickmesh_integration.
 target_link_libraries(proto_pickmesh_integration
     PRIVATE
     onecad_ui
+    onecad_io
     onecad_app
     Qt6::Core
     Qt6::Gui
@@ -117,6 +120,7 @@ add_executable(proto_pick_topology_promotion prototypes/proto_pick_topology_prom
 target_link_libraries(proto_pick_topology_promotion
     PRIVATE
     onecad_ui
+    onecad_io
     onecad_app
     Qt6::Core
     Qt6::Gui

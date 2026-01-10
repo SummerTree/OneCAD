@@ -19,6 +19,7 @@ class QLineEdit;
 class QEvent;
 
 namespace onecad {
+namespace app { class Document; }
 namespace ui {
 
 /**
@@ -53,6 +54,7 @@ signals:
 
 public slots:
     // Document model integration
+    void rebuild(const app::Document* doc);
     void onSketchAdded(const QString& id);
     void onSketchRemoved(const QString& id);
     void onSketchRenamed(const QString& id, const QString& newName);

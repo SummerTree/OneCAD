@@ -25,14 +25,26 @@
 #include <QApplication>
 #include <QMessageBox>
 #include <QFileDialog>
+#include <QFileInfo>
 #include <QActionGroup>
 #include <QSettings>
 #include <QHBoxLayout>
 #include <QWidget>
 #include <QSizePolicy>
 #include <QEvent>
+#include <QDir>
+#include <QInputDialog>
+#include <QLineEdit>
+#include <QTimer>
+#include <QDebug>
+#include <algorithm>
+
+#include "../../io/OneCADFileIO.h"
+#include "../../io/step/StepImporter.h"
+#include "../../io/step/StepExporter.h"
 
 #include "../components/SidebarToolButton.h"
+#include "../start/StartOverlay.h"
 
 namespace onecad {
 namespace ui {
@@ -63,19 +75,7 @@ MainWindow::MainWindow(QWidget* parent)
     connect(&ThemeManager::instance(), &ThemeManager::themeChanged,
             this, &MainWindow::applyDofStatusStyle, Qt::UniqueConnection);
 
-    // Connect document signals to navigator
-    connect(m_document.get(), &app::Document::sketchAdded,
-            m_navigator, &ModelNavigator::onSketchAdded);
-    connect(m_document.get(), &app::Document::sketchRemoved,
-            m_navigator, &ModelNavigator::onSketchRemoved);
-    connect(m_document.get(), &app::Document::sketchRenamed,
-            m_navigator, &ModelNavigator::onSketchRenamed);
-    connect(m_document.get(), &app::Document::bodyAdded,
-            m_navigator, &ModelNavigator::onBodyAdded);
-    connect(m_document.get(), &app::Document::bodyRemoved,
-            m_navigator, &ModelNavigator::onBodyRemoved);
-    connect(m_document.get(), &app::Document::bodyRenamed,
-            m_navigator, &ModelNavigator::onBodyRenamed);
+    connectDocumentSignals();
 
     // Connect navigator item actions
     connect(m_navigator, &ModelNavigator::deleteRequested,
@@ -101,13 +101,9 @@ MainWindow::MainWindow(QWidget* parent)
     connect(m_navigator, &ModelNavigator::isolateRequested,
             this, &MainWindow::onIsolateItem);
 
-    // Connect visibility changes from document back to navigator
-    connect(m_document.get(), &app::Document::bodyVisibilityChanged,
-            m_navigator, &ModelNavigator::onBodyVisibilityChanged);
-    connect(m_document.get(), &app::Document::sketchVisibilityChanged,
-            m_navigator, &ModelNavigator::onSketchVisibilityChanged);
-
     loadSettings();
+
+    QTimer::singleShot(0, this, &MainWindow::showStartDialog);
 }
 
 MainWindow::~MainWindow() {
@@ -117,6 +113,31 @@ MainWindow::~MainWindow() {
 void MainWindow::applyTheme() {
     ThemeManager::instance().applyTheme();
     applyDofStatusStyle();
+}
+
+void MainWindow::connectDocumentSignals() {
+    if (!m_document || !m_navigator) {
+        return;
+    }
+
+    connect(m_document.get(), &app::Document::sketchAdded,
+            m_navigator, &ModelNavigator::onSketchAdded);
+    connect(m_document.get(), &app::Document::sketchRemoved,
+            m_navigator, &ModelNavigator::onSketchRemoved);
+    connect(m_document.get(), &app::Document::sketchRenamed,
+            m_navigator, &ModelNavigator::onSketchRenamed);
+    connect(m_document.get(), &app::Document::bodyAdded,
+            m_navigator, &ModelNavigator::onBodyAdded);
+    connect(m_document.get(), &app::Document::bodyRemoved,
+            m_navigator, &ModelNavigator::onBodyRemoved);
+    connect(m_document.get(), &app::Document::bodyRenamed,
+            m_navigator, &ModelNavigator::onBodyRenamed);
+    connect(m_document.get(), &app::Document::bodyVisibilityChanged,
+            m_navigator, &ModelNavigator::onBodyVisibilityChanged);
+    connect(m_document.get(), &app::Document::sketchVisibilityChanged,
+            m_navigator, &ModelNavigator::onSketchVisibilityChanged);
+    connect(m_document.get(), &app::Document::documentCleared,
+            m_navigator, [this]() { m_navigator->rebuild(m_document.get()); });
 }
 
 void MainWindow::updateDofStatus(core::sketch::Sketch* sketch) {
@@ -162,14 +183,14 @@ void MainWindow::setupMenuBar() {
     
     // File menu
     QMenu* fileMenu = menuBar->addMenu(tr("&File"));
-    fileMenu->addAction(tr("&New"), QKeySequence::New, this, []() {});
-    fileMenu->addAction(tr("&Open..."), QKeySequence::Open, this, []() {});
+    fileMenu->addAction(tr("&New"), QKeySequence::New, this, &MainWindow::onNewDocument);
+    fileMenu->addAction(tr("&Open..."), QKeySequence::Open, this, &MainWindow::onOpenDocument);
     fileMenu->addSeparator();
-    fileMenu->addAction(tr("&Save"), QKeySequence::Save, this, []() {});
-    fileMenu->addAction(tr("Save &As..."), QKeySequence::SaveAs, this, []() {});
+    fileMenu->addAction(tr("&Save"), QKeySequence::Save, this, &MainWindow::onSaveDocument);
+    fileMenu->addAction(tr("Save &As..."), QKeySequence::SaveAs, this, &MainWindow::onSaveDocumentAs);
     fileMenu->addSeparator();
     fileMenu->addAction(tr("&Import STEP..."), this, &MainWindow::onImport);
-    fileMenu->addAction(tr("&Export STEP..."), this, []() {});
+    fileMenu->addAction(tr("&Export STEP..."), this, &MainWindow::onExportStep);
     fileMenu->addSeparator();
     fileMenu->addAction(tr("&Quit"), QKeySequence::Quit, qApp, &QApplication::quit);
     
@@ -697,6 +718,18 @@ void MainWindow::positionSketchModePanel() {
     m_sketchModePanel->raise();
 }
 
+void MainWindow::positionStartOverlay() {
+    if (!m_startOverlay) {
+        return;
+    }
+    QWidget* central = centralWidget();
+    if (!central) {
+        return;
+    }
+    m_startOverlay->setGeometry(central->rect());
+    m_startOverlay->raise();
+}
+
 void MainWindow::setupViewport() {
     QWidget* central = new QWidget(this);
     QHBoxLayout* layout = new QHBoxLayout(central);
@@ -712,6 +745,32 @@ void MainWindow::setupViewport() {
     layout->addWidget(m_navigator);
     layout->addWidget(m_viewport, 1);
     setCentralWidget(central);
+
+    m_startOverlay = new StartOverlay(central);
+    m_startOverlay->hide();
+    positionStartOverlay();
+
+    connect(m_startOverlay, &StartOverlay::newProjectRequested, this, [this]() {
+        onNewDocument();
+        if (m_startOverlay) {
+            m_startOverlay->hide();
+        }
+    });
+
+    connect(m_startOverlay, &StartOverlay::openProjectRequested, this, [this]() {
+        onOpenDocument();
+    });
+
+    connect(m_startOverlay, &StartOverlay::recentProjectRequested, this, [this](const QString& path) {
+        if (!maybeSave()) {
+            return;
+        }
+        if (loadDocumentFromPath(path) && m_startOverlay) {
+            m_startOverlay->hide();
+        }
+    });
+
+    central->installEventFilter(this);
 
     // Set document for rendering sketches in 3D mode
     m_viewport->setDocument(m_document.get());
@@ -766,6 +825,14 @@ void MainWindow::positionToolbarOverlay() {
 }
 
 bool MainWindow::eventFilter(QObject* obj, QEvent* event) {
+    if (event->type() == QEvent::Resize) {
+        if (obj == m_viewport || obj == centralWidget()) {
+            if (m_startOverlay && m_startOverlay->isVisible()) {
+                positionStartOverlay();
+            }
+        }
+    }
+
     if (obj == m_viewport && event->type() == QEvent::Resize) {
         positionToolbarOverlay();
         positionNavigatorOverlayButton();
@@ -941,10 +1008,294 @@ void MainWindow::onImport() {
         tr("Import STEP File"), QString(),
         tr("STEP Files (*.step *.stp);;All Files (*)"));
     
-    if (!fileName.isEmpty()) {
-        m_toolStatus->setText(tr("Importing: %1").arg(fileName));
-        // TODO: Actual import
+    if (fileName.isEmpty()) return;
+    
+    m_toolStatus->setText(tr("Importing: %1").arg(QFileInfo(fileName).fileName()));
+    auto result = io::StepImporter::import(fileName);
+    
+    if (!result.success) {
+        QMessageBox::critical(this, tr("Import Failed"), result.errorMessage);
+        m_toolStatus->setText(tr("Import failed"));
+        return;
     }
+    
+    for (auto& body : result.bodies) {
+        m_document->addBody(body.shape);
+    }
+    
+    if (m_viewport) {
+        m_viewport->update();
+    }
+    m_toolStatus->setText(tr("Imported %1 body(ies)").arg(result.bodies.size()));
+}
+
+void MainWindow::onExportStep() {
+    auto bodyIds = m_document->getBodyIds();
+    if (bodyIds.empty()) {
+        QMessageBox::warning(this, tr("Export"), tr("No bodies to export."));
+        return;
+    }
+    
+    QString fileName = QFileDialog::getSaveFileName(this,
+        tr("Export STEP File"), QString(),
+        tr("STEP Files (*.step)"));
+    
+    if (fileName.isEmpty()) return;
+    
+    // Ensure .step extension
+    if (!fileName.endsWith(".step", Qt::CaseInsensitive)) {
+        fileName += ".step";
+    }
+    
+    std::vector<TopoDS_Shape> shapes;
+    for (const auto& id : bodyIds) {
+        if (auto* s = m_document->getBodyShape(id)) {
+            shapes.push_back(*s);
+        }
+    }
+    
+    auto result = io::StepExporter::exportShapes(fileName, shapes);
+    if (!result.success) {
+        QMessageBox::critical(this, tr("Export Failed"), result.errorMessage);
+        return;
+    }
+    
+    m_toolStatus->setText(tr("Exported %1 body(ies) to STEP").arg(shapes.size()));
+}
+
+bool MainWindow::maybeSave() {
+    if (!m_document || !m_document->isModified()) {
+        return true;
+    }
+    
+    auto result = QMessageBox::warning(this, tr("Unsaved Changes"),
+        tr("The document has been modified.\nDo you want to save your changes?"),
+        QMessageBox::Save | QMessageBox::Discard | QMessageBox::Cancel,
+        QMessageBox::Save);
+    
+    if (result == QMessageBox::Save) {
+        onSaveDocument();
+        return !m_document->isModified();  // Returns true if save succeeded
+    }
+    
+    return result == QMessageBox::Discard;
+}
+
+void MainWindow::onNewDocument() {
+    if (!maybeSave()) return;
+    
+    // Exit sketch mode if active
+    if (m_viewport && m_viewport->isInSketchMode()) {
+        onExitSketch();
+    }
+    
+    m_document->clear();
+    m_currentFilePath.clear();
+    setWindowTitle(tr("OneCAD - Untitled"));
+    m_toolStatus->setText(tr("New document"));
+    if (m_startOverlay && m_startOverlay->isVisible()) {
+        m_startOverlay->hide();
+    }
+}
+
+QString MainWindow::defaultProjectDirectory() const {
+    QString dir = QDir::homePath() + "/OneCAD/Projects";
+    if (!QDir().mkpath(dir)) {
+        qWarning() << "Failed to create project directory:" << dir;
+        return QDir::homePath();
+    }
+    return dir;
+}
+
+bool MainWindow::loadDocumentFromPath(const QString& fileName) {
+    if (fileName.isEmpty()) {
+        return false;
+    }
+
+    QString resolvedPath = QFileInfo(fileName).absoluteFilePath();
+
+    // Exit sketch mode if active
+    if (m_viewport && m_viewport->isInSketchMode()) {
+        onExitSketch();
+    }
+
+    m_toolStatus->setText(tr("Loading: %1").arg(QFileInfo(resolvedPath).fileName()));
+
+    QString errorMessage;
+    auto loadedDoc = io::OneCADFileIO::load(resolvedPath, errorMessage);
+    if (!loadedDoc) {
+        QMessageBox::critical(this, tr("Load Failed"), errorMessage);
+        m_toolStatus->setText(tr("Load failed"));
+        return false;
+    }
+
+    // Replace current document with loaded one
+    m_document = std::move(loadedDoc);
+    if (m_commandProcessor) {
+        m_commandProcessor->clear();
+    }
+    m_viewport->setDocument(m_document.get());
+
+    // Reconnect document signals to navigator
+    connectDocumentSignals();
+
+    // Populate navigator with loaded data
+    m_navigator->rebuild(m_document.get());
+
+    m_currentFilePath = resolvedPath;
+    setWindowTitle(tr("OneCAD - %1").arg(QFileInfo(resolvedPath).fileName()));
+    m_toolStatus->setText(tr("Loaded successfully"));
+
+    if (m_viewport) {
+        m_viewport->update();
+    }
+
+    if (m_startOverlay && m_startOverlay->isVisible()) {
+        m_startOverlay->hide();
+    }
+    return true;
+}
+
+void MainWindow::onOpenDocument() {
+    if (!maybeSave()) return;
+    
+    QString fileName = QFileDialog::getOpenFileName(this,
+        tr("Open OneCAD Project"), defaultProjectDirectory(),
+        tr("OneCAD Files (*.onecad);;OneCAD Packages (*.onecadpkg);;All Files (*)"));
+    
+    if (fileName.isEmpty()) return;
+
+    loadDocumentFromPath(fileName);
+}
+
+bool MainWindow::saveDocumentToPath(const QString& filePath) {
+    if (!m_document) {
+        return false;
+    }
+
+    if (m_toolStatus) {
+        m_toolStatus->setText(tr("Saving..."));
+    }
+
+    auto result = io::OneCADFileIO::save(filePath, m_document.get());
+    if (!result.success) {
+        QMessageBox::critical(this, tr("Save Failed"), result.errorMessage);
+        if (m_toolStatus) {
+            m_toolStatus->setText(tr("Save failed"));
+        }
+        return false;
+    }
+
+    m_document->setModified(false);
+    if (m_toolStatus) {
+        m_toolStatus->setText(tr("Saved"));
+    }
+    return true;
+}
+
+void MainWindow::onSaveDocument() {
+    QString targetPath = m_currentFilePath;
+    if (targetPath.isEmpty()) {
+        bool ok = false;
+        QString name = QInputDialog::getText(
+            this,
+            tr("Save Project"),
+            tr("Project name:"),
+            QLineEdit::Normal,
+            tr("Untitled"),
+            &ok);
+
+        if (!ok) {
+            return;
+        }
+
+        name = name.trimmed();
+        if (name.isEmpty()) {
+            QMessageBox::warning(this, tr("Save Project"), tr("Project name cannot be empty."));
+            return;
+        }
+
+        name.replace("/", "-");
+        name.replace("\\", "-");
+
+        targetPath = defaultProjectDirectory() + "/" + name;
+        if (!targetPath.endsWith(".onecad", Qt::CaseInsensitive)) {
+            targetPath += ".onecad";
+        }
+
+        QFileInfo fileInfo(targetPath);
+        if (fileInfo.exists()) {
+            auto choice = QMessageBox::question(this, tr("Overwrite Project"),
+                tr("A project with this name already exists. Overwrite it?"),
+                QMessageBox::Yes | QMessageBox::No, QMessageBox::No);
+            if (choice != QMessageBox::Yes) {
+                return;
+            }
+        }
+    }
+    
+    if (!saveDocumentToPath(targetPath)) {
+        return;
+    }
+
+    m_currentFilePath = targetPath;
+    setWindowTitle(tr("OneCAD - %1").arg(QFileInfo(targetPath).fileName()));
+}
+
+void MainWindow::onSaveDocumentAs() {
+    QString fileName = QFileDialog::getSaveFileName(this,
+        tr("Save OneCAD Project As"), defaultProjectDirectory() + "/Untitled.onecad",
+        tr("OneCAD Files (*.onecad)"));
+    
+    if (fileName.isEmpty()) return;
+    
+    // Ensure .onecad extension
+    if (!fileName.endsWith(".onecad", Qt::CaseInsensitive)) {
+        fileName += ".onecad";
+    }
+    
+    if (!saveDocumentToPath(fileName)) {
+        return;
+    }
+
+    m_currentFilePath = fileName;
+    setWindowTitle(tr("OneCAD - %1").arg(QFileInfo(fileName).fileName()));
+}
+
+void MainWindow::showStartDialog() {
+    if (!m_startOverlay) {
+        return;
+    }
+    m_startOverlay->setProjects(listProjectsInDefaultDirectory());
+    m_startOverlay->show();
+    positionStartOverlay();
+    m_startOverlay->raise();
+    m_startOverlay->setFocus(Qt::OtherFocusReason);
+}
+
+QStringList MainWindow::listProjectsInDefaultDirectory() const {
+    QDir dir(defaultProjectDirectory());
+    QList<QFileInfo> entries;
+
+    QFileInfoList files = dir.entryInfoList(QStringList() << "*.onecad",
+                                            QDir::Files | QDir::NoDotAndDotDot);
+    QFileInfoList packages = dir.entryInfoList(QStringList() << "*.onecadpkg",
+                                               QDir::Dirs | QDir::NoDotAndDotDot);
+
+    entries.append(files);
+    entries.append(packages);
+
+    std::sort(entries.begin(), entries.end(),
+              [](const QFileInfo& a, const QFileInfo& b) {
+                  return a.lastModified() > b.lastModified();
+              });
+
+    QStringList paths;
+    for (const QFileInfo& info : entries) {
+        paths.append(info.absoluteFilePath());
+    }
+
+    return paths;
 }
 
 void MainWindow::onMousePositionChanged(double x, double y, double z) {

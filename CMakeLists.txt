@@ -79,6 +79,7 @@ target_link_libraries(OneCAD
     PRIVATE 
     onecad_app
     onecad_ui
+    onecad_io
     Qt6::Core 
     Qt6::Gui 
     Qt6::Widgets

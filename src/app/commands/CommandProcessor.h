@@ -27,6 +27,8 @@ public:
     bool canUndo() const;
     bool canRedo() const;
 
+    void clear();
+
     void beginTransaction(const std::string& label = {});
     void endTransaction();
     void cancelTransaction();

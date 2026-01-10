@@ -2,6 +2,7 @@
 #define ONECAD_UI_MAINWINDOW_H
 
 #include <QMainWindow>
+#include <QStringList>
 #include <memory>
 #include <string>
 
@@ -34,6 +35,7 @@ class ContextToolbar;
 class ConstraintPanel;
 class SketchModePanel;
 class RenderDebugPanel;
+class StartOverlay;
 
 /**
  * @brief Main application window for OneCAD.
@@ -53,6 +55,11 @@ public:
     ~MainWindow() override;
 
 private slots:
+    void onNewDocument();
+    void onOpenDocument();
+    void onSaveDocument();
+    void onSaveDocumentAs();
+    void onExportStep();
     void onNewSketch();
     void onExitSketch();
     void onSketchModeChanged(bool inSketchMode);
@@ -75,6 +82,7 @@ private:
     void setupViewport();
     void setupStatusBar();
     void applyTheme();
+    void connectDocumentSignals();
     void updateDofStatus(core::sketch::Sketch* sketch);
     void applyDofStatusStyle();
     void positionToolbarOverlay();
@@ -86,6 +94,12 @@ private:
     void applyRenderDebugDefaults();
     void positionConstraintPanel();
     void positionSketchModePanel();
+    void positionStartOverlay();
+    void showStartDialog();
+    bool loadDocumentFromPath(const QString& fileName);
+    bool saveDocumentToPath(const QString& filePath);
+    QString defaultProjectDirectory() const;
+    QStringList listProjectsInDefaultDirectory() const;
 
     bool eventFilter(QObject* obj, QEvent* event) override;
 
@@ -98,6 +112,7 @@ private:
     ConstraintPanel* m_constraintPanel = nullptr;
     SketchModePanel* m_sketchModePanel = nullptr;
     RenderDebugPanel* m_renderDebugPanel = nullptr;
+    StartOverlay* m_startOverlay = nullptr;
 
     // Document model (owns all sketches)
     std::unique_ptr<app::Document> m_document;
@@ -119,6 +134,10 @@ private:
     // Camera angle control
     QLabel* m_cameraAngleLabel = nullptr;
     QSlider* m_cameraAngleSlider = nullptr;
+
+    // File state
+    QString m_currentFilePath;  // Empty = untitled document
+    bool maybeSave();  // Returns true if safe to proceed
 
     void loadSettings();
     void saveSettings();

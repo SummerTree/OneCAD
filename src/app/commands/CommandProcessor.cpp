@@ -125,6 +125,19 @@ bool CommandProcessor::canRedo() const {
     return !redoStack_.empty();
 }
 
+void CommandProcessor::clear() {
+    const bool prevUndo = canUndo();
+    const bool prevRedo = canRedo();
+
+    undoStack_.clear();
+    redoStack_.clear();
+    transaction_.clear();
+    inTransaction_ = false;
+    transactionLabel_.clear();
+
+    emitStateChange(prevUndo, prevRedo);
+}
+
 void CommandProcessor::beginTransaction(const std::string& label) {
     if (inTransaction_) {
         return;

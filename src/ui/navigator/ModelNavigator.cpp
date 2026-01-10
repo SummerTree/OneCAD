@@ -1,4 +1,5 @@
 #include "ModelNavigator.h"
+#include "../../app/document/Document.h"
 #include "../theme/ThemeManager.h"
 #include <QFrame>
 #include <QHeaderView>
@@ -494,6 +495,63 @@ void ModelNavigator::onItemDoubleClicked(QTreeWidgetItem* item, int column) {
         if (it != m_sketchItems.end() && it->second == item) {
             emit editSketchRequested(itemId);
         }
+    }
+}
+
+void ModelNavigator::rebuild(const app::Document* doc) {
+    // Clear existing items
+    m_sketchItems.clear();
+    m_bodyItems.clear();
+    m_entries.clear();
+    
+    // Clear UI roots (delete children)
+    qDeleteAll(m_bodiesRoot->takeChildren());
+    qDeleteAll(m_sketchesRoot->takeChildren());
+    m_sketchesRoot->setExpanded(true);
+    m_bodiesRoot->setExpanded(true);
+    
+    createPlaceholderItems();
+    m_sketchCounter = 0;
+    m_bodyCounter = 0;
+    
+    if (!doc) {
+        return;
+    }
+    
+    // Add sketches
+    std::vector<std::string> sketchIds = doc->getSketchIds();
+    for (const auto& id : sketchIds) {
+        QString qId = QString::fromStdString(id);
+        
+        // Add item
+        ItemCollection collection{m_sketchItems, m_sketchCounter, m_sketchesRoot,
+                                  QStringLiteral("Sketch %1"), tr("(No sketches)")};
+        
+        addItem(collection, qId);
+        
+        // Update name from document
+        std::string name = doc->getSketchName(id);
+        renameItem(collection, qId, QString::fromStdString(name));
+        
+        // Update visibility
+        bool visible = doc->isSketchVisible(id);
+        onSketchVisibilityChanged(qId, visible);
+    }
+    
+    // Add bodies
+    std::vector<std::string> bodyIds = doc->getBodyIds();
+    for (const auto& id : bodyIds) {
+        QString qId = QString::fromStdString(id);
+        
+        ItemCollection collection{m_bodyItems, m_bodyCounter, m_bodiesRoot,
+                                  QStringLiteral("Body %1"), tr("(No bodies)")};
+        addItem(collection, qId);
+        
+        std::string name = doc->getBodyName(id);
+        renameItem(collection, qId, QString::fromStdString(name));
+        
+        bool visible = doc->isBodyVisible(id);
+        onBodyVisibilityChanged(qId, visible);
     }
 }
 

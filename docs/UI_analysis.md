@@ -1,7 +1,13 @@
 
-# ChatGPT analysis
+# UI analysis
 
 Below is a “senior UI/UX teardown” of what’s on screen, plus a concrete upgrade plan to make OneCAD look like **premium CAD** (clean, calm, confident).
+
+## North Star Rule
+
+**Premium CAD UI is quiet. Geometry should be the loudest thing on screen, then selection, then tools, then everything else.**
+
+Use this rule as the filter for every visual decision.
 
 ---
 
@@ -33,6 +39,8 @@ Below is a “senior UI/UX teardown” of what’s on screen, plus a concrete up
 * **Selected segment:** accent highlight + subtle glow/outline.
 * **Construction geometry:** dashed + dim.
 * **Closed profiles:** *soft translucent fill* (very important for “push/pull” UX).
+
+Keep selection accents secondary to geometry per the [North Star rule](#north-star-rule).
 
 **Add “region intelligence” (big premium signal):**
 
@@ -90,6 +98,8 @@ Below is a “senior UI/UX teardown” of what’s on screen, plus a concrete up
 * Selected face: stronger tint + crisp outline.
 * Selected body: subtle silhouette glow (not neon).
 
+Selection should read as a secondary layer to geometry (see [North Star rule](#north-star-rule)).
+
 **Material strategy:**
 
 * Keep default **neutral gray**, but vary slightly per body (tiny hue shift) to help separation.
@@ -119,8 +129,10 @@ Below is a “senior UI/UX teardown” of what’s on screen, plus a concrete up
 
   * Major lines every N units (stronger).
   * Minor lines lighter.
-  * Fade with distance from origin and with camera zoom.
+* Fade with distance from origin and with camera zoom.
 * Grid should be a *tool*, not a texture.
+
+Keep the grid quiet so geometry remains dominant ([North Star rule](#north-star-rule)).
 
 **Background:**
 
@@ -188,6 +200,8 @@ flowchart LR
 
   * Show tool settings in **right inspector** or **top bar**, not scattered.
 
+Keep tool chrome intentionally quieter than the model ([North Star rule](#north-star-rule)).
+
 ---
 
 ## 5) UI element design (current)
@@ -220,11 +234,14 @@ flowchart LR
   * selection
   * active tool
   * primary actions
+  * keep it restrained so geometry stays dominant ([North Star rule](#north-star-rule))
 * **Typography scale**:
 
   * Sidebar section title (medium/semibold)
   * Item labels (regular)
   * Secondary metadata (smaller/dimmer)
+* **Spacing & padding**:
+  * Give UI chrome breathing room so geometry stays dominant ([North Star rule](#north-star-rule)).
 
 **Micro-interactions (premium feel):**
 
@@ -271,96 +288,4 @@ Fluent 2 – Typography: https://fluent2.microsoft.design/typography
 Fluent 2 – Iconography: https://fluent2.microsoft.design/iconography
 ```
 
----
-
-## One “north star” rule
-
-Premium CAD UI is **quiet**.
-Geometry should be the loudest thing on screen, then selection, then tools, then everything else.
-
-If you want, the next step is I can write a **UI style guide** for OneCAD (colors, spacing, typography, icon rules, selection states) so implementation stays consistent as features explode.
-
 [1]: https://developer.apple.com/design/human-interface-guidelines/sidebars?utm_source=chatgpt.com "Sidebars | Apple Developer Documentation"
-
-
-----
-
-
-# Gemini Analysis
-
-This analysis provides a professional critique of your current CAD interface and a roadmap to elevate it to a "pro-grade" expensive software aesthetic.
-
----
-
-## 1. Sketch Visualization Analysis
-
-* **Current State:** Sketches use a thick orange stroke with circular vertices. The semi-transparent dark fill helps distinguish the shape but lacks depth.
-* **The "Expensive" Upgrade:** Professional CAD (e.g., Fusion 360, Shapr3D) treats sketches as high-precision mathematical data, not just drawings.
-* **Refined Line Weights:** Use a 1px crisp line for the geometry. Thicker lines look "toy-like."
-* **Constraint Glyphs:** Add small, elegant icons (parallel, perpendicular, tangent) that appear near the lines. This communicates power and precision.
-* **Active vs. Inactive:** When a sketch is not being edited, it should fade to a ghostly light blue or grey with a 0.5px line weight.
-* **Vertex Design:** Instead of large orange circles, use small "crosshair" dots or tiny squares that only appear on hover or selection.
-
-
-
-## 2. Object & Body Visualization
-
-* **Current State:** Solid grey bodies with white "wireframe" edges. It looks like a basic OpenGL "flat" shader.
-* **The "Expensive" Upgrade:**
-* **Matte PBR Shading:** Move away from flat grey. Implement a "Physically Based Rendering" (PBR) shader in the viewport. This adds a subtle "satin" or "anodized aluminum" look to the grey bodies.
-* **Ambient Occlusion (SSAO):** Add soft shadows in the corners where objects meet the ground or each other. This is the #1 trick to making software look "expensive."
-* **Edge Treatment:** Instead of white lines (which look like a 90s wireframe), use a slightly darker or lighter version of the body color for edges. Only highlight edges in high-contrast (e.g., cyan or bright white) when selected.
-* **Transparency:** Use "Liquid Glass" effects for transparent bodies. 2026 design trends favor refraction and blurred background transparency over simple "alpha" transparency.
-
-
-
-## 3. 3D Environment Visualization
-
-* **Current State:** A basic infinite grid on a dark grey background. The axis widget in the top right is functional but looks dated.
-* **The "Expensive" Upgrade:**
-* **Gradient Backdrop:** Use a subtle vertical gradient (e.g., Deep Charcoal to Soft Slate) instead of a flat color to give a sense of horizon.
-* **Ground Plane Reflection:** Add a very faint, blurred reflection on the "floor" to ground the objects.
-* **Modern Viewcube:** Redesign the "Top/Front/Right" widget. Use a translucent glass cube with minimalist typography (e.g., Inter or a custom sleek sans-serif).
-* **Dynamic Grid:** The grid should fade out at the edges (vignette) rather than ending abruptly.
-
-
-
-## 4. Layout & UI Structure
-
-* **Current State:** A "floating" sidebar on the left and a few disconnected floating icons. This creates "visual clutter" because the eye doesn't know where the edge of the workspace is.
-* **The "Expensive" Upgrade:**
-* **Glassmorphism Panels:** Instead of a solid black sidebar, use a "Frosted Glass" (Backdrop Blur) effect. This makes the UI feel light and integrated into the 3D space.
-* **Logical Grouping:**
-* **Left:** "Object Browser" (Hierarchy).
-* **Top:** "Tool Ribbon" (Context-sensitive).
-* **Bottom:** "Timeline" or "History" (Essential for pro CAD).
-
-
-* **Dyslexia-Friendly Spacing:** Increase the "Line Height" in your tree view (Bodies/Sketches). Use a minimum of **8px to 12px** of padding between items to prevent text from "swimming."
-
-
-
-## 5. UI Element Design
-
-* **Current State:** The icons look like basic vectors inside rounded squares. The font is standard and small.
-* **The "Expensive" Upgrade:**
-* **Iconography:** Use a consistent "monoline" icon set (thin lines, no fills). Professional software avoids "filled" icons as they look heavy.
-* **Typography:** Switch to a high-end typeface like **Inter**, **Roboto Flex**, or **SF Pro**. For your dyslexia-friendly requirement, ensure wide character spacing (letter-spacing: 0.05em).
-* **Status Indicators:** In the "Bodies" list, add tiny "Eye" icons for visibility and "Padlock" icons for locking.
-* **Color Palette:** Limit your "Action Color" (the color used for buttons and selections). Currently, you have orange (sketch) and blue (selection). Stick to one "Brand Color" (e.g., Electric Blue or Vivid Purple) for all primary actions.
-
-
-
----
-
-### Comparison Table: Standard vs. Professional
-
-| Feature | Current "Standard" Look | Proposed "Professional" Look |
-| --- | --- | --- |
-| **Edges** | Stark White / High Contrast | Color-matched / Sub-pixel lines |
-| **Shadows** | None | Real-time SSAO / Contact Shadows |
-| **Sidebar** | Solid Black / Flat | Frosted Glass / Translucent |
-| **Icons** | Heavy / Rounded Squares | Thin-line / Floating / Minimalist |
-| **Grid** | Infinite / Hard Edges | Faded / Vignette / Adaptive |
-
-Would you like me to generate a detailed **color palette and typography specification** (including specific hex codes and font weights) that aligns with these 2026 "Premium" trends?
