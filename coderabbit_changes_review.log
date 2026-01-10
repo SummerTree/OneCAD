@@ -1,0 +1,2304 @@
+Starting CodeRabbit review in plain text mode...
+
+Connecting to review service
+Setting up
+Analyzing
+Reviewing
+
+============================================================================
+File: src/app/commands/RollbackCommand.cpp
+Line: 22 to 26
+Type: nitpick
+
+Comment:
+Consider extracting graph building into a helper.
+
+The graph building loop is duplicated in both execute() and undo(). If the suppression state issue is resolved by passing the graph to the regeneration engine, you could extract this:
+
+
+
+♻️ Proposed helper
+
+history::DependencyGraph RollbackCommand::buildDependencyGraph() const {
+    history::DependencyGraph graph;
+    for (const auto& op : document_->operations()) {
+        graph.addOperation(op);
+    }
+    return graph;
+}
+
+Prompt for AI Agent:
+In @src/app/commands/RollbackCommand.cpp around lines 22 - 26, The loop that constructs a history::DependencyGraph from document_->operations() is duplicated in RollbackCommand::execute() and RollbackCommand::undo(); extract it into a private helper RollbackCommand::buildDependencyGraph() that returns a history::DependencyGraph, replace the inline loops in both execute() and undo() with calls to buildDependencyGraph(), and (if needed for suppression state handling) allow passing the constructed graph to the regeneration engine instead of rebuilding it.
+
+
+
+============================================================================
+File: src/app/document/Document.cpp
+Line: 341 to 350
+Type: nitpick
+
+Comment:
+Implementation looks correct, but consider signal emission and verify opId uniqueness.
+
+The logic correctly finds and updates the first matching operation. However, there are a few considerations:
+
+1. Signal emission: Unlike other mutation methods (setBodyName, setSketchName), this doesn't emit a signal when an operation is updated. Consider emitting a signal like operationUpdated(QString opId) to maintain consistency and allow UI components to react to parameter changes.
+
+2. First-match behavior: The method updates only the first matching opId. Verify that operation IDs are guaranteed to be unique in operations_. If duplicates are possible, this behavior may be unexpected.
+
+Prompt for AI Agent:
+In @src/app/document/Document.cpp around lines 341 - 350, The updateOperationParams method currently updates the first matching operation but does not emit a signal and assumes opId uniqueness; modify Document::updateOperationParams to emit a signal (e.g., operationUpdated(const QString& opId) or operationUpdated(const std::string& opId) consistent with your signal types) immediately after setModified(true) and before returning true, and also add a sanity check or assertion (or comment) in the method or in operation-creation logic that operation IDs are unique (or, if duplicates are allowed, change the loop to update all matching ops instead of returning after the first match) so callers know which behavior is intended; locate this change inside Document::updateOperationParams and update the class declaration to declare the new signal if not already present.
+
+
+
+============================================================================
+File: src/app/commands/RollbackCommand.cpp
+Line: 22 to 47
+Type: potential_issue
+
+Comment:
+Suppression state is set on a local graph that goes out of scope before regeneration.
+
+The DependencyGraph graph is a local variable. You set setSuppressed() on this local instance (lines 33-34), but graph goes out of scope when execute() ends. The RegenerationEngine is constructed with only the document_ pointer and won't see these suppression states unless:
+1. setSuppressed() also modifies the underlying operation objects in the document, or
+2. The document stores suppression state separately
+
+If suppression state is purely local to this graph instance, the regeneration will include all operations and the rollback will have no effect.
+
+
+
+Please verify how DependencyGraph::setSuppressed() persists state. If it only modifies local graph state, you need to either:
+- Pass the graph to RegenerationEngine, or
+- Persist suppression state on the document's operations directly
+
+Prompt for AI Agent:
+In @src/app/commands/RollbackCommand.cpp around lines 22 - 47, The local DependencyGraph 'graph' is having suppression flags set but then goes out of scope before RegenerationEngine runs, so ensure suppression persists by either (A) modifying DependencyGraph::setSuppressed to also mark the underlying operation objects in the document (e.g., update operation->setSuppressed or document_->setOperationSuppressed for the opId), or (B) change RegenerationEngine to accept a DependencyGraph (add a ctor or setter) and use that graph's suppression state during regenerateAll; locate and adjust calls to graph.setSuppressed, DependencyGraph::setSuppressed, RegenerationEngine::RegenerationEngine, and engine.regenerateAll accordingly.
+
+
+
+============================================================================
+File: src/ui/history/HistoryPanel.h
+Line: 11
+Type: nitpick
+
+Comment:
+Unused include .
+
+This header is included but not used in the class definition. The entries_ member uses std::vector, and lookups via entryForId() would be linear. Either remove the unused include or consider using std::unordered_map for O(1) lookup by operation ID.
+
+Prompt for AI Agent:
+In @src/ui/history/HistoryPanel.h at line 11, The header currently includes an unused ; remove this include or switch the container for HistoryPanel::entries_ to std::unordered_map and update entryForId() to perform O(1) lookup via the map (adjust insert/erase/iteration logic in methods that manipulate entries_ accordingly) — reference symbols: HistoryPanel, entries_, entryForId(), and ItemEntry.
+
+
+
+============================================================================
+File: src/ui/tools/ShellTool.cpp
+Line: 163
+Type: nitpick
+
+Comment:
+Consider adding error handling for operation recording.
+
+The code doesn't check if addOperation succeeds or handle potential exceptions. Adding error handling would improve robustness:
+
+try {
+    document_->addOperation(record);
+} catch (const std::exception& e) {
+    // Log error or notify user that history recording failed
+}
+
+
+Or if addOperation returns a status:
+
+if (!document_->addOperation(record)) {
+    // Handle failure to record operation
+}
+
+Prompt for AI Agent:
+In @src/ui/tools/ShellTool.cpp at line 163, The call to document_->addOperation(record) in ShellTool lacks error handling; update the ShellTool method that performs this call to either check the boolean/status return of document_->addOperation(record) and handle a failure (log or notify) or wrap the call in a try/catch to catch std::exception (and any relevant document-specific exception types) and log the error or notify the user that history recording failed, ensuring the app continues to function gracefully if recording fails.
+
+
+
+============================================================================
+File: src/app/history/DependencyGraph.h
+Line: 103
+Type: nitpick
+
+Comment:
+Consider returning by const& to avoid unnecessary copy.
+
+getAllOpIds() returns creationOrder_ by value, which copies the entire vector. If callers frequently need read-only access, returning a const reference is more efficient.
+
+
+
+
+♻️ Suggested change
+
+-    std::vector getAllOpIds() const { return creationOrder_; }
++    const std::vector& getAllOpIds() const { return creationOrder_; }
+
+Prompt for AI Agent:
+In @src/app/history/DependencyGraph.h at line 103, getAllOpIds() currently returns creationOrder_ by value causing an unnecessary copy; change its signature to return a const reference (const std::vector&) so callers can read without copying, keep the method const and ensure creationOrder_ remains owning storage with lifetime matching usages (no move-before-use); update any call sites that relied on a copy only if they mutate the result to take an explicit copy instead.
+
+
+
+============================================================================
+File: src/app/document/OperationRecord.h
+Line: 90 to 96
+Type: nitpick
+
+Comment:
+Redundancy between OperationType and FilletChamferParams::Mode.
+
+Both OperationType (Fillet, Chamfer) and FilletChamferParams::Mode encode the same information. This creates potential for inconsistency—e.g., OperationType::Fillet paired with Mode::Chamfer.
+
+Consider either:
+1. Removing FilletChamferParams::Mode and inferring it from OperationType, or
+2. Merging OperationType::Fillet and OperationType::Chamfer into a single FilletChamfer type.
+
+Prompt for AI Agent:
+In @src/app/document/OperationRecord.h around lines 90 - 96, FilletChamferParams contains a Mode enum that duplicates OperationType (Fillet/Chamfer), which can lead to inconsistent state; remove FilletChamferParams::Mode and instead infer the operation from the higher-level OperationType wherever FilletChamferParams is used, updating callers and any factories/serializers that construct or validate operations to pass the correct params for OperationType::Fillet vs OperationType::Chamfer; ensure validation logic that previously checked FilletChamferParams::Mode now checks the OperationType and that any constructors, deserialization code, or switch/case branches referencing FilletChamferParams::Mode are updated to use OperationType to avoid mismatches.
+
+
+
+============================================================================
+File: src/app/document/OperationRecord.h
+Line: 126 to 132
+Type: potential_issue
+
+Comment:
+Potential mismatch between type and params defaults.
+
+The default params is ExtrudeParams (first variant alternative), which only aligns when type is OperationType::Extrude. If a user sets type to something else without updating params, there's a runtime inconsistency.
+
+Consider adding a factory function or constructor that enforces consistency:
+
+static OperationRecord createExtrude(const std::string& opId, 
+                                     const SketchRegionRef& input,
+                                     const ExtrudeParams& params);
+
+
+Alternatively, add a validation helper or document that both fields must be set together.
+
+Prompt for AI Agent:
+In @src/app/document/OperationRecord.h around lines 126 - 132, The struct OperationRecord currently defaults params to ExtrudeParams while type defaults to OperationType::Extrude, which can lead to mismatches if type is changed without updating params; add a constructor or static factory (e.g., static OperationRecord createExtrude(const std::string& opId, const SketchRegionRef& input, const ExtrudeParams& params)) that sets both type and params together, and/or add a validate() method on OperationRecord that checks type vs. params variant and returns/throws on mismatch; update callers to use the new factory/constructor or call validate() after construction to ensure consistency between OperationRecord::type and OperationRecord::params.
+
+
+
+============================================================================
+File: src/ui/history/RegenFailureDialog.h
+Line: 10
+Type: potential_issue
+
+Comment:
+Remove unused include.
+
+The QStringList header is included but not used anywhere in this file. Remove it to minimize dependencies and improve compile times.
+
+
+🧹 Proposed fix
+
+ #include 
+ #include 
+-#include 
+ #include
+
+Prompt for AI Agent:
+In @src/ui/history/RegenFailureDialog.h at line 10, Remove the unused Qt include by deleting the '#include ' line from RegenFailureDialog.h; verify no references to QStringList remain in the RegenFailureDialog class or its methods (e.g., constructors, members) and rebuild to ensure no compile errors, leaving only the necessary includes in that header.
+
+
+
+============================================================================
+File: src/app/document/OperationRecord.h
+Line: 103 to 108
+Type: nitpick
+
+Comment:
+Naming inconsistency: BooleanMode::Add vs BooleanParams::Op::Union.
+
+BooleanMode::Add and BooleanParams::Op::Union represent the same boolean union operation but use different terminology. This may cause confusion when mapping between them.
+
+Consider aligning the naming—either both use "Add" or both use "Union"—to improve consistency across the API.
+
+Prompt for AI Agent:
+In @src/app/document/OperationRecord.h around lines 103 - 108, BooleanParams::Op uses "Union" while elsewhere the API uses BooleanMode::Add for the same operation; pick one name and make them consistent. Rename the enum member in BooleanParams::Op from Union to Add (or rename BooleanMode::Add to Union) and update all references, switch/case labels, serialization/deserialization, and any mapping functions that convert between BooleanMode and BooleanParams::Op (look for code that references BooleanParams, BooleanParams::Op, BooleanMode, or conversion helpers) so callers and persisted data remain correct.
+
+
+
+============================================================================
+File: src/ui/history/HistoryPanel.h
+Line: 81 to 90
+Type: nitpick
+
+Comment:
+Inconsistent ID type: std::string vs QString.
+
+ItemEntry::opId uses std::string, but all signals/slots use QString for operation IDs. This will require conversions at every boundary. Consider using QString consistently throughout, or std::string consistently with conversion only at the signal emission points.
+
+
+
+
+♻️ Suggested change for consistency
+
+     struct ItemEntry {
+-        std::string opId;
++        QString opId;
+         QTreeWidgetItem* item = nullptr;
+         QWidget* widget = nullptr;
+
+
+And update entryForId signature accordingly:
+
+-    ItemEntry* entryForId(const std::string& opId);
++    ItemEntry* entryForId(const QString& opId);
+
+Prompt for AI Agent:
+In @src/ui/history/HistoryPanel.h around lines 81 - 90, Change ItemEntry::opId from std::string to QString to match the rest of the codebase and avoid repeated conversions; update the signature of entryForId (and any other methods taking/returning operation IDs) to accept/return QString instead of std::string, and adjust any comparisons, assignments, and container keys (e.g., lookups in maps or vectors) to use QString operations so all signal/slot boundaries use the same type.
+
+
+
+============================================================================
+File: src/ui/history/RegenFailureDialog.cpp
+Line: 37 to 47
+Type: nitpick
+
+Comment:
+Hard-coded dark theme colors may not respect user preferences.
+
+The stylesheet uses fixed dark-theme colors that won't adapt to the application's theme or user preferences. Consider using the application's palette or making the stylesheet theme-aware.
+
+
+
+
+============================================================================
+File: src/app/document/Document.h
+Line: 111
+Type: nitpick
+
+Comment:
+Add documentation comment for consistency.
+
+All other public methods in this class have documentation comments explaining their purpose, parameters, and return values. Adding a doc comment here maintains consistency and improves API discoverability.
+
+
+
+
+📝 Suggested documentation
+
+     void addOperation(const OperationRecord& record);
++    /
++     * @brief Update parameters of an existing operation
++     * @param opId Operation ID to update
++     * @param params New parameters to apply
++     * @return true if operation found and updated, false otherwise
++     */
+     bool updateOperationParams(const std::string& opId, const OperationParams& params);
+     const std::vector& operations() const { return operations_; }
+
+Prompt for AI Agent:
+In @src/app/document/Document.h at line 111, Add a documentation comment for the public method updateOperationParams to match the rest of the class: describe the method purpose (updates operation parameters for a given operation), list parameters (const std::string& opId — identifier of the operation, const OperationParams& params — new parameters), and state the return value (bool — true on success, false on failure). Place the comment immediately above the declaration of updateOperationParams in the Document class using the same comment style/format used by other public methods in this header.
+
+
+
+============================================================================
+File: src/app/history/DependencyGraph.h
+Line: 163 to 166
+Type: nitpick
+
+Comment:
+Consider returning const std::string& to avoid copy.
+
+getFailureReason() can return a const reference since failureReason is stored in the FeatureNode. This avoids allocating and copying the string on each call.
+
+
+
+
+♻️ Suggested change
+
+-    std::string getFailureReason(const std::string& opId) const;
++    const std::string& getFailureReason(const std::string& opId) const;
+
+
+Note: The implementation would need to return a static empty string if the opId is not found.
+
+Prompt for AI Agent:
+In @src/app/history/DependencyGraph.h around lines 163 - 166, Change getFailureReason to return a const reference to avoid copying: update the declaration and implementation of std::string getFailureReason(const std::string& opId) const to const std::string& getFailureReason(const std::string& opId) const; locate where it looks up the FeatureNode (uses failureReason) and return node->failureReason when found, otherwise return a static const std::string empty string (ensure it has static storage so the reference remains valid).
+
+
+
+============================================================================
+File: src/app/history/RegenerationEngine.h
+Line: 150 to 178
+Type: nitpick
+
+Comment:
+Consider consistent error handling pattern.
+
+The build* methods return TopoDS_Shape with an error out-parameter, while resolveFaceInput and buildFaceFromSketchRegion use std::optional with an error out-parameter. For consistency and clarity, consider using a consistent pattern across all builder methods.
+
+
+
+Options:
+1. Return std::optional from build* methods (preferred for C++20 style)
+2. Keep current pattern if empty TopoDS_Shape is a valid sentinel (check shape.IsNull())
+
+If option 2 is intentional and TopoDS_Shape::IsNull() is the idiomatic check in OpenCASCADE, this is fine as-is.
+
+
+
+
+============================================================================
+File: src/app/commands/RollbackCommand.h
+Line: 27
+Type: potential_issue
+
+Comment:
+Clarify ownership semantics and consider validation.
+
+The constructor accepts a raw pointer Document* document without documented ownership semantics. Per C++20 guidelines, prefer smart pointers for single-owner objects or clearly document non-owning pointer semantics.
+
+Consider:
+1. If Document outlives this command (non-owning), document this explicitly and add nullptr validation
+2. If Document is a QObject with parent ownership, verify this is properly managed
+3. If uncertain about lifetime, consider storing a weak reference or adding runtime checks
+
+
+
+
+Do you want me to suggest a refactored version with explicit ownership semantics?
+
+Prompt for AI Agent:
+In @src/app/commands/RollbackCommand.h at line 27, The RollbackCommand constructor currently takes a raw Document (RollbackCommand(Document document, const std::string& targetOpId)) with no ownership semantics or null checks; clarify and enforce ownership by either documenting non-owning intent and adding a nullptr check, or switching to an explicit smart pointer type: use std::weak_ptr or Document& for non-null non-owning, or std::shared_ptr/std::unique_ptr for shared/owning lifetime; update the constructor signature, store the corresponding member type, add runtime validation (throw or assert on null if using pointer) and a comment explaining the chosen ownership model, and if Document is a QObject confirm parent-based ownership in the constructor comments and add appropriate checks instead of raw pointer usage.
+
+
+
+============================================================================
+File: src/app/commands/RollbackCommand.cpp
+Line: 39 to 47
+Type: nitpick
+
+Comment:
+Extract duplicated logic into private helper methods.
+
+The body clearing and regeneration sequence is duplicated in both execute() and undo(). Consider extracting to a private helper:
+
+
+
+♻️ Proposed refactor
+
+Add to the class declaration in the header:
+private:
+    void clearAndRegenerate();
+
+
+Then in the implementation:
++void RollbackCommand::clearAndRegenerate() {
++    auto bodyIds = document_->getBodyIds();
++    for (const auto& id : bodyIds) {
++        document_->removeBody(id);
++    }
++    document_->elementMap().clear();
++
++    history::RegenerationEngine engine(document_);
++    engine.regenerateAll();
++}
+
+
+And replace duplicated blocks in execute() and undo() with:
+clearAndRegenerate();
+
+Prompt for AI Agent:
+In @src/app/commands/RollbackCommand.cpp around lines 39 - 47, The body-clearing and regeneration sequence duplicated in RollbackCommand::execute() and RollbackCommand::undo() should be moved into a private helper; add a private method void clearAndRegenerate() to the RollbackCommand class and implement it to perform the steps currently duplicated: retrieve ids via document_->getBodyIds(), iterate and call document_->removeBody(id) for each, call document_->elementMap().clear(), then create history::RegenerationEngine engine(document_) and call engine.regenerateAll(); finally replace the duplicated blocks in execute() and undo() with a single call to clearAndRegenerate().
+
+
+
+============================================================================
+File: src/ui/tools/FilletChamferTool.cpp
+Line: 201 to 207
+Type: potential_issue
+
+Comment:
+Handle missing edge IDs more explicitly.
+
+The loop silently skips edges that don't have IDs in the element map. This could result in an incomplete operation record where params.edgeIds.size() < selectedEdges_.size(). When the parametric history is replayed, the operation may not reconstruct correctly if edge references are missing.
+
+Consider one of the following approaches:
+- Log a warning when an edge ID is not found
+- Return early/fail the operation if any edge is missing from the element map
+- Add a fallback mechanism to generate or assign edge IDs
+
+
+
+Does the element map guarantee that all edges in selectedEdges_ have valid IDs? If not, how should missing edge IDs be handled during parametric replay?
+
+Prompt for AI Agent:
+In @src/ui/tools/FilletChamferTool.cpp around lines 201 - 207, The loop that collects IDs from document_->elementMap().findIdsByShape(edge) can silently drop edges, causing params.edgeIds to be smaller than selectedEdges_ and breaking parametric replay; update the code in FilletChamferTool (the block using selectedEdges_, params.edgeIds and document_->elementMap().findIdsByShape) to explicitly detect missing IDs: for each edge, if findIdsByShape(edge) returns empty, emit a clear warning via the logger with the edge context and abort the operation (return an error/false or otherwise fail the action) so the caller knows the param cannot be recorded, or alternatively implement a fallback that creates/assigns an element ID before proceeding; ensure the chosen behavior is consistent with parametric history requirements and that params.edgeIds length equals selectedEdges_.size() before returning success.
+
+
+
+============================================================================
+File: src/app/history/RegenerationEngine.h
+Line: 124 to 137
+Type: nitpick
+
+Comment:
+Consider returning specific topological types for type safety.
+
+The documentation mentions resolving to TopoDS_Edge and TopoDS_Face, but the methods return the generic TopoDS_Shape. While this works (OpenCASCADE shapes are polymorphic), returning TopoDS_Edge and TopoDS_Face respectively would provide compile-time type safety and better express intent.
+
+
+
+♻️ Suggested type-specific return values
+
+     /
+      * @brief Resolve an edge ID to its TopoDS_Edge.
+      */
+-    std::optional resolveEdge(const std::string& edgeId) const;
++    std::optional resolveEdge(const std::string& edgeId) const;
+
+     /
+      * @brief Resolve a face ID to its TopoDS_Face.
+      */
+-    std::optional resolveFace(const std::string& faceId) const;
++    std::optional resolveFace(const std::string& faceId) const;
+
+
+This requires adding #include  to the includes.
+
+
+
+
+============================================================================
+File: src/app/history/DependencyGraph.h
+Line: 82 to 88
+Type: nitpick
+
+Comment:
+Consider std::optional return type for cycle detection clarity.
+
+Per coding guidelines recommending std::optional where it improves clarity: returning std::nullopt on cycle would let callers distinguish a cyclic graph from an empty graph without a separate hasCycle() call.
+
+
+
+
+♻️ Suggested signature
+
+-    std::vector topologicalSort() const;
++    std::optional> topologicalSort() const;
+
+Prompt for AI Agent:
+In @src/app/history/DependencyGraph.h around lines 82 - 88, Change topologicalSort() to return std::optional> (update declaration and definition in DependencyGraph::topologicalSort), include , and document that it returns std::nullopt when a cycle is detected and a non-empty vector when acyclic (empty vector is a valid acyclic result). In the implementation (topologicalSort) return std::nullopt on cycle detection instead of an empty vector, and update all callers to check has_value() / use value() before accessing the vector.
+
+
+
+============================================================================
+File: src/app/history/DependencyGraph.cpp
+Line: 278 to 308
+Type: potential_issue
+
+Comment:
+Potential stack overflow on deeply nested dependency chains.
+
+The recursive implementation could overflow the stack for very deep dependency graphs (e.g., a long chain of sequential operations in a CAD model). Consider an iterative approach using an explicit stack for robustness.
+
+
+♻️ Iterative alternative for collectDownstream
+
+void DependencyGraph::collectDownstream(const std::string& opId,
+                                        std::unordered_set& visited,
+                                        std::vector& result) const {
+    std::vector stack;
+    stack.push_back(opId);
+    
+    while (!stack.empty()) {
+        std::string current = std::move(stack.back());
+        stack.pop_back();
+        
+        auto it = forwardEdges_.find(current);
+        if (it == forwardEdges_.end()) {
+            continue;
+        }
+        
+        for (const auto& downstream : it->second) {
+            if (visited.insert(downstream).second) {
+                result.push_back(downstream);
+                stack.push_back(downstream);
+            }
+        }
+    }
+}
+
+Prompt for AI Agent:
+In @src/app/history/DependencyGraph.cpp around lines 278 - 308, Replace the recursive DFS in collectDownstream and collectUpstream with an iterative DFS using an explicit stack to avoid potential stack overflow; for collectDownstream use forwardEdges_ and for collectUpstream use backwardEdges_, start by pushing opId onto a local stack (do not add opId to result), then loop: pop current, look up the edge map for current, iterate neighbors and if visited.insert(neighbor).second then push neighbor onto the stack and append neighbor to result; preserve const signatures and the existing visited/result semantics so behavior remains the same but recursion is eliminated.
+
+
+
+============================================================================
+File: src/app/history/DependencyGraph.cpp
+Line: 261 to 276
+Type: potential_issue
+
+Comment:
+Dependencies on faces, edges, and sketches are not reflected in graph edges.
+
+rebuildEdges() only creates graph edges based on inputBodyIds. The inputFaceIds, inputEdgeIds, and inputSketchIds stored in FeatureNode are not used for dependency resolution. This means operations depending on faces/edges/sketches without an explicit body reference won't have proper dependency edges.
+
+Is this intentional, or should sketch/face/edge producers also be tracked to establish complete dependency relationships?
+
+Prompt for AI Agent:
+In @src/app/history/DependencyGraph.cpp around lines 261 - 276, rebuildEdges only uses bodyProducers_ and inputBodyIds, so dependencies coming from FeatureNode::inputFaceIds, inputEdgeIds, and inputSketchIds are ignored; update DependencyGraph::rebuildEdges to also consult producers for faces, edges, and sketches (e.g., faceProducers_, edgeProducers_, sketchProducers_ or a unified producer lookup) and add the same forwardEdges_/backwardEdges_ logic for each inputFaceId, inputEdgeId, and inputSketchId (skip self-dependencies just like with bodies) so ops that consume faces/edges/sketches receive proper edges in the graph.
+
+
+
+============================================================================
+File: src/ui/history/RegenFailureDialog.cpp
+Line: 57 to 58
+Type: nitpick
+
+Comment:
+Pass parent to QLabel constructor.
+
+For consistent memory management, the info label should have its parent set at construction.
+
+
+
+
+♻️ Proposed fix
+
+-    auto* infoLabel = new QLabel(tr("Choose how to handle the failed operations:"));
++    auto* infoLabel = new QLabel(tr("Choose how to handle the failed operations:"), this);
+
+Prompt for AI Agent:
+In @src/ui/history/RegenFailureDialog.cpp around lines 57 - 58, The info label is created without a parent which can break Qt ownership; update the QLabel construction in RegenFailureDialog so it receives the dialog as its parent (e.g., construct infoLabel with QLabel(tr("Choose how to handle the failed operations:"), this)) before adding it to mainLayout to ensure proper ownership and memory management.
+
+
+
+============================================================================
+File: src/ui/history/RegenFailureDialog.cpp
+Line: 64 to 79
+Type: nitpick
+
+Comment:
+Pass parent to QPushButton constructors.
+
+All three buttons should have their parent set at construction time to ensure proper memory management.
+
+
+
+
+♻️ Proposed fix
+
+-    auto* deleteBtn = new QPushButton(tr("Delete Failed"));
++    auto* deleteBtn = new QPushButton(tr("Delete Failed"), this);
+     deleteBtn->setToolTip(tr("Remove failed operations from history"));
+     connect(deleteBtn, &QPushButton::clicked, this, &RegenFailureDialog::onDeleteFailed);
+ 
+-    auto* suppressBtn = new QPushButton(tr("Suppress Failed"));
++    auto* suppressBtn = new QPushButton(tr("Suppress Failed"), this);
+     suppressBtn->setToolTip(tr("Keep in history but mark as suppressed"));
+     connect(suppressBtn, &QPushButton::clicked, this, &RegenFailureDialog::onSuppressFailed);
+ 
+-    auto* cancelBtn = new QPushButton(tr("Cancel"));
++    auto* cancelBtn = new QPushButton(tr("Cancel"), this);
+     cancelBtn->setToolTip(tr("Leave document in partial state"));
+     connect(cancelBtn, &QPushButton::clicked, this, &RegenFailureDialog::onCancel);
+
+Prompt for AI Agent:
+In @src/ui/history/RegenFailureDialog.cpp around lines 64 - 79, The three QPushButton instances (deleteBtn, suppressBtn, cancelBtn) are created without a parent which can cause ownership/memory management issues; update their constructors to pass the dialog (this) as the parent so they are owned by the RegenFailureDialog. Locate the button construction lines that create deleteBtn, suppressBtn, and cancelBtn and change them to construct with this as the parent, leaving the existing setToolTip and connect calls (to RegenFailureDialog::onDeleteFailed, ::onSuppressFailed, ::onCancel) intact.
+
+
+
+============================================================================
+File: src/ui/history/RegenFailureDialog.cpp
+Line: 36
+Type: nitpick
+
+Comment:
+Pass parent to QListWidget constructor.
+
+The widget should have its parent set at construction time to ensure proper memory management.
+
+
+
+
+♻️ Proposed fix
+
+-    failureList_ = new QListWidget;
++    failureList_ = new QListWidget(this);
+
+Prompt for AI Agent:
+In @src/ui/history/RegenFailureDialog.cpp at line 36, failureList_ is created without a parent which can lead to improper ownership; construct it with the dialog (or appropriate parent widget) by replacing the allocation new QListWidget with new QListWidget(this) (or the correct QWidget* parent variable) so the widget is owned and managed by the dialog.
+
+
+
+============================================================================
+File: src/ui/history/RegenFailureDialog.cpp
+Line: 26 to 33
+Type: nitpick
+
+Comment:
+Pass parent to QLabel constructor.
+
+While the widget is added to the layout (which provides ownership), passing the parent directly to the constructor is a safer practice that ensures proper cleanup even if exceptions occur between creation and layout addition.
+
+
+
+
+♻️ Proposed fix
+
+-    auto* headerLabel = new QLabel(tr("Some operations failed during regeneration:"));
++    auto* headerLabel = new QLabel(tr("Some operations failed during regeneration:"), this);
+
+Prompt for AI Agent:
+In @src/ui/history/RegenFailureDialog.cpp around lines 26 - 33, The QLabel headerLabel in RegenFailureDialog::setupUi is constructed without a parent; change its creation to pass this (the dialog) as the parent so ownership is set immediately (e.g., construct headerLabel with this), ensuring proper cleanup even if exceptions occur before adding it to mainLayout.
+
+
+
+============================================================================
+File: src/ui/history/EditParameterDialog.h
+Line: 15
+Type: nitpick
+
+Comment:
+Remove unused forward declaration.
+
+QLabel is forward-declared but doesn't appear to be used anywhere in this header file.
+
+
+
+
+♻️ Proposed fix
+
+ class QDoubleSpinBox;
+-class QLabel;
+ class QVBoxLayout;
+
+Prompt for AI Agent:
+In @src/ui/history/EditParameterDialog.h at line 15, Remove the unused forward declaration "class QLabel;" from EditParameterDialog.h; locate the declaration in the header (it is the standalone "class QLabel;" line) and delete it, then rebuild to confirm no compile errors and that no remaining references in EditParameterDialog class or its methods rely on QLabel forward declaration.
+
+
+
+============================================================================
+File: src/app/document/OperationRecord.h
+Line: 138 to 167
+Type: nitpick
+
+Comment:
+default case in exhaustive enum class switches masks missing cases.
+
+With enum class, the compiler can warn about unhandled cases when all enum values should be covered. The default: return "Unknown" suppresses this warning, so if a new enum value is added, these functions will silently return "Unknown" instead of generating a compile-time error.
+
+Consider removing default and handling all cases explicitly, or use a pattern that triggers a compile-time check:
+
+
+
+♻️ Suggested approach
+
+ inline const char* operationTypeName(OperationType type) {
+     switch (type) {
+         case OperationType::Extrude: return "Extrude";
+         case OperationType::Revolve: return "Revolve";
+         case OperationType::Fillet: return "Fillet";
+         case OperationType::Chamfer: return "Chamfer";
+         case OperationType::Shell: return "Shell";
+         case OperationType::Boolean: return "Boolean";
+-        default: return "Unknown";
+     }
++    return "Unknown"; // Unreachable with valid enum
+ }
+
+
+This way, adding a new enum value will trigger a compiler warning about the unhandled case.
+
+Prompt for AI Agent:
+In @src/app/document/OperationRecord.h around lines 138 - 167, The switch functions operationTypeName, booleanModeName, and booleanOpName currently use a default branch which silences compiler exhaustiveness warnings; remove the default cases and list every enum member explicitly so the compiler will warn if a new enum value is added, and add a final unreachable/LOG(FATAL)/assert(false) (e.g., via std::unreachable() or assert(false)) after the switch to satisfy control-flow requirements; update OperationType, BooleanMode, and BooleanParams::Op switches accordingly so every enumerator is handled and the code fails to compile or assert if a new enum value is introduced but not handled.
+
+
+
+============================================================================
+File: src/ui/mainwindow/MainWindow.cpp
+Line: 1762 to 1780
+Type: nitpick
+
+Comment:
+Improve button positioning to dynamically stack relative to other overlay buttons.
+
+The button positioning uses a hard-coded topMargin of 80 with a comment indicating it should be "Below render debug button," but it doesn't actually verify the render debug button exists or calculate the position dynamically. This creates fragile positioning that will break if the button layout changes.
+
+Compare with positionRenderDebugButton() (lines 693-707), which dynamically calculates position based on existing buttons above it.
+
+
+
+
+♻️ Proposed fix for dynamic button positioning
+
+ void MainWindow::positionHistoryPanel() {
+     if (!m_viewport || !m_historyPanel) return;
+ 
+     int rightMargin = 16;
+-    int topMargin = 80;  // Below render debug button
++    int topMargin = 20;
++    
++    // Stack below existing right-side buttons
++    if (m_renderDebugButton) {
++        topMargin = m_renderDebugButton->y() + m_renderDebugButton->height() + 10;
++    }
+ 
+     // Position button
+     if (m_historyOverlayButton) {
+         int buttonX = m_viewport->width() - m_historyOverlayButton->width() - rightMargin;
+         m_historyOverlayButton->move(buttonX, topMargin);
++        m_historyOverlayButton->raise();
+     }
+ 
+     // Position panel
+     int panelX = m_viewport->width() - m_historyPanel->width() - rightMargin;
+     int panelY = topMargin + 36;  // Below button
++    if (m_historyOverlayButton) {
++        panelY = m_historyOverlayButton->y() + m_historyOverlayButton->height() + 10;
++    }
+     int panelHeight = m_viewport->height() - panelY - 16;
+ 
+     m_historyPanel->setGeometry(panelX, panelY, m_historyPanel->width(), panelHeight);
++    m_historyPanel->raise();
+ }
+
+Prompt for AI Agent:
+In @src/ui/mainwindow/MainWindow.cpp around lines 1762 - 1780, positionHistoryPanel currently uses a hard-coded topMargin (80) instead of computing its Y offset relative to other overlay buttons, which makes the layout fragile; update MainWindow::positionHistoryPanel to compute topMargin the same way positionRenderDebugButton does by walking the stack of existing overlay buttons (e.g., check for the render debug button and any other overlay buttons), accumulate their heights plus spacing to derive the Y origin, then position m_historyOverlayButton and m_historyPanel using that computed topMargin so the history controls dynamically stack with other overlays.
+
+
+
+============================================================================
+File: src/app/commands/RollbackCommand.cpp
+Line: 53 to 77
+Type: potential_issue
+
+Comment:
+Same issue: local graph suppression state won't persist.
+
+The undo() method has the identical issue where setSuppressed(opId, false) is called on a local DependencyGraph that goes out of scope before the regeneration engine can use it.
+
+Additionally, consider checking the return value of regenerateAll() (if it returns a status) to properly propagate errors.
+
+
+
+🔧 Error handling suggestion
+
+     history::RegenerationEngine engine(document_);
+-    engine.regenerateAll();
++    if (!engine.regenerateAll()) {
++        return false;
++    }
+
+     document_->setModified(true);
+     return true;
+
+
+
+
+============================================================================
+File: src/app/history/DependencyGraph.cpp
+Line: 20 to 25
+Type: potential_issue
+
+Comment:
+Performance: O(n²) complexity due to repeated rebuildEdges() calls.
+
+Each addOperation() call triggers rebuildEdges(), resulting in O(n²) complexity when rebuilding from n operations. Consider deferring edge rebuilding until all operations are added.
+
+
+♻️ Proposed fix
+
+ void DependencyGraph::rebuildFromOperations(const std::vector& ops) {
+     clear();
+     for (const auto& op : ops) {
+-        addOperation(op);
++        addOperationWithoutRebuild(op);
+     }
++    rebuildEdges();
+ }
+
+
+You would need to extract the node-adding logic from addOperation into a helper addOperationWithoutRebuild, or add a boolean parameter to skip the edge rebuild.
+
+Prompt for AI Agent:
+In @src/app/history/DependencyGraph.cpp around lines 20 - 25, The rebuildFromOperations loop currently calls addOperation(op) which triggers rebuildEdges() each time causing O(n²) behavior; modify addOperation or create a new helper addOperationWithoutRebuild/addOperation(op, bool rebuild=true) that only adds nodes and local data without calling rebuildEdges(), then in DependencyGraph::rebuildFromOperations call clear(), loop calling the no-rebuild variant for every op, and finally call rebuildEdges() once after the loop to restore edges.
+
+
+
+============================================================================
+File: src/io/DocumentIO.cpp
+Line: 159 to 236
+Type: nitpick
+
+Comment:
+Consider extracting body metadata loading to reduce duplication.
+
+The body file listing and metadata extraction logic is duplicated between the regeneration path (lines 159-186) and BREP fallback path (lines 187-236). Extracting a helper function would improve maintainability.
+
+
+♻️ Suggested refactor
+
+Extract a helper function to load body metadata:
+
+struct BodyMetadata {
+    QString bodyId;
+    QString bodyName;
+    bool visible;
+    QString brepPath;
+};
+
+static std::optional loadBodyMetadata(Package* package, const QString& bodyFile) {
+    if (!bodyFile.endsWith(".json")) {
+        return std::nullopt;
+    }
+    
+    QByteArray bodyData = package->readFile(bodyFile);
+    if (bodyData.isEmpty()) {
+        return std::nullopt;
+    }
+    
+    QJsonDocument bodyDoc = QJsonDocument::fromJson(bodyData);
+    QJsonObject bodyJson = bodyDoc.object();
+    
+    BodyMetadata meta;
+    meta.bodyId = bodyJson["bodyId"].toString();
+    if (meta.bodyId.isEmpty()) {
+        meta.bodyId = QFileInfo(bodyFile).baseName();
+    }
+    meta.bodyName = bodyJson["name"].toString();
+    meta.visible = bodyJson["visible"].toBool(true);
+    meta.brepPath = bodyJson["brepPath"].toString();
+    if (meta.brepPath.isEmpty()) {
+        meta.brepPath = QString("bodies/%1.brep").arg(meta.bodyId);
+    }
+    
+    return meta;
+}
+
+
+Then use it in both paths to eliminate duplication.
+
+Prompt for AI Agent:
+In @src/io/DocumentIO.cpp around lines 159 - 236, The body metadata parsing is duplicated between the regeneration block and the BREP fallback; extract a helper (e.g., a static loadBodyMetadata returning optional with fields bodyId, bodyName, visible, brepPath) that takes Package* and a bodyFile QString, moves the file filtering, readFile, QJson parsing, defaulting of bodyId/name/visible/brepPath into it, and then call that helper from both the regeneration path (where you only need bodyId/bodyName/visible to call document->getBodyShape, setBodyName, setBodyVisible) and the BREP fallback (where you also use brepPath and then addBodyWithId, setBodyName, setBodyVisible); update usages to skip when the optional is empty to preserve current behavior.
+
+
+
+============================================================================
+File: src/app/history/DependencyGraph.cpp
+Line: 37 to 42
+Type: nitpick
+
+Comment:
+Consider using try_emplace or contains for cleaner C++20 idiom.
+
+The find-then-insert pattern can be simplified.
+
+
+♻️ Suggested improvement
+
+     for (const auto& bodyId : op.resultBodyIds) {
+         node.outputBodyIds.insert(bodyId);
+-        if (bodyProducers_.find(bodyId) == bodyProducers_.end()) {
+-            bodyProducers_[bodyId] = op.opId;
+-        }
++        bodyProducers_.try_emplace(bodyId, op.opId);
+     }
+
+Prompt for AI Agent:
+In @src/app/history/DependencyGraph.cpp around lines 37 - 42, The loop uses find-then-insert on bodyProducers_ for each bodyId; replace that pattern with a C++20 idiom such as bodyProducers_.try_emplace(bodyId, op.opId) (or check bodyProducers_.contains(bodyId) before inserting) to avoid the redundant lookup and make the code clearer — update the loop that iterates op.resultBodyIds (where node.outputBodyIds.insert(bodyId) is called) to use try_emplace or contains with bodyProducers_ and op.opId.
+
+
+
+============================================================================
+File: src/app/history/DependencyGraph.cpp
+Line: 66 to 69
+Type: nitpick
+
+Comment:
+Prefer std::erase (C++20) for vector element removal.
+
+C++20 provides std::erase which is cleaner than the erase-remove idiom.
+
+
+♻️ Suggested improvement
+
+     // Remove from creation order
+-    creationOrder_.erase(
+-        std::remove(creationOrder_.begin(), creationOrder_.end(), opId),
+-        creationOrder_.end());
++    std::erase(creationOrder_, opId);
+
+Prompt for AI Agent:
+In @src/app/history/DependencyGraph.cpp around lines 66 - 69, Replace the erase-remove idiom used to remove opId from the vector creationOrder_ with the C++20 std::erase overload for cleaner code: locate the code in DependencyGraph.cpp where creationOrder_.erase(std::remove(..., opId), ...) is used and change it to std::erase(creationOrder_, opId); ensure appropriate  is available or include  if needed and that the project is compiled with C++20 enabled.
+
+
+
+============================================================================
+File: src/io/HistoryIO.cpp
+Line: 322 to 340
+Type: potential_issue
+
+Comment:
+Missing validation for required fields in ShellParams and BooleanParams.
+
+Similar to FilletChamferParams, these deserialization blocks don't validate that required fields exist. Missing fields would result in default values (0.0 for thickness, empty arrays, empty strings) being used silently.
+
+
+
+Add validation to ensure required fields are present:
+else if (op.type == OperationType::Shell) {
+    if (!params.contains("thickness") || !params.contains("openFaceIds")) {
+        qWarning() << "Missing required fields for ShellParams";
+    }
+    // ... existing code
+}
+else if (op.type == OperationType::Boolean) {
+    if (!params.contains("operation") || !params.contains("targetBodyId") || 
+        !params.contains("toolBodyId")) {
+        qWarning() << "Missing required fields for BooleanParams";
+    }
+    // ... existing code
+}
+
+Prompt for AI Agent:
+In @src/io/HistoryIO.cpp around lines 322 - 340, Add explicit presence checks before deserializing Shell and Boolean operations: for OperationType::Shell, verify params.contains("thickness") and params.contains("openFaceIds") and call qWarning() with a clear message if missing, then only assign p.thickness and populate p.openFaceIds when those keys exist; for OperationType::Boolean, verify params.contains("operation"), params.contains("targetBodyId"), and params.contains("toolBodyId") and qWarning() if any are missing, then only set p.operation, p.targetBodyId, and p.toolBodyId when present; finally assign op.params = p as before.
+
+
+
+============================================================================
+File: src/ui/history/EditParameterDialog.h
+Line: 71 to 72
+Type: nitpick
+
+Comment:
+Document lifetime expectations and consider const correctness.
+
+The document_ and viewport_ raw pointers are non-owning references passed from the caller. Consider:
+
+1. Documentation: Add a comment clarifying that these must outlive the dialog instance and are not owned by this class.
+2. Const correctness: If these objects are not modified by the dialog, declare them as app::Document const document_ and Viewport const viewport_ to prevent accidental modification through these pointers.
+
+
+
+Example:
+// Non-owning references; must outlive this dialog
+app::Document* const document_ = nullptr;
+Viewport* const viewport_ = nullptr;
+
+Prompt for AI Agent:
+In @src/ui/history/EditParameterDialog.h around lines 71 - 72, Add a clear comment above the member pointers stating that document_ and viewport_ are non-owning references that must outlive the EditParameterDialog instance, and change their declarations to be pointer-to-modifiable-object with const pointer semantics (i.e., make the pointers themselves const) so the dialog cannot reassign them (use document_ and viewport_ as the identifiers); ensure this only applies if the dialog does not modify the pointees, otherwise keep mutable pointers and document ownership expectations.
+
+
+
+============================================================================
+File: src/app/commands/RollbackCommand.h
+Line: 25 to 36
+Type: refactor_suggestion
+
+Comment:
+Consider explicitly managing copy/move semantics.
+
+The class contains a raw pointer member but doesn't declare copy/move operations. If commands are never copied (typical for command pattern), explicitly delete these operations to prevent accidental misuse.
+
+
+
+
+♻️ Explicitly disable copy operations
+
+ class RollbackCommand : public Command {
+ public:
+     RollbackCommand(Document* document, const std::string& targetOpId);
++    RollbackCommand(const RollbackCommand&) = delete;
++    RollbackCommand& operator=(const RollbackCommand&) = delete;
+ 
+     bool execute() override;
+     bool undo() override;
+
+
+If move semantics are needed:
+    RollbackCommand(RollbackCommand&&) noexcept = default;
+    RollbackCommand& operator=(RollbackCommand&&) noexcept = default;
+
+Prompt for AI Agent:
+In @src/app/commands/RollbackCommand.h around lines 25 - 36, The RollbackCommand class has a raw Document* (document_) and currently lacks explicit copy/move control; prevent accidental copying by deleting the copy constructor and copy assignment operator for RollbackCommand (declare RollbackCommand(const RollbackCommand&) = delete; and RollbackCommand& operator=(const RollbackCommand&) = delete;) and, if you need moves, explicitly declare move operations as noexcept defaults (RollbackCommand(RollbackCommand&&) noexcept = default; RollbackCommand& operator=(RollbackCommand&&) noexcept = default;). Ensure these declarations are added to the class declaration alongside the existing members (document_, targetOpId_, suppressedOpIds_).
+
+
+
+============================================================================
+File: src/io/HistoryIO.cpp
+Line: 44 to 70
+Type: potential_issue
+
+Comment:
+Silent default fallbacks in conversion helpers.
+
+Similar to stringToOperationType, the functions stringToFilletChamferMode (line 54) and stringToBooleanOp (line 69) silently default to specific values when encountering unknown strings. This could mask data corruption during deserialization.
+
+
+
+Consider adding warning logs for unknown values:
+FilletChamferParams::Mode stringToFilletChamferMode(const QString& str) {
+    if (str == "Chamfer") return FilletChamferParams::Mode::Chamfer;
+    if (str != "Fillet") {
+        qWarning() << "Unknown fillet/chamfer mode:" << str << "- defaulting to Fillet";
+    }
+    return FilletChamferParams::Mode::Fillet;
+}
+
+Prompt for AI Agent:
+In @src/io/HistoryIO.cpp around lines 44 - 70, The conversion helpers stringToFilletChamferMode and stringToBooleanOp silently default on unknown strings; update each to explicitly check for all expected values and emit a qWarning() including the offending string when it doesn't match known cases before returning the default (keep returning Fillet for fillet/chamfer and Union for boolean), e.g., in stringToFilletChamferMode check for "Chamfer" and "Fillet" and warn on other strings, and in stringToBooleanOp check for "Cut", "Intersect", and "Union" and warn on other strings, ensuring the warning message includes the unknown value for easier debugging.
+
+
+
+============================================================================
+File: src/io/HistoryIO.cpp
+Line: 309 to 321
+Type: potential_issue
+
+Comment:
+Missing validation for required fields.
+
+The deserialization doesn't validate that required fields like radius or edgeIds exist in the JSON. If these fields are missing, toDouble() returns 0.0 and toArray() returns an empty array, which could lead to invalid operation parameters being silently accepted.
+
+
+
+Consider adding validation:
+else if (op.type == OperationType::Fillet || op.type == OperationType::Chamfer) {
+    FilletChamferParams p;
+    if (!params.contains("mode") || !params.contains("radius") || !params.contains("edgeIds")) {
+        qWarning() << "Missing required fields for FilletChamferParams";
+        // Consider returning a default-constructed or invalid operation
+    }
+    p.mode = stringToFilletChamferMode(params["mode"].toString());
+    p.radius = params["radius"].toDouble();
+    p.chainTangentEdges = params["chainTangentEdges"].toBool(true);
+    
+    QJsonArray edgeIds = params["edgeIds"].toArray();
+    for (const auto& edgeVal : edgeIds) {
+        p.edgeIds.push_back(edgeVal.toString().toStdString());
+    }
+    
+    op.params = p;
+}
+
+Prompt for AI Agent:
+In @src/io/HistoryIO.cpp around lines 309 - 321, The deserializer for Fillet/Chamfer (inside the op.type == OperationType::Fillet || OperationType::Chamfer branch) does not validate required JSON keys and may silently accept invalid params; update this branch to check params.contains("mode"), params.contains("radius") and params.contains("edgeIds") before using them, log a qWarning() with context (e.g., "Missing required fields for FilletChamferParams"), and handle the error by marking the operation invalid or returning a default/invalid FilletChamferParams instead of proceeding to call stringToFilletChamferMode, toDouble and toArray; ensure you still populate FilletChamferParams p.edgeIds only when edgeIds exists and only assign op.params when validation passes.
+
+
+
+============================================================================
+File: src/ui/mainwindow/MainWindow.cpp
+Line: 1738 to 1760
+Type: potential_issue
+
+Comment:
+Complete button initialization to match other overlay buttons.
+
+The button setup is missing key initialization steps that other overlay buttons include. Specifically:
+- Fixed size (setFixedSize(42, 42))
+- Visibility flag (setVisible(true))
+- Z-order management (raise() in positioning)
+
+Without these, the button may not display correctly or may be hidden behind other widgets.
+
+
+
+
+🔧 Proposed fix to complete button initialization
+
+     // Create toggle button
+     m_historyOverlayButton = new SidebarToolButton("⏱", tr("Toggle History Panel (Cmd+H)"), m_viewport);
++    m_historyOverlayButton->setFixedSize(42, 42);
+     m_historyOverlayButton->setCheckable(true);
+     m_historyOverlayButton->setChecked(false);
++    m_historyOverlayButton->setVisible(true);
+ 
+     connect(m_historyOverlayButton, &QToolButton::toggled, this, this {
+
+
+Also add raise() calls in positionHistoryPanel():
+
+     // Position button
+     if (m_historyOverlayButton) {
+         int buttonX = m_viewport->width() - m_historyOverlayButton->width() - rightMargin;
+         m_historyOverlayButton->move(buttonX, topMargin);
++        m_historyOverlayButton->raise();
+     }
+ 
+     // Position panel
+     int panelX = m_viewport->width() - m_historyPanel->width() - rightMargin;
+     int panelY = topMargin + 36;  // Below button
+     int panelHeight = m_viewport->height() - panelY - 16;
+ 
+     m_historyPanel->setGeometry(panelX, panelY, m_historyPanel->width(), panelHeight);
++    m_historyPanel->raise();
+
+Prompt for AI Agent:
+In @src/ui/mainwindow/MainWindow.cpp around lines 1738 - 1760, The history-overlay toggle button in setupHistoryPanel is missing the same initialization steps used by other overlay buttons: set a fixed size, make it visible, and ensure it can be brought to the front; update setupHistoryPanel to call m_historyOverlayButton->setFixedSize(42, 42) and m_historyOverlayButton->setVisible(true) after creating the button (and keep setCheckable/setChecked/connect as-is), and update positionHistoryPanel to call raise() on m_historyOverlayButton (and m_historyPanel if needed) so the button and panel are on top of other widgets.
+
+
+
+============================================================================
+File: src/ui/history/EditParameterDialog.h
+Line: 50 to 51
+Type: nitpick
+
+Comment:
+Ensure type consistency between signals and member variable.
+
+The signals use const QString& for the operation ID (lines 50-51), but the member variable opId_ is declared as std::string (line 73). This type mismatch requires string conversions each time a signal is emitted.
+
+Consider using a consistent type throughout—either QString (more idiomatic for Qt code) or std::string (if interfacing primarily with non-Qt APIs).
+
+
+
+
+♻️ Proposed fix (using QString consistently)
+
+If Qt types are preferred:
+
+-    std::string opId_;
++    QString opId_;
+
+
+And update the constructor parameter in the corresponding .cpp file, or convert once in the constructor.
+
+
+
+
+Also applies to: 73-73
+
+Prompt for AI Agent:
+In @src/ui/history/EditParameterDialog.h around lines 50 - 51, Signals previewRequested(const QString&) and parametersChanged(const QString&) use QString but the class stores opId_ as std::string causing repeated conversions; change the member opId_ to QString (and update any uses) so the type is consistent, and update the EditParameterDialog constructor and any .cpp initialization sites to accept/assign a QString (or perform a single conversion in the constructor if you must keep std::string), ensuring all references to opId_ and related accessors use the new QString type.
+
+
+
+============================================================================
+File: src/app/commands/RollbackCommand.h
+Line: 32 to 36
+Type: nitpick
+
+Comment:
+Member naming follows conventions correctly.
+
+The private members use camelCase with trailing underscores per project conventions. The inline comment documenting suppressedOpIds_ purpose is helpful.
+
+
+
+
+
+Optional: Consider const correctness for targetOpId_
+
+If targetOpId_ is not modified after construction, consider marking it const:
+
+ private:
+     Document* document_;
+-    std::string targetOpId_;
++    const std::string targetOpId_;
+     std::vector suppressedOpIds_;  // For undo
+
+Prompt for AI Agent:
+In @src/app/commands/RollbackCommand.h around lines 32 - 36, In the RollbackCommand class, mark targetOpId_ as const if it is never modified after construction: change the member declaration for targetOpId_ to const std::string and update the RollbackCommand constructor signature and initializer list to accept and initialize it (e.g., take a const std::string& or std::string by value) and remove any places that assign to targetOpId_ after construction (adjust methods that currently modify it). Ensure compilation by updating any copy/move semantics or assignments that previously targeted targetOpId_.
+
+
+
+============================================================================
+File: tests/prototypes/proto_regeneration.cpp
+Line: 36 to 38
+Type: nitpick
+
+Comment:
+Consider marking nearlyEqual as constexpr.
+
+Since this function performs compile-time computable operations and doesn't rely on runtime state, marking it constexpr would allow it to be evaluated at compile time when possible.
+
+
+
+
+♻️ Proposed refactor
+
+-bool nearlyEqual(double a, double b, double tol = 1e-3) {
++constexpr bool nearlyEqual(double a, double b, double tol = 1e-3) {
+     return std::abs(a - b)
+
+Prompt for AI Agent:
+In @tests/prototypes/proto_regeneration.cpp around lines 36 - 38, Mark the nearlyEqual function as constexpr so it can be evaluated at compile time when possible: change the function signature of nearlyEqual(double a, double b, double tol = 1e-3) to be constexpr and keep the body the same, referencing the same symbol nearlyEqual so callers benefit from compile-time evaluation (ensure your project uses a C++ standard that supports constexpr for the used math operations).
+
+
+
+============================================================================
+File: PARAMETRIC_PLAN.md
+Line: 112 to 115
+Type: potential_issue
+
+Comment:
+Specify OperationRecord serialization format.
+
+The HistoryIO extensions section mentions adding serializers for new param types and updating the switch statement, but the format choice is not specified:
+- JSONL (one JSON object per line, as suggested by "history/ops.jsonl" in Step 3)?
+- XML for hierarchical structure?
+- Binary for size efficiency?
+
+This choice impacts Step 3 (File Load Wiring) and must be finalized before implementation. Recommend documenting the chosen format and rationale.
+
+Prompt for AI Agent:
+In @PARAMETRIC_PLAN.md around lines 112 - 115, The HistoryIO extensions lack a specified serialization format for OperationRecord; choose JSONL (one JSON object per line) to match the "history/ops.jsonl" reference and simplify incremental appends and streaming reads, then document that choice and rationale in PARAMETRIC_PLAN.md and any related docs; update the serializeOperation() switch and HistoryIO read/write logic to emit/consume newline-delimited JSON objects, adjust File Load Wiring to parse JSONL during load, and add the migration code to translate old records into the new JSONL schema (ensuring default fields are filled) so all consumers use OperationRecord in the new format.
+
+
+
+============================================================================
+File: tests/prototypes/proto_regeneration.cpp
+Line: 240 to 243
+Type: potential_issue
+
+Comment:
+Potential null pointer dereference.
+
+The raw pointer returned by doc.getSketch(sketchId) is used at line 243 without checking for nullptr. This is the same issue as in testSingleExtrude and should be fixed consistently.
+
+
+
+
+🐛 Proposed fix
+
+ core::sketch::Sketch* sketchPtr = doc.getSketch(sketchId);
++assert(sketchPtr != nullptr);
+ core::loop::LoopDetectorConfig config = core::loop::makeRegionDetectionConfig();
+ core::loop::LoopDetector detector(config);
+ auto loopResult = detector.detect(*sketchPtr);
+
+Prompt for AI Agent:
+In @tests/prototypes/proto_regeneration.cpp around lines 240 - 243, The code dereferences the raw pointer returned by doc.getSketch(sketchId) (sketchPtr) without a nullptr check before calling detector.detect(*sketchPtr); update the logic to mirror the fix in testSingleExtrude by checking if sketchPtr == nullptr and handling that case (e.g., assert/fail the test, log an error, or return early) before constructing or using LoopDetector and calling detect; ensure you reference sketchPtr, getSketch(sketchId), LoopDetector, and detect when applying the fix so the null-path is consistently handled.
+
+
+
+============================================================================
+File: src/app/history/DependencyGraph.cpp
+Line: 110 to 113
+Type: nitpick
+
+Comment:
+Minor: Avoid unnecessary string copy in queue processing.
+
+queue.front() returns a reference, but assigning to std::string current creates a copy.
+
+
+♻️ Suggested improvement
+
+     while (!queue.empty()) {
+-        std::string current = queue.front();
+-        queue.pop();
++        std::string current = std::move(queue.front());
++        queue.pop();
+         result.push_back(current);
+
+
+Or use std::move when pushing to result:
+     while (!queue.empty()) {
+         std::string current = queue.front();
+         queue.pop();
+-        result.push_back(current);
++        result.push_back(std::move(current));
+
+Prompt for AI Agent:
+In @src/app/history/DependencyGraph.cpp around lines 110 - 113, The code currently copies the front string with std::string current = queue.front(); causing an unnecessary allocation; replace that pattern by moving the element into result before popping to avoid the copy: use result.push_back(std::move(queue.front())); then call queue.pop(); (alternatively use const std::string& current = queue.front() if you intentionally want to keep a reference). Target the loop that references queue.front(), current, queue.pop(), and result.
+
+
+
+============================================================================
+File: PARAMETRIC_PLAN.md
+Line: 54
+Type: potential_issue
+
+Comment:
+Address performance and threading concerns for live preview.
+
+The live preview workflow (lines 401–466, especially line 54 "full downstream regen during preview") may cause UI freezing on complex models:
+
+1. Line 416: onValueChanged() triggers previewRequested() on every spinbox change (e.g., dragging a slider). Recomputing 50+ downstream operations synchronously stalls the UI.
+2. Line 203: setProgressCallback() is defined but never wired to a progress dialog (Step 5 mentions this hook but Step 7 doesn't integrate it).
+3. Line 427-431: RegenerationEngine* regen is passed to the dialog but there's no documentation of thread-safety. Is previewFrom() (line 454) safe to call from the main thread while document operations proceed?
+4. Line 460: std::optional activePreview_ and backup shapes suggest state management, but concurrent edits (e.g., user changes param A while preview is computing param B) are not addressed.
+
+Recommendations:
+- Throttle preview updates (e.g., 200ms debounce on spinbox)
+- Run regen in a worker thread; emit signal when done instead of blocking
+- Add explicit cancellation (cancelPreview() method) for long-running regens
+- Document thread-safety guarantees for previewFrom()/discardPreview()/commitPreview()
+
+
+
+
+
+Also applies to: 201-203, 401-466
+
+
+
+
+============================================================================
+File: PARAMETRIC_PLAN.md
+Line: 43
+Type: potential_issue
+
+Comment:
+Resolve ambiguity on editable vs. record-only scope for Fillet, Chamfer, Shell, Boolean.
+
+Line 43 specifies "Edit scope: Extrude + Revolve only (v1), others display-only", but:
+- Lines 66-102 define full parameter structures for Fillet/Chamfer/Shell/Boolean
+- Line 44 states "Record ops: All modeling ops (Extrude, Revolve, Fillet, Chamfer, Shell, Boolean)"
+- Test 6 (lines 557–563) creates and records Fillet, Shell, Boolean operations
+
+This is inconsistent. If Fillet/Shell/Boolean are "display-only" in v1, why record their parameters? Clarify:
+1. Are they editable or read-only in Phase 3.2?
+2. If display-only, do they still need full OperationParams, or simplified forms?
+3. Which tests (e.g., Test 6) apply to v1 vs. v2+?
+
+
+
+
+Also applies to: 44-44, 57-57, 138-138, 557-563
+
+
+
+
+============================================================================
+File: src/io/DocumentIO.cpp
+Line: 238 to 241
+Type: potential_issue
+
+Comment:
+Consider checking ElementMap loading result.
+
+The ElementMapIO::loadElementMap call passes errorMessage but doesn't check if loading succeeded. If ElementMap is critical for document integrity, consider verifying the result.
+
+
+💡 Optional improvement
+
+         // Load ElementMap (only when using BREP cache)
+         if (loadedBodies) {
+-            ElementMapIO::loadElementMap(package, document->elementMap(), errorMessage);
++            if (!ElementMapIO::loadElementMap(package, document->elementMap(), errorMessage)) {
++                qWarning()
+
+Prompt for AI Agent:
+In @src/io/DocumentIO.cpp around lines 238 - 241, ElementMapIO::loadElementMap is called when loadedBodies is true but its return value isn't checked; update the call to capture and inspect the boolean (or status) result from ElementMapIO::loadElementMap, handle failures by propagating or appending errorMessage and returning/setting an error state (e.g., fail the DocumentIO load), and ensure any cleanup or logging occurs when document->elementMap() fails to load so the document integrity is enforced.
+
+
+
+============================================================================
+File: PARAMETRIC_PLAN.md
+Line: 238 to 243
+Type: nitpick
+
+Comment:
+Define HistoryPanel signal connection details in MainWindow.
+
+The HistoryPanel emits signals (lines 238–243) but the connection/handling in MainWindow is not specified in Step 5 (lines 287–319):
+- operationSelected(opId) — should highlight the body/face in viewport; implementation not described
+- editRequested(opId) — should open EditParameterDialog; wiring not shown
+- suppressionToggled(opId, suppressed) — should update graph and regenerate; no code shown
+- deleteRequested(opId) — should remove from graph and regenerate; no code shown
+
+Add signal handler pseudocode in MainWindow to clarify the control flow.
+
+
+
+
+Also applies to: 287-319
+
+Prompt for AI Agent:
+In @PARAMETRIC_PLAN.md around lines 238 - 243, Add explicit MainWindow signal connections and handler descriptions for HistoryPanel's signals: connect HistoryPanel::operationSelected(const QString&) to a MainWindow handler that calls highlightBodyOrFace(opId) / selectInViewport(opId) and updates selection state; connect editRequested(const QString&) to a handler that constructs and shows EditParameterDialog initialized with opId and applies edits to the operation in the graph on accept; connect suppressionToggled(const QString&, bool) to a handler that sets operation suppression state in the parametric graph, marks the graph dirty, and calls regenerateModel()/refreshViewport() (with error handling); connect deleteRequested(const QString&) to a handler that removes the operation from the graph, updates dependencies, marks dirty, and calls regenerateModel()/refreshViewport(); ensure each handler updates HistoryPanel/UI (e.g., disable/refresh entries) and logs or shows errors if regenerate fails.
+
+
+
+============================================================================
+File: tests/prototypes/proto_regeneration.cpp
+Line: 311 to 335
+Type: potential_issue
+
+Comment:
+Update misleading comment.
+
+The comment at lines 316-318 suggests that the test creates a cycle (body1 -> body2 -> body1), but the actual implementation only creates a single operation and verifies that no cycle exists. Either update the comment to match the actual test behavior or implement the cycle detection test as described.
+
+
+
+
+📝 Proposed fix for comment
+
+-    // Create a cycle: body1 -> body2 -> body1 (artificial)
+-    // This is somewhat artificial since real CAD shouldn't have cycles
+-    // but we test the algorithm
++    // Verify that a single operation yields no cycle
++    // and returns a valid topological sort
+
+Prompt for AI Agent:
+In @tests/prototypes/proto_regeneration.cpp around lines 311 - 335, The comment in testGraphCycleDetection incorrectly claims a cycle (body1 -> body2 -> body1) while only op1 is created; either update the comment to state the test checks a single-op, no-cycle case, or implement the described cycle: create a second OperationRecord (e.g., op2 with opId "op2" and resultBodyIds containing "body2"), set dependencies so op1 and op2 reference each other's body IDs to form a cycle, add both operations to app::history::DependencyGraph via graph.addOperation(...), then assert graph.hasCycle() and validate topologicalSort behavior accordingly (use symbols testGraphCycleDetection, op1, op2, graph.hasCycle, graph.topologicalSort).
+
+
+
+============================================================================
+File: src/io/HistoryIO.cpp
+Line: 34 to 42
+Type: potential_issue
+
+Comment:
+Silent default to Extrude masks deserialization errors.
+
+When an unknown operation type string is encountered, the function silently returns OperationType::Extrude. This could mask data corruption or version incompatibility issues. Consider logging an error or using Qt's warning system.
+
+
+
+
+⚠️ Proposed fix: Add error reporting
+
+ OperationType stringToOperationType(const QString& str) {
+     if (str == "Extrude") return OperationType::Extrude;
+     if (str == "Revolve") return OperationType::Revolve;
+     if (str == "Fillet") return OperationType::Fillet;
+     if (str == "Chamfer") return OperationType::Chamfer;
+     if (str == "Shell") return OperationType::Shell;
+     if (str == "Boolean") return OperationType::Boolean;
++    qWarning()
+
+
+
+
+============================================================================
+File: src/ui/history/HistoryPanel.cpp
+Line: 216 to 263
+Type: nitpick
+
+Comment:
+Add default case for completeness.
+
+The switch statement lacks a default case. If a new OperationType is added, typeName remains empty, returning just the params string. Consider adding a default for robustness, similar to operationIcon.
+
+
+♻️ Suggested fix
+
+         case app::OperationType::Boolean:
+             typeName = "Boolean";
+             ...
+             break;
++        default:
++            typeName = "Unknown";
++            break;
+     }
+
+Prompt for AI Agent:
+In @src/ui/history/HistoryPanel.cpp around lines 216 - 263, The switch on op.type in HistoryPanel.cpp can leave typeName empty for unknown/future OperationType values; add a default: branch in the switch (alongside the existing cases for app::OperationType::Extrude/Revolve/Fillet/Chamfer/Shell/Boolean) that sets typeName to a safe fallback (e.g. "Unknown" or the same label logic used by operationIcon) and leaves params empty or appropriate; update the switch that assigns typeName (the block referencing op.type and variable typeName) to include this default so new enum values don't produce an empty display.
+
+
+
+============================================================================
+File: src/ui/history/HistoryPanel.cpp
+Line: 50 to 62
+Type: nitpick
+
+Comment:
+Consider explicit parent ownership for Qt widgets.
+
+Per coding guidelines for src/ui/, ensure proper parent ownership for Qt objects. While these widgets will eventually be parented via layout adoption, explicitly passing the parent ensures safety if an exception occurs between construction and addWidget().
+
+
+♻️ Suggested improvement
+
+-    auto* headerWidget = new QWidget;
++    auto* headerWidget = new QWidget(panel_);
+     auto* headerLayout = new QHBoxLayout(headerWidget);
+     headerLayout->setContentsMargins(0, 0, 0, 4);
+
+-    auto* titleLabel = new QLabel("History");
++    auto* titleLabel = new QLabel("History", headerWidget);
+     titleLabel->setStyleSheet("font-weight: bold; color: #cccccc;");
+     ...
+     // Tree widget
+-    treeWidget_ = new QTreeWidget;
++    treeWidget_ = new QTreeWidget(panel_);
+
+Prompt for AI Agent:
+In @src/ui/history/HistoryPanel.cpp around lines 50 - 62, The widgets are constructed without explicit parent ownership which is fragile if an exception occurs before layout adoption; update constructors to pass the owning QWidget as parent (e.g., construct headerWidget with new QWidget(this), titleLabel with new QLabel("History", headerWidget) or new QLabel("History", this) as appropriate, and create treeWidget_ with new QTreeWidget(this)) while keeping headerLayout bound to headerWidget via new QHBoxLayout(headerWidget) and still add them to panelLayout; this ensures deterministic parent ownership for headerWidget, titleLabel, treeWidget_, etc.
+
+
+
+============================================================================
+File: tests/prototypes/proto_regeneration.cpp
+Line: 79 to 82
+Type: potential_issue
+
+Comment:
+Potential null pointer dereference.
+
+The raw pointer returned by doc.getSketch(sketchId) is used at line 82 without checking for nullptr. If the sketch retrieval fails, this will cause undefined behavior.
+
+
+
+
+🐛 Proposed fix
+
+ core::sketch::Sketch* sketchPtr = doc.getSketch(sketchId);
++assert(sketchPtr != nullptr);
+ core::loop::LoopDetectorConfig config = core::loop::makeRegionDetectionConfig();
+ core::loop::LoopDetector detector(config);
+ auto loopResult = detector.detect(*sketchPtr);
+
+Prompt for AI Agent:
+In @tests/prototypes/proto_regeneration.cpp around lines 79 - 82, doc.getSketch(sketchId) may return nullptr and sketchPtr is dereferenced by detector.detect(*sketchPtr); add a null check after obtaining sketchPtr and handle the failure path (e.g., log an error and return/throw) before constructing or calling core::loop::LoopDetector::detect; keep using core::loop::makeRegionDetectionConfig and core::loop::LoopDetector as-is but ensure detect is only called when sketchPtr is non-null to avoid undefined behavior.
+
+
+
+============================================================================
+File: src/ui/history/HistoryPanel.cpp
+Line: 138 to 147
+Type: nitpick
+
+Comment:
+O(n²) lookup can be optimized with a map.
+
+The nested loop searches ops for each sorted ID, resulting in O(n²) complexity. While acceptable for small history sizes, consider building a lookup map for linear-time access if operation counts grow.
+
+
+♻️ Suggested optimization
+
++    // Build lookup map for O(1) access
++    std::unordered_map opMap;
++    opMap.reserve(ops.size());
++    for (const auto& op : ops) {
++        opMap[op.opId] = &op;
++    }
++
+     // Create items in topological order
+     for (const auto& opId : sorted) {
+-        // Find the operation record
+-        const app::OperationRecord* opRecord = nullptr;
+-        for (const auto& op : ops) {
+-            if (op.opId == opId) {
+-                opRecord = &op;
+-                break;
+-            }
+-        }
+-        if (!opRecord) continue;
++        auto it = opMap.find(opId);
++        if (it == opMap.end()) continue;
++        const app::OperationRecord* opRecord = it->second;
+
+Prompt for AI Agent:
+In @src/ui/history/HistoryPanel.cpp around lines 138 - 147, The nested search over ops for each opId causes O(n²) behavior; before iterating sorted, build a lookup (e.g., std::unordered_map or similar) that maps each op.opId to &op by iterating once over ops, then replace the inner loop in the for (const auto& opId : sorted) block with a single map lookup and skip if not found; update references to opRecord accordingly and remove the nested loop to achieve linear overall complexity.
+
+
+
+============================================================================
+File: PARAMETRIC_PLAN.md
+Line: 215 to 224
+Type: potential_issue
+
+Comment:
+Add backwards-compatibility strategy for file I/O migration.
+
+Step 3 states "Skip BREP loading — bodies created by regen", but this is a breaking change for existing .onecad files that have:
+- Cached BREP geometry but no operation records (legacy saves)
+- Partial operation records (old format missing Fillet/Shell/Boolean)
+
+The plan must address:
+1. Detection: Check if operations are present; if missing, fall back to BREP load (with warning)
+2. Migration: Optionally convert old files on first open (prompt user)
+3. Graceful degradation: If regen fails and no BREP exists, show error with recovery guidance
+
+Without this, existing user files may fail to load, breaking user trust.
+
+Prompt for AI Agent:
+In @PARAMETRIC_PLAN.md around lines 215 - 224, The change to skip BREP loading in src/io/DocumentIO.cpp breaks legacy files that lack full operation history; update loadDocument() to first detect whether operation records exist (e.g., check history/ops.jsonl presence and parseable entries) and only call DependencyGraph construction + RegenerationEngine::regenerateAll() when sufficient ops are present, otherwise fall back to the existing BREP load path (emit a clear warning via the document load logger/UI); add an optional one-time migration flow that offers to convert legacy files on first open (prompt the user and write upgraded ops into history/ops.jsonl) and ensure regenerateAll() errors are caught so that if regeneration fails and no BREP is available you surface a user-facing recovery error with guidance (suggest opening backup or reverting to BREP), keeping all changes around loadDocument(), DependencyGraph, RegenerationEngine::regenerateAll(), and the history/ops.jsonl handling points.
+
+
+
+============================================================================
+File: PARAMETRIC_PLAN.md
+Line: 50
+Type: potential_issue
+
+Comment:
+Critical: ElementMap/Topological Naming solution is unscheduled despite being a resolved decision.
+
+The plan lists "Use ElementMap topological naming for edge/face references" as a resolved decision (line 50), and the Gemini research section (lines 618–632) provides detailed implementation of the NamingService class with hashing algorithms. However:
+
+1. Missing from implementation roadmap: Steps 1–7 (lines 150–466) do not include implementing ElementMap or NamingService.
+2. Deferred scope unclear: The plan defers "Pattern Operations (3.4)" and "UI Polish (3.5)" (lines 32–34) but does not clarify whether TNP solution is deferred to a later phase or assumed to be "simple" for v1.
+3. Risk: Without ElementMap, the model becomes fragile when operations are recomputed—downstream features may attach to the wrong geometry (the classic topological naming failure).
+
+Action required:
+- Either add ElementMap/NamingService to Steps 1–7 (e.g., as a Step 2b)
+- Or explicitly defer it with a note that v1 is "research-grade" and may have TNP issues
+- Or clarify that the simpler integer-index approach is acceptable for v1 (with a note about known limitations)
+
+
+
+
+Also applies to: 618-632
+
+Prompt for AI Agent:
+In @PARAMETRIC_PLAN.md at line 50, The plan claims ElementMap/topological naming is a resolved decision but the implementation roadmap (Steps 1–7) omits it; update PARAMETRIC_PLAN.md to either add ElementMap/NamingService into the roadmap (e.g., insert a Step 2b that defines implementing the NamingService with hashing and ElementMap hooks as described in the Gemini section), or explicitly mark it as deferred by adding a note adjacent to "Pattern Operations (3.4)" and "UI Polish (3.5)" that v1 will use the simpler integer-index approach with known topological naming (TNP) limitations, or state that v1 is research-grade and may exhibit TNP failures—ensure you reference the NamingService and ElementMap sections (lines ~618–632) and clarify the decision in Steps 1–7 so the roadmap and resolved decision are consistent.
+
+
+
+============================================================================
+File: src/io/DocumentIO.cpp
+Line: 132 to 134
+Type: potential_issue
+
+Comment:
+Unused error parameter - clarify error handling intent.
+
+The historyError variable is declared and passed to loadHistory but never checked. If history loading fails:
+- Is the intent to silently fall back to BREP loading (since operations() would be empty)?
+- Or should loading fail with an error message?
+
+The current behavior obscures whether history loading succeeded.
+
+
+
+🔍 Suggested approaches
+
+Option 1: Check and log the error
+     // 4. Load operation history first (determines if we regenerate or load BREP)
+     QString historyError;
+     HistoryIO::loadHistory(package, document.get(), historyError);
++    if (!historyError.isEmpty()) {
++        qWarning()
+
+
+
+
+============================================================================
+File: PARAMETRIC_PLAN.md
+Line: 584 to 611
+Type: nitpick
+
+Comment:
+Expand test coverage for failure scenarios and topological naming edge cases.
+
+The verification plan covers 11 tests (lines 510–611) but has gaps:
+
+1. Constraint solver feedback: Tests do not cover over/under-constrained sketches or conflicting constraints (mentioned in Gemini research section, line 19 and section 7.1).
+2. Topological naming robustness: No test for edge splits, face mergers, or other topology changes after regen (crucial for real-world models).
+3. Complex failure chains: Test 3 (partial load failure) manually deletes sketch JSON, but does not test:
+   - Missing intermediate features (e.g., extrude has invalid sketch reference)
+   - Constraint violations on regen (solver divergence)
+   - Cascading failures (op A fails → op B depends on A → op B also fails)
+4. Undo/redo edge cases: Tests 8–10 cover basic rollback/preview but not:
+   - Edit param → preview → undo → edit again
+   - Regen failure during preview (user cancels mid-computation)
+
+Recommendations:
+- Add Test 12: Constraint solver conflicts and error reporting
+- Add Test 13: Topological naming stability (edge splits, face changes)
+- Add Test 14: Cascading failure recovery
+- Add Test 15: Undo/redo state consistency under rapid edits
+
+Prompt for AI Agent:
+In @PARAMETRIC_PLAN.md around lines 584 - 611, The test plan omits failure and topology edge-case coverage; add four new tests named Test 12: Constraint solver conflicts and error reporting, Test 13: Topological naming stability (edge splits/face mergers), Test 14: Cascading failure recovery (missing intermediate features and dependent-op failures), and Test 15: Undo/redo consistency under rapid edits and regen-failure-during-preview; for each add clear steps, expected UI/error messages, and verify that the system reports solver errors (constraint solver feedback), preserves or recovers topology references (topological naming), properly nullifies dependent features and surfaces recovery flows (cascading failures), and maintains correct undo/redo state when edits, previews, cancels, and regen failures occur (undo/redo edge cases).
+
+
+
+============================================================================
+File: src/ui/history/HistoryPanel.cpp
+Line: 397 to 409
+Type: potential_issue
+
+Comment:
+Animation doesn't update minimumWidth, causing layout inconsistency.
+
+When animate is true, only maximumWidth is animated while minimumWidth remains unchanged. After collapsing, the widget may have minimumWidth > maximumWidth, causing undefined layout behavior.
+
+
+🐛 Suggested fix
+
+ void HistoryPanel::applyCollapseState(bool animate) {
+     int targetWidth = collapsed_ ? collapsedWidth_ : expandedWidth_;
+
+     if (animate && widthAnimation_) {
+         widthAnimation_->stop();
+         widthAnimation_->setStartValue(maximumWidth());
+         widthAnimation_->setEndValue(targetWidth);
++        // Update minimumWidth before animation to allow shrinking
++        setMinimumWidth(collapsed_ ? collapsedWidth_ : minimumWidth());
+         widthAnimation_->start();
++        // Or connect to finished signal to set final minimumWidth
+     } else {
+         setMaximumWidth(targetWidth);
+         setMinimumWidth(targetWidth);
+     }
+ }
+
+
+Alternatively, animate both properties or connect to the animation's finished signal to set minimumWidth afterward.
+
+Prompt for AI Agent:
+In @src/ui/history/HistoryPanel.cpp around lines 397 - 409, In HistoryPanel::applyCollapseState the animation only updates maximumWidth via widthAnimation_, leaving minimumWidth unchanged and risking minimumWidth > maximumWidth; fix by ensuring minimumWidth is updated to the same target either by animating both properties or connecting widthAnimation_->finished to setMinimumWidth(targetWidth) (and setMinimumWidth immediately in the non-animated branch), using the existing collapsedWidth_ / expandedWidth_ to compute targetWidth and keeping widthAnimation_ for maximumWidth.
+
+
+
+============================================================================
+File: PARAMETRIC_PLAN.md
+Line: 121 to 139
+Type: refactor_suggestion
+
+Comment:
+Define CMake integration for proto_regeneration test.
+
+The proto_regeneration.cpp test (lines 121–139) is listed as "Phase 0: Prototype Test (First!)" and appears as a checklist item (line 473), but there is no guidance on:
+1. Where the test target is registered in CMakeLists.txt
+2. Whether it builds as a standalone executable or part of the test suite
+3. How it is run (manual invocation vs. CI pipeline)
+4. What dependencies it links (OCCT, HistoryIO, Sketch, etc.)
+
+Add concrete CMake directives or a build integration subsection to Step 1.
+
+
+
+
+============================================================================
+File: src/ui/history/EditParameterDialog.cpp
+Line: 167 to 184
+Type: nitpick
+
+Comment:
+Consider caching original params to avoid redundant searches.
+
+Similar to getExtrudeParams, this method performs a redundant search through document_->operations(). Consider storing the original booleanMode and axis as member variables during loadCurrentParams to avoid repeated iteration and improve performance.
+
+Prompt for AI Agent:
+In @src/ui/history/EditParameterDialog.cpp around lines 167 - 184, getRevolveParams currently re-scans document_->operations to find the original booleanMode and axis; instead add member variables (e.g., origRevolveBooleanMode_ and origRevolveAxis_) to EditParameterDialog, set them when loading parameters in loadCurrentParams by locating the original app::RevolveParams there, and then use those cached members in EditParameterDialog::getRevolveParams to populate params.booleanMode and params.axis (with existing fallbacks if not set) to avoid the redundant loop.
+
+
+
+============================================================================
+File: PARAMETRIC_PLAN.md
+Line: 616 to 675
+Type: nitpick
+
+Comment:
+Integrate research appendix findings into the main implementation plan.
+
+Lines 616–675 contain substantial research from Gemini and ChatGPT on libslvs, OCCT integration, TNP solutions, and file formats. However, this content is disconnected from the main plan:
+
+1. libslvs Constraint Solving (lines 618-654): Detailed but not mapped to any implementation step. Does Phase 3.2 assume libslvs is already integrated (Phase 2), or is it deferred?
+2. TNP/ElementMap (lines 623-632): Critical NamingService design provided but not scheduled (see separate comment above).
+3. OCCT File Format (lines 639-675): Recommends ZIP container with XML DAG and binary BREP blobs, but the plan does not explicitly choose this format.
+
+Action: Either fold key insights (e.g., "Use OCAF for undo/redo" from line 654) into Steps 1–7, or mark research sections as "Appendix: Reference Material for Future Phases" to avoid confusion.
+
+
+
+
+============================================================================
+File: src/ui/history/EditParameterDialog.cpp
+Line: 236 to 264
+Type: nitpick
+
+Comment:
+Consider incremental regeneration for better performance.
+
+The current implementation clears all bodies and regenerates all operations from scratch. While this ensures correctness, it could be inefficient for large models. Consider using previewEngine_->regenerateFrom(opId_) or similar incremental approach to only regenerate operations from the edited operation onwards.
+
+Additionally, a new RegenerationEngine is created on line 260 rather than reusing the existing previewEngine_ member. If there's no specific reason for a separate engine instance, consider consolidating to the existing one.
+
+Prompt for AI Agent:
+In @src/ui/history/EditParameterDialog.cpp around lines 236 - 264, EditParameterDialog::applyChanges currently clears all bodies and calls a new app::history::RegenerationEngine to regenerateAll(), which is expensive; instead update the operation params via document_->updateOperationParams(opId_, newParams) then call the existing previewEngine_->regenerateFrom(opId_) (or equivalent incremental method) to only regenerate from the edited operation onward, and remove the body-clearing/document_->elementMap().clear() steps if previewEngine_ handles incremental replacement; also reuse the member previewEngine_ instead of creating a local app::history::RegenerationEngine engine(document_).
+
+
+
+============================================================================
+File: src/ui/history/EditParameterDialog.cpp
+Line: 149 to 165
+Type: nitpick
+
+Comment:
+Consider caching original params to avoid redundant searches.
+
+This method searches through document_->operations() every time it's called, repeating work already done in loadCurrentParams. Consider storing the original booleanMode (and other fields to preserve) as member variables during loadCurrentParams to improve efficiency and consistency.
+
+
+Additionally, the comment on line 153 says "Preserve original mode" but appears before the default assignment, which is slightly misleading. The preservation actually happens in the loop below.
+
+Prompt for AI Agent:
+In @src/ui/history/EditParameterDialog.cpp around lines 149 - 165, getExtrudeParams currently re-scans document_->operations() to find the original booleanMode each call; cache the original ExtrudeParams (or at least the booleanMode) during loadCurrentParams into a member like originalExtrudeParams_ or originalBooleanMode_ and have getExtrudeParams use that cached value instead of looping, remove the redundant search loop from getExtrudeParams, and move/update the "Preserve original mode" comment so it sits next to the code that actually uses the cached value (e.g., the assignment of params.booleanMode = originalBooleanMode_).
+
+
+
+============================================================================
+File: src/ui/history/EditParameterDialog.cpp
+Line: 75 to 79
+Type: nitpick
+
+Comment:
+Add explicit parent ownership for QDialogButtonBox.
+
+The button box should have an explicit parent for clarity and to follow the coding guidelines for Qt memory management.
+
+
+
+♻️ Proposed fix
+
+     auto* buttonBox = new QDialogButtonBox(
+-        QDialogButtonBox::Ok | QDialogButtonBox::Cancel);
++        QDialogButtonBox::Ok | QDialogButtonBox::Cancel, this);
+
+
+
+Based on coding guidelines: "Ensure proper parent ownership for Qt objects to prevent memory leaks"
+
+Prompt for AI Agent:
+In @src/ui/history/EditParameterDialog.cpp around lines 75 - 79, The QDialogButtonBox is created without an explicit parent which violates Qt ownership guidelines; update the constructor call that creates buttonBox in EditParameterDialog (the new QDialogButtonBox(...) statement) to pass the dialog as parent (e.g., use this) so the widget is owned and cleaned up automatically, leaving the existing connect(...) calls and mainLayout->addWidget(buttonBox) unchanged.
+
+
+
+============================================================================
+File: src/ui/history/EditParameterDialog.cpp
+Line: 64 to 66
+Type: nitpick
+
+Comment:
+Add explicit parent ownership for Qt widgets.
+
+While adding the widget to a layout establishes ownership, the coding guidelines for src/ui/ files emphasize explicit parent ownership to prevent memory leaks. Consider passing this as the parent.
+
+
+
+♻️ Proposed fix
+
+-    auto* titleLabel = new QLabel(tr("Edit Operation Parameters"));
++    auto* titleLabel = new QLabel(tr("Edit Operation Parameters"), this);
+
+
+
+Based on coding guidelines: "Ensure proper parent ownership for Qt objects to prevent memory leaks"
+
+Prompt for AI Agent:
+In @src/ui/history/EditParameterDialog.cpp around lines 64 - 66, Create the QLabel with explicit parent ownership by passing the dialog instance as parent instead of relying solely on layout ownership: update the construction of titleLabel in EditParameterDialog (the QLabel named titleLabel inside the EditParameterDialog class/constructor) to use this as the parent so the dialog owns the widget and prevents potential leaks.
+
+
+
+============================================================================
+File: src/app/history/RegenerationEngine.cpp
+Line: 202 to 208
+Type: nitpick
+
+Comment:
+Same O(1) lookup optimization applies here.
+
+This is the same linear search pattern as in regenerateAll. Consider extracting a shared helper that builds an operation lookup map, or refactoring the shared execution logic into a common method to reduce duplication.
+
+Prompt for AI Agent:
+In @src/app/history/RegenerationEngine.cpp around lines 202 - 208, The loop that searches for an OperationRecord by currentOpId (iterating over doc_->operations() and assigning opRecord) duplicates the linear-search pattern used in regenerateAll; replace it by extracting a shared helper (e.g., a function like buildOperationLookup or findOperationById) that builds an unordered_map from opId to OperationRecord* or returns the pointer directly, then use that helper from both this code and regenerateAll to achieve O(1) lookup; update references to OperationRecord, doc_->operations(), currentOpId, and regenerateAll to call the new helper and remove the duplicated loop.
+
+
+
+============================================================================
+File: src/ui/history/EditParameterDialog.cpp
+Line: 50
+Type: nitpick
+
+Comment:
+Specify Qt::DirectConnection for same-thread signal.
+
+According to coding guidelines, same-thread signal connections should explicitly use Qt::DirectConnection.
+
+
+
+♻️ Proposed fix
+
+-    connect(debounceTimer_, &QTimer::timeout, this, &EditParameterDialog::updatePreview);
++    connect(debounceTimer_, &QTimer::timeout, this, &EditParameterDialog::updatePreview, Qt::DirectConnection);
+
+
+
+Based on coding guidelines: "Use Queued signal connections for cross-thread communication and Direct for same-thread in Qt"
+
+Prompt for AI Agent:
+In @src/ui/history/EditParameterDialog.cpp at line 50, The connection from debounceTimer_ to EditParameterDialog::updatePreview currently omits the connection type; update the connect call that binds debounceTimer_ (QTimer::timeout) to the slot EditParameterDialog::updatePreview to explicitly pass Qt::DirectConnection as the connection type for same-thread signaling (i.e., use the overload of connect that accepts the Qt::ConnectionType and specify Qt::DirectConnection).
+
+
+
+============================================================================
+File: src/ui/history/EditParameterDialog.cpp
+Line: 77 to 78
+Type: nitpick
+
+Comment:
+Specify Qt::DirectConnection for same-thread signals.
+
+Both signal connections are same-thread and should explicitly use Qt::DirectConnection per the coding guidelines.
+
+
+
+♻️ Proposed fix
+
+-    connect(buttonBox, &QDialogButtonBox::accepted, this, &QDialog::accept);
+-    connect(buttonBox, &QDialogButtonBox::rejected, this, &QDialog::reject);
++    connect(buttonBox, &QDialogButtonBox::accepted, this, &QDialog::accept, Qt::DirectConnection);
++    connect(buttonBox, &QDialogButtonBox::rejected, this, &QDialog::reject, Qt::DirectConnection);
+
+
+
+Based on coding guidelines: "Use Queued signal connections for cross-thread communication and Direct for same-thread in Qt"
+
+Prompt for AI Agent:
+In @src/ui/history/EditParameterDialog.cpp around lines 77 - 78, The two signal connections from buttonBox (QDialogButtonBox::accepted and QDialogButtonBox::rejected) to QDialog::accept and QDialog::reject should explicitly specify Qt::DirectConnection since they are same-thread; update the connect calls that reference buttonBox and QDialogButtonBox::accepted/QDialogButtonBox::rejected to pass Qt::DirectConnection as the connection type parameter.
+
+
+
+============================================================================
+File: src/ui/history/EditParameterDialog.cpp
+Line: 136 to 144
+Type: nitpick
+
+Comment:
+Add explicit parent ownership for angleSpinbox_.
+
+The QDoubleSpinBox should have an explicit parent to follow coding guidelines for Qt memory management in UI files.
+
+
+
+♻️ Proposed fix
+
+-    angleSpinbox_ = new QDoubleSpinBox;
++    angleSpinbox_ = new QDoubleSpinBox(this);
+     angleSpinbox_->setRange(kMinAngle, kMaxAngle);
+     angleSpinbox_->setValue(params.angleDeg);
+     angleSpinbox_->setSuffix("°");
+     angleSpinbox_->setDecimals(1);
+     angleSpinbox_->setSingleStep(15.0);
+     connect(angleSpinbox_, QOverload::of(&QDoubleSpinBox::valueChanged),
+-            this, &EditParameterDialog::onValueChanged);
++            this, &EditParameterDialog::onValueChanged, Qt::DirectConnection);
+
+
+
+Based on coding guidelines: "Ensure proper parent ownership for Qt objects to prevent memory leaks"
+
+Prompt for AI Agent:
+In @src/ui/history/EditParameterDialog.cpp around lines 136 - 144, angleSpinbox_ is created without a parent which violates Qt ownership guidelines and can leak; instantiate it with the dialog as parent (e.g., use new QDoubleSpinBox(this) instead of new QDoubleSpinBox) or call angleSpinbox_->setParent(this) immediately after construction in the EditParameterDialog constructor so the dialog owns the widget; keep the existing setup (setRange/setValue/setSuffix/setDecimals/setSingleStep/connect/formLayout->addRow) unchanged.
+
+
+
+============================================================================
+File: src/ui/history/EditParameterDialog.cpp
+Line: 108 to 116
+Type: nitpick
+
+Comment:
+Add explicit parent ownership for distanceSpinbox_.
+
+The QDoubleSpinBox should have an explicit parent to follow coding guidelines for Qt memory management in UI files.
+
+
+
+♻️ Proposed fix
+
+-    distanceSpinbox_ = new QDoubleSpinBox;
++    distanceSpinbox_ = new QDoubleSpinBox(this);
+     distanceSpinbox_->setRange(kMinDistance, kMaxDistance);
+     distanceSpinbox_->setValue(params.distance);
+     distanceSpinbox_->setSuffix(" mm");
+     distanceSpinbox_->setDecimals(2);
+     distanceSpinbox_->setSingleStep(1.0);
+     connect(distanceSpinbox_, QOverload::of(&QDoubleSpinBox::valueChanged),
+-            this, &EditParameterDialog::onValueChanged);
++            this, &EditParameterDialog::onValueChanged, Qt::DirectConnection);
+
+
+
+Based on coding guidelines: "Ensure proper parent ownership for Qt objects to prevent memory leaks"
+
+Prompt for AI Agent:
+In @src/ui/history/EditParameterDialog.cpp around lines 108 - 116, The QDoubleSpinBox instance distanceSpinbox_ lacks an explicit parent which can cause ownership/memory issues; update its construction to pass the dialog as parent (create it with new QDoubleSpinBox(this) or otherwise setParent(this)) so EditParameterDialog owns it, leaving the rest of the setup (setRange, setValue, suffix, decimals, singleStep, connect to EditParameterDialog::onValueChanged, and adding to formLayout) unchanged.
+
+
+
+============================================================================
+File: src/app/history/RegenerationEngine.cpp
+Line: 636 to 643
+Type: nitpick
+
+Comment:
+Silently skipping unresolved edges may hide issues.
+
+When an edge can't be resolved, the code silently continues. The user won't know if some edges were skipped due to invalid references. Consider tracking skipped edges and including them in the error message if any edges were skipped.
+
+
+
+
+♻️ Suggested improvement
+
+std::vector skippedEdges;
+for (const auto& edgeId : params.edgeIds) {
+    auto edgeOpt = resolveEdge(edgeId);
+    if (!edgeOpt) {
+        skippedEdges.push_back(edgeId);
+        continue;
+    }
+    // ...
+}
+
+if (!skippedEdges.empty()) {
+    // Log or include in result metadata
+}
+
+Prompt for AI Agent:
+In @src/app/history/RegenerationEngine.cpp around lines 636 - 643, The loop over params.edgeIds silently ignores unresolved edges; modify the loop that calls resolveEdge(edgeId) to collect any skipped edgeIds into a vector (e.g., skippedEdges) instead of just continuing, proceed to call fillet.Add for resolved edges as before, and after the loop surface the skippedEdges (either by logging via your existing logger or attaching them to the operation result/metadata) so callers are informed which edge references failed to resolve; update any error handling path to include skippedEdges when non-empty.
+
+
+
+============================================================================
+File: src/ui/history/EditParameterDialog.cpp
+Line: 119 to 127
+Type: nitpick
+
+Comment:
+Add explicit parent ownership for draftAngleSpinbox_.
+
+The QDoubleSpinBox should have an explicit parent to follow coding guidelines for Qt memory management in UI files.
+
+
+
+♻️ Proposed fix
+
+-    draftAngleSpinbox_ = new QDoubleSpinBox;
++    draftAngleSpinbox_ = new QDoubleSpinBox(this);
+     draftAngleSpinbox_->setRange(kMinDraft, kMaxDraft);
+     draftAngleSpinbox_->setValue(params.draftAngleDeg);
+     draftAngleSpinbox_->setSuffix("°");
+     draftAngleSpinbox_->setDecimals(1);
+     draftAngleSpinbox_->setSingleStep(1.0);
+     connect(draftAngleSpinbox_, QOverload::of(&QDoubleSpinBox::valueChanged),
+-            this, &EditParameterDialog::onValueChanged);
++            this, &EditParameterDialog::onValueChanged, Qt::DirectConnection);
+
+
+
+Based on coding guidelines: "Ensure proper parent ownership for Qt objects to prevent memory leaks"
+
+Prompt for AI Agent:
+In @src/ui/history/EditParameterDialog.cpp around lines 119 - 127, The draftAngleSpinbox_ is created without a parent which violates Qt ownership rules; update the constructor call to create it with the dialog as parent (e.g., new QDoubleSpinBox(this)) so that EditParameterDialog owns and will delete it, keep the rest of the initialization (setRange, setValue, setSuffix, setDecimals, setSingleStep), and leave the connect(...) and formLayout->addRow(...) calls unchanged referencing draftAngleSpinbox_.
+
+
+
+============================================================================
+File: src/app/history/RegenerationEngine.cpp
+Line: 94 to 100
+Type: nitpick
+
+Comment:
+Consider using a map for O(1) operation lookup.
+
+The linear search through doc_->operations() inside the topological order loop results in O(n²) complexity. For documents with many operations, this could become a performance bottleneck.
+
+
+
+
+♻️ Suggested optimization
+
+Build a lookup map before the loop:
+
+// Build lookup map before iteration
+std::unordered_map opMap;
+for (const auto& op : doc_->operations()) {
+    opMap[op.opId] = &op;
+}
+
+// Then in the loop:
+auto it = opMap.find(opId);
+const OperationRecord* opRecord = (it != opMap.end()) ? it->second : nullptr;
+
+Prompt for AI Agent:
+In @src/app/history/RegenerationEngine.cpp around lines 94 - 100, Replace the repeated linear search over doc_->operations() inside the topological order loop with an O(1) lookup: before entering the loop build an std::unordered_map (keyed by op.opId) from doc_->operations(), then inside the loop replace the for-each search that sets opRecord with a single map find using opId to retrieve the const OperationRecord (or nullptr if not found); update uses of opRecord accordingly.
+
+
+
+============================================================================
+File: src/app/history/RegenerationEngine.cpp
+Line: 281 to 310
+Type: nitpick
+
+Comment:
+Preview state is not thread-safe and lacks RAII cleanup.
+
+If an exception occurs between previewFrom and commitPreview/discardPreview, the preview state could be left in an inconsistent state. Consider using RAII (e.g., a PreviewGuard class) to ensure cleanup on scope exit.
+
+
+
+
+============================================================================
+File: src/app/history/RegenerationEngine.cpp
+Line: 933 to 944
+Type: potential_issue
+
+Comment:
+Unused parameter opId in applyBodyResult.
+
+The opId parameter is declared but never used in the function body. Either remove it or use it (e.g., for logging, element map updates, or tracing).
+
+
+
+
+🔧 Suggested fix
+
+If unused, mark with [[maybe_unused]] or remove:
+
+ void RegenerationEngine::applyBodyResult(const std::string& bodyId, const TopoDS_Shape& shape,
+-                                          const std::string& opId) {
++                                          [[maybe_unused]] const std::string& opId) {
+
+Prompt for AI Agent:
+In @src/app/history/RegenerationEngine.cpp around lines 933 - 944, The parameter opId in RegenerationEngine::applyBodyResult is declared but never used; either remove the parameter from the function signature (and all call sites) or mark it explicitly as unused (e.g., [[maybe_unused]] std::string const& opId) or incorporate it in the function (for example, include opId in a trace/log message or when updating element maps) so the compiler warning is resolved and the intended operation-id context is preserved; update the declaration and any callers of applyBodyResult accordingly.
+
+
+
+============================================================================
+File: src/app/history/RegenerationEngine.cpp
+Line: 269 to 275
+Type: potential_issue
+
+Comment:
+Avoid const_cast to modify document operations.
+
+Using const_cast to modify doc_->operations() bypasses const-correctness guarantees and could lead to undefined behavior if the underlying container is truly const. This suggests the Document API may need a mutable accessor (e.g., modifyOperation(opId, newParams)) rather than forcing mutation through const_cast.
+
+
+
+
+🔧 Suggested approach
+
+Add a proper mutation method to Document:
+
+// In Document.h
+bool updateOperationParams(const std::string& opId, const OperationParams& params);
+
+// Usage in previewFrom:
+previewOriginalParams_ = / get current params /;
+doc_->updateOperationParams(opId, newParams);
+
+Prompt for AI Agent:
+In @src/app/history/RegenerationEngine.cpp around lines 269 - 275, The loop uses const_cast on doc_->operations() to mutate operations which violates const-correctness; instead add a proper mutation API on Document (e.g., getOperationParams(const std::string& opId) and updateOperationParams(const std::string& opId, const OperationParams& params) or a single updateOperationParams that returns the previous params), then in RegenerationEngine replace the const_cast loop: call the getter to store previewOriginalParams_ and call doc_->updateOperationParams(opId, newParams) to apply the change; remove any const_cast usage and update references to doc_->operations() accordingly.
+
+
+
+============================================================================
+File: src/app/history/RegenerationEngine.cpp
+Line: 428 to 429
+Type: potential_issue
+
+Comment:
+Missing IsDone() check after prism creation.
+
+BRepPrimAPI_MakePrism can fail (e.g., for degenerate input). The code directly accesses prism.Shape() without verifying success, which could return an invalid shape.
+
+
+
+
+🔧 Suggested fix
+
+     BRepPrimAPI_MakePrism prism(baseFace, prismVec, true);
++    if (!prism.IsDone()) {
++        errorOut = "Prism creation failed";
++        return {};
++    }
+     TopoDS_Shape result = prism.Shape();
+
+Prompt for AI Agent:
+In @src/app/history/RegenerationEngine.cpp around lines 428 - 429, The code calls prism.Shape() immediately after constructing a BRepPrimAPI_MakePrism (prism) without checking success; add a check for prism.IsDone() after constructing BRepPrimAPI_MakePrism and before using prism.Shape(), and handle the failure path (log an error with context and the input identifiers, return an empty/invalid TopoDS_Shape or throw an exception consistent with surrounding error handling) so the code never uses an invalid shape when IsDone() is false.
+
+
+
+============================================================================
+File: src/app/history/RegenerationEngine.cpp
+Line: 433
+Type: potential_issue
+
+Comment:
+M_PI is not portable across all compilers.
+
+M_PI is a POSIX extension, not part of the C++ standard. Some compilers (notably MSVC without _USE_MATH_DEFINES) won't define it.
+
+
+
+
+🔧 Suggested fix
+
+Define a local constant or use std::numbers::pi (C++20):
+
++#include 
+ // ...
+-const double angleRad = params.draftAngleDeg * M_PI / 180.0;
++const double angleRad = params.draftAngleDeg * std::numbers::pi / 180.0;
+
+
+Or define locally:
+namespace {
+constexpr double kPi = 3.14159265358979323846;
+}
+
+Prompt for AI Agent:
+In @src/app/history/RegenerationEngine.cpp at line 433, The code uses the non-portable POSIX macro M_PI when computing angleRad in RegenerationEngine.cpp (angleRad = params.draftAngleDeg  M_PI / 180.0), which can break on some compilers; replace M_PI with a portable constant by either (a) using std::numbers::pi (add #include  and use std::numbers::pi) or (b) define a local constexpr double (e.g., kPi in an anonymous namespace) and use that in the angleRad calculation (angleRad = params.draftAngleDeg  kPi / 180.0); update the include/import if you choose std::numbers::pi and ensure only the symbol names angleRad and params.draftAngleDeg are changed in the expression.
+
+
+
+============================================================================
+File: src/app/history/RegenerationEngine.cpp
+Line: 769 to 772
+Type: nitpick
+
+Comment:
+Consider extracting the hardcoded tolerance as a named constant.
+
+The tolerance 1e-3 is hardcoded. For consistency with other constants in this file (e.g., kMinValue), consider defining this as a named constant.
+
+
+
+ namespace {
+ constexpr double kDraftAngleEpsilon = 0.001;
+ constexpr double kSideFaceDotThreshold = 0.999;
+ constexpr double kMinValue = 1e-3;
++constexpr double kShellTolerance = 1e-3;
+ } // namespace
+
+Prompt for AI Agent:
+In @src/app/history/RegenerationEngine.cpp around lines 769 - 772, Extract the hardcoded tolerance 1e-3 used in the MakeThickSolidByJoin call into a named constant (e.g., kThickSolidTolerance) near other constants like kMinValue, then replace the literal in the BRepOffsetAPI_MakeThickSolid::MakeThickSolidByJoin invocation with that constant to improve consistency and readability; ensure the constant has an appropriate type and is documented similarly to existing constants.
+
+
+
+============================================================================
+File: src/app/history/RegenerationEngine.cpp
+Line: 481 to 496
+Type: potential_issue
+
+Comment:
+Boolean operations fail silently without error reporting.
+
+If the fuse, cut, or common operation fails (!IsDone()), the code continues with the original result shape without setting errorOut or indicating partial failure. This could lead to unexpected geometry.
+
+
+
+
+🔧 Suggested fix
+
+                 if (params.booleanMode == BooleanMode::Add) {
+                     BRepAlgoAPI_Fuse fuse(*targetOpt, result);
+-                    if (fuse.IsDone()) {
+-                        result = fuse.Shape();
++                    if (!fuse.IsDone()) {
++                        errorOut = "Boolean fuse failed in extrude";
++                        return {};
+                     }
++                    result = fuse.Shape();
+                 } else if (params.booleanMode == BooleanMode::Cut) {
+                     // Similar pattern...
+
+Prompt for AI Agent:
+In @src/app/history/RegenerationEngine.cpp around lines 481 - 496, The boolean operations (BRepAlgoAPI_Fuse, BRepAlgoAPI_Cut, BRepAlgoAPI_Common) currently ignore failures (when .IsDone() is false) and continue using the original result; update the branch handling so that when .IsDone() returns false you set/assign a meaningful error to errorOut (or otherwise flag failure) with context (include params.booleanMode and which operation failed), and stop further processing (return or break) instead of silently continuing; locate the blocks around params.booleanMode, the BRepAlgoAPI_* constructors and result assignment and add the errorOut assignment and early exit on failure.
+
+
+
+Review completed ✔

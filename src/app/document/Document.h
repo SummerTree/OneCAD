@@ -11,6 +11,7 @@
 #include <memory>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 #include <TopoDS_Shape.hxx>
@@ -100,14 +101,39 @@ public:
     // Body management
     std::string addBody(const TopoDS_Shape& shape);
     bool addBodyWithId(const std::string& id, const TopoDS_Shape& shape, const std::string& name = {});
+    bool updateBodyShape(const std::string& id, const TopoDS_Shape& shape,
+                         bool emitSignal = true, const std::string& opId = {});
     const TopoDS_Shape* getBodyShape(const std::string& id) const;
     std::vector<std::string> getBodyIds() const;
     bool removeBody(const std::string& id);
+    bool removeBodyPreserveElementMap(const std::string& id);
     std::string getBodyName(const std::string& id) const;
     void setBodyName(const std::string& id, const std::string& name);
     size_t bodyCount() const { return bodies_.size(); }
+    void setBaseBodyIds(const std::unordered_set<std::string>& ids);
+    void addBaseBodyId(const std::string& id);
+    bool isBaseBody(const std::string& id) const;
+    const std::unordered_set<std::string>& baseBodyIds() const { return baseBodyIds_; }
 
     void addOperation(const OperationRecord& record);
+    bool insertOperation(std::size_t index, const OperationRecord& record);
+    bool updateOperationParams(const std::string& opId, const OperationParams& params);
+    bool removeOperation(const std::string& opId);
+    int operationIndex(const std::string& opId) const;
+    OperationRecord* findOperation(const std::string& opId);
+    const OperationRecord* findOperation(const std::string& opId) const;
+    bool setOperationSuppressed(const std::string& opId, bool suppressed);
+    bool isOperationSuppressed(const std::string& opId) const;
+    std::unordered_map<std::string, bool> operationSuppressionState() const;
+    void setOperationSuppressionState(const std::unordered_map<std::string, bool>& state);
+    void setOperationFailed(const std::string& opId, const std::string& reason);
+    void clearOperationFailed(const std::string& opId);
+    void clearOperationFailures();
+    bool isOperationFailed(const std::string& opId) const;
+    std::string operationFailureReason(const std::string& opId) const;
+    const std::unordered_map<std::string, std::string>& operationFailures() const {
+        return operationFailures_;
+    }
     const std::vector<OperationRecord>& operations() const { return operations_; }
 
     // Visibility management
@@ -140,6 +166,12 @@ signals:
     void isolationChanged();
     void modifiedChanged(bool modified);
     void documentCleared();
+    void operationAdded(const QString& opId);
+    void operationRemoved(const QString& opId);
+    void operationUpdated(const QString& opId);
+    void operationSuppressionChanged(const QString& opId, bool suppressed);
+    void operationFailed(const QString& opId, const QString& reason);
+    void operationSucceeded(const QString& opId);
 
 private:
     struct BodyEntry {
@@ -156,12 +188,16 @@ private:
     std::unordered_map<std::string, bool> sketchVisibility_;    // id -> visible
     std::unordered_map<std::string, BodyEntry> bodies_;
     std::unordered_map<std::string, std::string> bodyNames_;  // id -> display name
+    std::unordered_map<std::string, bool> bodyVisibilityCache_;
+    std::unordered_set<std::string> baseBodyIds_;
 
     // Isolation state (not persisted)
     std::string isolatedItemId_;
     std::unordered_map<std::string, bool> preIsolationBodyVisibility_;
     std::unordered_map<std::string, bool> preIsolationSketchVisibility_;
     std::vector<OperationRecord> operations_;
+    std::unordered_set<std::string> suppressedOperations_;
+    std::unordered_map<std::string, std::string> operationFailures_;
     kernel::elementmap::ElementMap elementMap_;
     std::unique_ptr<render::SceneMeshStore> sceneMeshStore_;
     std::unique_ptr<render::TessellationCache> tessellationCache_;

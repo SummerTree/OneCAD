@@ -4,11 +4,14 @@
 #include "FilletChamferTool.h"
 
 #include "../viewport/Viewport.h"
-#include "../../app/commands/ModifyBodyCommand.h"
+#include "../../app/commands/AddOperationCommand.h"
 #include "../../app/commands/CommandProcessor.h"
 #include "../../app/document/Document.h"
+#include "../../app/document/OperationRecord.h"
 #include "../../core/modeling/EdgeChainer.h"
 #include "../../render/Camera3D.h"
+
+#include <QUuid>
 
 #include <BRepFilletAPI_MakeFillet.hxx>
 #include <BRepFilletAPI_MakeChamfer.hxx>
@@ -171,16 +174,34 @@ bool FilletChamferTool::handleMouseRelease(const QPoint& screenPos, Qt::MouseBut
         return true;
     }
 
-    // Apply via ModifyBodyCommand
     if (document_ && !targetBodyId_.empty()) {
+        app::OperationRecord record;
+        record.opId = QUuid::createUuid().toString(QUuid::WithoutBraces).toStdString();
+        record.type = (mode_ == Mode::Fillet) ? app::OperationType::Fillet : app::OperationType::Chamfer;
+        record.input = app::BodyRef{targetBodyId_};
+
+        app::FilletChamferParams params;
+        params.mode = (mode_ == Mode::Fillet) ? app::FilletChamferParams::Mode::Fillet
+                                               : app::FilletChamferParams::Mode::Chamfer;
+        params.radius = value;
+        params.chainTangentEdges = true;
+
+        // Collect edge IDs from ElementMap
+        for (const auto& edge : selectedEdges_) {
+            auto ids = document_->elementMap().findIdsByShape(edge);
+            if (!ids.empty()) {
+                params.edgeIds.push_back(ids.front().value);
+            }
+        }
+
+        record.params = params;
+        record.resultBodyIds.push_back(targetBodyId_);
+
+        auto command = std::make_unique<app::commands::AddOperationCommand>(document_, record);
         if (commandProcessor_) {
-            auto command = std::make_unique<app::commands::ModifyBodyCommand>(
-                document_, targetBodyId_, resultShape);
             commandProcessor_->execute(std::move(command));
         } else {
-            std::string name = document_->getBodyName(targetBodyId_);
-            document_->removeBody(targetBodyId_);
-            document_->addBodyWithId(targetBodyId_, resultShape, name);
+            command->execute();
         }
     }
 

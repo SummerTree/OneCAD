@@ -4,13 +4,11 @@
 #include "ExtrudeTool.h"
 
 #include "../viewport/Viewport.h"
-#include "../../app/commands/AddBodyCommand.h"
-#include "../../app/commands/ModifyBodyCommand.h"
+#include "../../app/commands/AddOperationCommand.h"
 #include "../../app/commands/CommandProcessor.h"
 #include "../../app/document/Document.h"
 #include "../../core/loop/FaceBuilder.h"
 #include "../../core/loop/RegionUtils.h"
-#include "../../core/modeling/BooleanOperation.h"
 #include "../../render/Camera3D.h"
 
 #include <BRepGProp.hxx>
@@ -216,73 +214,47 @@ bool ExtrudeTool::handleMouseRelease(const QPoint& screenPos, Qt::MouseButton bu
     // Recalculate boolean mode one last time to be safe
     detectBooleanMode(distance);
 
-    TopoDS_Shape toolShape = buildExtrudeShape(distance);
-    std::string resultBodyId;
     bool success = false;
+    std::string resultBodyId;
 
-    if (document_ && !toolShape.IsNull()) {
+    if (document_) {
         if (booleanMode_ == app::BooleanMode::NewBody) {
-            // Standard AddBody logic
-            if (commandProcessor_) {
-                auto command = std::make_unique<app::commands::AddBodyCommand>(document_, toolShape);
-                auto* commandPtr = command.get();
-                if (commandProcessor_->execute(std::move(command)) && commandPtr) {
-                    resultBodyId = commandPtr->bodyId();
-                    success = true;
-                }
-            } else {
-                resultBodyId = document_->addBody(toolShape);
-                success = !resultBodyId.empty();
-            }
-        } else if (!targetBodyId_.empty() && !targetShape_.IsNull()) {
-            // Boolean Operation logic (Push/Pull)
-            TopoDS_Shape resultShape = core::modeling::BooleanOperation::perform(
-                toolShape, targetShape_, booleanMode_);
-
-            if (!resultShape.IsNull()) {
-                if (commandProcessor_) {
-                    auto command = std::make_unique<app::commands::ModifyBodyCommand>(
-                        document_, targetBodyId_, resultShape);
-                    if (commandProcessor_->execute(std::move(command))) {
-                        resultBodyId = targetBodyId_;
-                        success = true;
-                    }
-                } else {
-                    // Direct modification fallback (should rarely be used if processor exists)
-                    std::string name = document_->getBodyName(targetBodyId_);
-                    document_->removeBody(targetBodyId_);
-                    document_->addBodyWithId(targetBodyId_, resultShape, name);
-                    resultBodyId = targetBodyId_;
-                    success = true;
-                }
-            }
+            resultBodyId = QUuid::createUuid().toString(QUuid::WithoutBraces).toStdString();
+        } else {
+            resultBodyId = targetBodyId_;
         }
 
-        if (success) {
+        if (!resultBodyId.empty()) {
             app::OperationRecord record;
             record.opId = QUuid::createUuid().toString(QUuid::WithoutBraces).toStdString();
             record.type = app::OperationType::Extrude;
-            
+
             if (sketch_) {
                 record.input = app::SketchRegionRef{selection_.id.ownerId, selection_.id.elementId};
             } else {
                 record.input = app::FaceRef{selection_.id.ownerId, selection_.id.elementId};
             }
-            
+
             app::ExtrudeParams params;
             params.distance = distance;
             params.draftAngleDeg = draftAngleDeg_;
             params.booleanMode = booleanMode_;
             record.params = params;
-            
+
             record.resultBodyIds.push_back(resultBodyId);
-            document_->addOperation(record);
+
+            auto command = std::make_unique<app::commands::AddOperationCommand>(document_, record);
+            if (commandProcessor_) {
+                success = commandProcessor_->execute(std::move(command));
+            } else {
+                success = command->execute();
+            }
         }
     }
 
     clearPreview();
     currentDistance_ = 0.0;
-    return true;
+    return success;
 }
 
 bool ExtrudeTool::prepareInput(const app::selection::SelectionItem& selection) {

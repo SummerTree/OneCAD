@@ -4,8 +4,7 @@
 #include "RevolveTool.h"
 
 #include "../viewport/Viewport.h"
-#include "../../app/commands/AddBodyCommand.h"
-#include "../../app/commands/ModifyBodyCommand.h"
+#include "../../app/commands/AddOperationCommand.h"
 #include "../../app/commands/CommandProcessor.h"
 #include "../../app/document/Document.h"
 #include "../../core/loop/FaceBuilder.h"
@@ -158,53 +157,17 @@ bool RevolveTool::handleMouseRelease(const QPoint& screenPos, Qt::MouseButton bu
 
     detectBooleanMode(currentAngle_);
 
-    TopoDS_Shape toolShape = buildRevolveShape(currentAngle_);
-    if (toolShape.IsNull()) {
-        clearPreview();
-        return true;
-    }
-
     std::string resultBodyId;
     bool success = false;
     
     if (document_) {
-        // Simplified Logic similar to ExtrudeTool
         if (booleanMode_ == app::BooleanMode::NewBody || targetBodyId_.empty()) {
-            if (commandProcessor_) {
-                auto command = std::make_unique<app::commands::AddBodyCommand>(document_, toolShape);
-                auto* cmdPtr = command.get();
-                if (commandProcessor_->execute(std::move(command)) && cmdPtr) {
-                    resultBodyId = cmdPtr->bodyId();
-                    success = true;
-                }
-            } else {
-                resultBodyId = document_->addBody(toolShape);
-                success = !resultBodyId.empty();
-            }
+            resultBodyId = QUuid::createUuid().toString(QUuid::WithoutBraces).toStdString();
         } else {
-             // Boolean logic
-            const TopoDS_Shape* targetShape = document_->getBodyShape(targetBodyId_);
-            if (targetShape) {
-                TopoDS_Shape finalShape = core::modeling::BooleanOperation::perform(toolShape, *targetShape, booleanMode_);
-                if (!finalShape.IsNull()) {
-                    if (commandProcessor_) {
-                        auto command = std::make_unique<app::commands::ModifyBodyCommand>(document_, targetBodyId_, finalShape);
-                        if (commandProcessor_->execute(std::move(command))) {
-                            resultBodyId = targetBodyId_;
-                            success = true;
-                        }
-                    } else {
-                        std::string name = document_->getBodyName(targetBodyId_);
-                        document_->removeBody(targetBodyId_);
-                        document_->addBodyWithId(targetBodyId_, finalShape, name);
-                        resultBodyId = targetBodyId_;
-                        success = true;
-                    }
-                }
-            }
+            resultBodyId = targetBodyId_;
         }
 
-        if (success) {
+        if (!resultBodyId.empty()) {
             app::OperationRecord record;
             record.opId = QUuid::createUuid().toString(QUuid::WithoutBraces).toStdString();
             record.type = app::OperationType::Revolve;
@@ -226,14 +189,19 @@ bool RevolveTool::handleMouseRelease(const QPoint& screenPos, Qt::MouseButton bu
             record.params = params;
 
             record.resultBodyIds.push_back(resultBodyId);
-            document_->addOperation(record);
+            auto command = std::make_unique<app::commands::AddOperationCommand>(document_, record);
+            if (commandProcessor_) {
+                success = commandProcessor_->execute(std::move(command));
+            } else {
+                success = command->execute();
+            }
         }
     }
 
     if (success) {
         cancel(); // Reset after commit
     }
-    return true;
+    return success;
 }
 
 void RevolveTool::onSelectionChanged(const std::vector<app::selection::SelectionItem>& selection) {

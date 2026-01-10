@@ -24,6 +24,9 @@ add_library(onecad_ui STATIC
     selection/ModelPickerAdapter.cpp
     start/StartOverlay.cpp
     start/ProjectTile.cpp
+    history/HistoryPanel.cpp
+    history/EditParameterDialog.cpp
+    history/RegenFailureDialog.cpp
 )
 
 target_include_directories(onecad_ui PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})

@@ -10,6 +10,7 @@
 #include "ElementMapIO.h"
 #include "HistoryIO.h"
 #include "../app/document/Document.h"
+#include "../app/history/RegenerationEngine.h"
 #include "../core/sketch/Sketch.h"
 
 #include <QJsonDocument>
@@ -19,6 +20,8 @@
 #include <BRep_Builder.hxx>
 #include <Standard_Stream.hxx>
 #include <sstream>
+#include <unordered_map>
+#include <unordered_set>
 
 namespace onecad::io {
 
@@ -74,7 +77,8 @@ bool DocumentIO::saveDocument(Package* package, const app::Document* document) {
     }
     
     // 5. Save operation history
-    if (!HistoryIO::saveHistory(package, document->operations())) {
+    if (!HistoryIO::saveHistory(package, document->operations(),
+                                document->operationSuppressionState())) {
         return false;
     }
     
@@ -128,8 +132,21 @@ std::unique_ptr<app::Document> DocumentIO::loadDocument(Package* package,
         document->addSketchWithId(sketchId.toStdString(), std::move(sketch));
     }
     
-    // 4. Load body metadata and BREP cache
-    bool loadedBodies = false;
+    // 4. Load operation history first (determines if we regenerate or load BREP)
+    QString historyError;
+    HistoryIO::loadHistory(package, document.get(), historyError);
+
+    // 4b. Load ElementMap for stable topology references (if present)
+    QString elementMapError;
+    ElementMapIO::loadElementMap(package, document->elementMap(), elementMapError);
+
+    struct BodyMeta {
+        QString name;
+        bool visible = true;
+        QString brepPath;
+    };
+
+    std::unordered_map<std::string, BodyMeta> bodyMeta;
     QStringList bodyFiles = package->listFiles("bodies/");
     for (const QString& bodyFile : bodyFiles) {
         if (!bodyFile.endsWith(".json")) {
@@ -146,17 +163,26 @@ std::unique_ptr<app::Document> DocumentIO::loadDocument(Package* package,
         if (bodyId.isEmpty()) {
             bodyId = QFileInfo(bodyFile).baseName();
         }
-        QString bodyName = bodyJson["name"].toString();
-        bool visible = bodyJson["visible"].toBool(true);
-        QString brepPath = bodyJson["brepPath"].toString();
-        if (brepPath.isEmpty()) {
-            brepPath = QString("bodies/%1.brep").arg(bodyId);
+        if (bodyId.isEmpty()) {
+            continue;
         }
 
-        QByteArray brepData = package->readFile(brepPath);
+        BodyMeta meta;
+        meta.name = bodyJson["name"].toString();
+        meta.visible = bodyJson["visible"].toBool(true);
+        meta.brepPath = bodyJson["brepPath"].toString();
+        if (meta.brepPath.isEmpty()) {
+            meta.brepPath = QString("bodies/%1.brep").arg(bodyId);
+        }
+
+        bodyMeta[bodyId.toStdString()] = meta;
+    }
+
+    auto loadBodyFromBrep = [&](const std::string& bodyId, const BodyMeta& meta) {
+        QByteArray brepData = package->readFile(meta.brepPath);
         if (brepData.isEmpty()) {
-            qWarning() << "Missing BREP data for body:" << bodyId;
-            continue;
+            qWarning() << "Missing BREP data for body:" << QString::fromStdString(bodyId);
+            return false;
         }
 
         TopoDS_Shape shape;
@@ -165,27 +191,103 @@ std::unique_ptr<app::Document> DocumentIO::loadDocument(Package* package,
         std::istringstream stream(brepString);
         BRepTools::Read(shape, stream, builder);
         if (stream.fail() || shape.IsNull()) {
-            qWarning() << "Failed to read BREP for body:" << bodyId;
-            continue;
+            qWarning() << "Failed to read BREP for body:" << QString::fromStdString(bodyId);
+            return false;
         }
 
-        if (document->addBodyWithId(bodyId.toStdString(), shape)) {
-            loadedBodies = true;
-            if (!bodyName.isEmpty()) {
-                document->setBodyName(bodyId.toStdString(), bodyName.toStdString());
+        if (!document->addBodyWithId(bodyId, shape, meta.name.toStdString())) {
+            return false;
+        }
+        document->setBodyVisible(bodyId, meta.visible);
+        return true;
+    };
+
+    // 5. If operations exist, regenerate from history (seed base bodies from BREP)
+    if (!document->operations().empty()) {
+        std::unordered_set<std::string> createdBodies;
+        for (const auto& op : document->operations()) {
+            bool createsBody = false;
+            if (op.type == app::OperationType::Extrude) {
+                if (std::holds_alternative<app::ExtrudeParams>(op.params)) {
+                    const auto& params = std::get<app::ExtrudeParams>(op.params);
+                    createsBody = (params.booleanMode == app::BooleanMode::NewBody) &&
+                                   std::holds_alternative<app::SketchRegionRef>(op.input);
+                }
+            } else if (op.type == app::OperationType::Revolve) {
+                if (std::holds_alternative<app::RevolveParams>(op.params)) {
+                    const auto& params = std::get<app::RevolveParams>(op.params);
+                    createsBody = (params.booleanMode == app::BooleanMode::NewBody) &&
+                                   std::holds_alternative<app::SketchRegionRef>(op.input);
+                }
             }
-            document->setBodyVisible(bodyId.toStdString(), visible);
+
+            if (createsBody) {
+                for (const auto& bodyId : op.resultBodyIds) {
+                    createdBodies.insert(bodyId);
+                }
+            }
+        }
+
+        std::unordered_set<std::string> baseBodies;
+        for (const auto& [bodyId, meta] : bodyMeta) {
+            if (createdBodies.find(bodyId) != createdBodies.end()) {
+                continue;
+            }
+            if (loadBodyFromBrep(bodyId, meta)) {
+                baseBodies.insert(bodyId);
+            }
+        }
+        document->setBaseBodyIds(baseBodies);
+
+        app::history::RegenerationEngine regen(document.get());
+        auto result = regen.regenerateAll();
+
+        if (result.status == app::history::RegenStatus::CriticalFailure) {
+            // All ops failed - store for UI to show RegenFailureDialog
+            QString failedOps;
+            for (const auto& f : result.failedOps) {
+                if (!failedOps.isEmpty()) failedOps += "; ";
+                failedOps += QString::fromStdString(f.opId + ": " + f.errorMessage);
+            }
+            if (failedOps.isEmpty()) {
+                errorMessage = "Regeneration failed: dependency cycle or invalid history";
+            } else {
+                errorMessage = QString("Regeneration failed: %1").arg(failedOps);
+            }
+            // Continue anyway - partial document may be usable
+        } else if (result.status == app::history::RegenStatus::PartialFailure) {
+            // Some ops failed - log warning
+            qWarning() << "Some operations failed during regeneration:";
+            for (const auto& f : result.failedOps) {
+                qWarning() << "  " << QString::fromStdString(f.opId)
+                           << ":" << QString::fromStdString(f.errorMessage);
+            }
+        }
+
+        // Apply metadata for regenerated bodies (including base bodies)
+        for (const auto& [bodyId, meta] : bodyMeta) {
+            if (document->getBodyShape(bodyId)) {
+                if (!meta.name.isEmpty()) {
+                    document->setBodyName(bodyId, meta.name.toStdString());
+                }
+                document->setBodyVisible(bodyId, meta.visible);
+            }
+        }
+    } else {
+        // 5b. No operations - fallback to BREP cache (backward compat)
+        bool loadedBodies = false;
+        std::unordered_set<std::string> baseBodies;
+        for (const auto& [bodyId, meta] : bodyMeta) {
+            if (loadBodyFromBrep(bodyId, meta)) {
+                loadedBodies = true;
+                baseBodies.insert(bodyId);
+            }
+        }
+        if (loadedBodies) {
+            document->setBaseBodyIds(baseBodies);
         }
     }
-    
-    // 5. Load ElementMap (skip if bodies already rebuilt from BREP)
-    if (!loadedBodies) {
-        ElementMapIO::loadElementMap(package, document->elementMap(), errorMessage);
-    }
-    
-    // 6. Load operation history
-    HistoryIO::loadHistory(package, document.get(), errorMessage);
-    
+
     document->setModified(false);
     return document;
 }

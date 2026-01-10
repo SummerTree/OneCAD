@@ -8,10 +8,14 @@
 #include "../../app/commands/CommandProcessor.h"
 #include "../../app/commands/DeleteBodyCommand.h"
 #include "../../app/commands/DeleteSketchCommand.h"
+#include "../../app/commands/RemoveOperationCommand.h"
 #include "../../app/commands/RenameBodyCommand.h"
 #include "../../app/commands/RenameSketchCommand.h"
+#include "../../app/commands/RollbackCommand.h"
+#include "../../app/commands/SetOperationSuppressionCommand.h"
 #include "../../app/commands/ToggleVisibilityCommand.h"
 #include "../../app/document/Document.h"
+#include "../../app/history/RegenerationEngine.h"
 #include "../navigator/ModelNavigator.h"
 #include "../toolbar/ContextToolbar.h"
 #include "../sketch/ConstraintPanel.h"
@@ -37,6 +41,7 @@
 #include <QLineEdit>
 #include <QFile>
 #include <QTimer>
+#include <QShortcut>
 #include <QDebug>
 #include <algorithm>
 
@@ -46,6 +51,8 @@
 
 #include "../components/SidebarToolButton.h"
 #include "../start/StartOverlay.h"
+#include "../history/HistoryPanel.h"
+#include "../history/RegenFailureDialog.h"
 
 namespace onecad {
 namespace ui {
@@ -55,6 +62,62 @@ namespace {
 constexpr double kDefaultDistanceMm = 10.0;
 constexpr double kDefaultAngleDeg = 90.0;
 constexpr double kDefaultRadiusMm = 10.0;
+
+QString formatOperationDisplayName(const app::OperationRecord& op) {
+    QString typeName;
+    QString params;
+
+    switch (op.type) {
+        case app::OperationType::Extrude:
+            typeName = "Extrude";
+            if (std::holds_alternative<app::ExtrudeParams>(op.params)) {
+                const auto& p = std::get<app::ExtrudeParams>(op.params);
+                params = QString(" (%1mm)").arg(p.distance, 0, 'f', 1);
+            }
+            break;
+        case app::OperationType::Revolve:
+            typeName = "Revolve";
+            if (std::holds_alternative<app::RevolveParams>(op.params)) {
+                const auto& p = std::get<app::RevolveParams>(op.params);
+                params = QString(" (%1°)").arg(p.angleDeg, 0, 'f', 0);
+            }
+            break;
+        case app::OperationType::Fillet:
+            typeName = "Fillet";
+            if (std::holds_alternative<app::FilletChamferParams>(op.params)) {
+                const auto& p = std::get<app::FilletChamferParams>(op.params);
+                params = QString(" (R%1)").arg(p.radius, 0, 'f', 1);
+            }
+            break;
+        case app::OperationType::Chamfer:
+            typeName = "Chamfer";
+            if (std::holds_alternative<app::FilletChamferParams>(op.params)) {
+                const auto& p = std::get<app::FilletChamferParams>(op.params);
+                params = QString(" (%1)").arg(p.radius, 0, 'f', 1);
+            }
+            break;
+        case app::OperationType::Shell:
+            typeName = "Shell";
+            if (std::holds_alternative<app::ShellParams>(op.params)) {
+                const auto& p = std::get<app::ShellParams>(op.params);
+                params = QString(" (%1mm)").arg(p.thickness, 0, 'f', 1);
+            }
+            break;
+        case app::OperationType::Boolean:
+            typeName = "Boolean";
+            if (std::holds_alternative<app::BooleanParams>(op.params)) {
+                const auto& p = std::get<app::BooleanParams>(op.params);
+                switch (p.operation) {
+                    case app::BooleanParams::Op::Union: params = " (Union)"; break;
+                    case app::BooleanParams::Op::Cut: params = " (Cut)"; break;
+                    case app::BooleanParams::Op::Intersect: params = " (Intersect)"; break;
+                }
+            }
+            break;
+    }
+
+    return typeName + params;
+}
 } // anonymous namespace
 
 MainWindow::MainWindow(QWidget* parent)
@@ -137,6 +200,21 @@ void MainWindow::connectDocumentSignals() {
             m_navigator, &ModelNavigator::onBodyVisibilityChanged);
     connect(m_document.get(), &app::Document::sketchVisibilityChanged,
             m_navigator, &ModelNavigator::onSketchVisibilityChanged);
+
+    if (m_historyPanel) {
+        connect(m_document.get(), &app::Document::operationAdded,
+                m_historyPanel, &HistoryPanel::onOperationAdded);
+        connect(m_document.get(), &app::Document::operationRemoved,
+                m_historyPanel, &HistoryPanel::onOperationRemoved);
+        connect(m_document.get(), &app::Document::operationUpdated,
+                m_historyPanel, &HistoryPanel::onOperationAdded);
+        connect(m_document.get(), &app::Document::operationSuppressionChanged,
+                m_historyPanel, &HistoryPanel::onOperationSuppressed);
+        connect(m_document.get(), &app::Document::operationFailed,
+                m_historyPanel, &HistoryPanel::onOperationFailed);
+        connect(m_document.get(), &app::Document::operationSucceeded,
+                m_historyPanel, &HistoryPanel::onOperationSucceeded);
+    }
     connect(m_document.get(), &app::Document::documentCleared,
             m_navigator, [this]() { m_navigator->rebuild(m_document.get()); });
 }
@@ -787,6 +865,7 @@ void MainWindow::setupViewport() {
     QHBoxLayout* layout = new QHBoxLayout(central);
     layout->setContentsMargins(0, 0, 0, 0);
     layout->setSpacing(0);
+    m_centralLayout = layout;
 
     m_navigator = new ModelNavigator(central);
     m_navigator->setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Expanding);
@@ -890,6 +969,9 @@ void MainWindow::setupViewport() {
     connect(m_sketchModePanel, &SketchModePanel::constraintRequested,
             this, &MainWindow::onConstraintRequested);
 
+    // Setup history panel
+    setupHistoryPanel();
+
     m_viewport->installEventFilter(this);
 }
 
@@ -925,6 +1007,7 @@ bool MainWindow::eventFilter(QObject* obj, QEvent* event) {
         positionRenderDebugPanel();
         positionConstraintPanel();
         positionSketchModePanel();
+        positionHistoryPanel();
     }
 
     return QMainWindow::eventFilter(obj, event);
@@ -1105,7 +1188,10 @@ void MainWindow::onImport() {
     }
     
     for (auto& body : result.bodies) {
-        m_document->addBody(body.shape);
+        std::string bodyId = m_document->addBody(body.shape);
+        if (!bodyId.empty()) {
+            m_document->addBaseBodyId(bodyId);
+        }
     }
     
     if (m_viewport) {
@@ -1225,6 +1311,10 @@ bool MainWindow::loadDocumentFromPath(const QString& fileName) {
     // Reconnect document signals to navigator
     connectDocumentSignals();
 
+    if (m_historyPanel) {
+        m_historyPanel->setDocument(m_document.get());
+    }
+
     // Populate navigator with loaded data
     m_navigator->rebuild(m_document.get());
 
@@ -1236,11 +1326,74 @@ bool MainWindow::loadDocumentFromPath(const QString& fileName) {
         m_viewport->update();
     }
 
+    handleRegenerationFailures();
+
     if (m_startOverlay && m_startOverlay->isVisible()) {
         m_startOverlay->hide();
     }
     statusBar()->show();
     return true;
+}
+
+void MainWindow::handleRegenerationFailures() {
+    if (!m_document) {
+        return;
+    }
+
+    const auto& failures = m_document->operationFailures();
+    if (failures.empty()) {
+        return;
+    }
+
+    std::vector<RegenFailureDialog::FailedOp> failedOps;
+    failedOps.reserve(failures.size());
+    for (const auto& [opId, reason] : failures) {
+        const app::OperationRecord* op = m_document->findOperation(opId);
+        QString description = op ? formatOperationDisplayName(*op)
+                                 : QString::fromStdString(opId);
+        failedOps.push_back({
+            QString::fromStdString(opId),
+            description,
+            QString::fromStdString(reason)
+        });
+    }
+
+    RegenFailureDialog dialog(failedOps, this);
+    if (dialog.exec() != QDialog::Accepted) {
+        return;
+    }
+
+    auto action = dialog.selectedAction();
+    std::vector<std::string> failedIds;
+    failedIds.reserve(failures.size());
+    for (const auto& [opId, reason] : failures) {
+        failedIds.push_back(opId);
+    }
+
+    bool changed = false;
+    if (action == RegenFailureDialog::Result::DeleteFailed) {
+        for (const auto& opId : failedIds) {
+            changed |= m_document->removeOperation(opId);
+        }
+    } else if (action == RegenFailureDialog::Result::SuppressFailed) {
+        for (const auto& opId : failedIds) {
+            changed |= m_document->setOperationSuppressed(opId, true);
+        }
+    } else {
+        return;
+    }
+
+    if (changed) {
+        app::history::RegenerationEngine regen(m_document.get());
+        regen.regenerateAll();
+        m_document->setModified(true);
+        if (m_historyPanel) {
+            m_historyPanel->rebuild();
+        }
+        if (m_viewport) {
+            m_viewport->update();
+        }
+    }
 }
 
 void MainWindow::onOpenDocument() {
@@ -1728,6 +1881,95 @@ void MainWindow::saveSettings() {
     }
 
     settings.sync(); // Force immediate write
+}
+
+void MainWindow::setupHistoryPanel() {
+    if (!m_viewport) return;
+
+    // Create history panel (right sidebar)
+    QWidget* parent = centralWidget() ? centralWidget() : m_viewport;
+    m_historyPanel = new HistoryPanel(parent);
+    m_historyPanel->setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Expanding);
+    if (m_centralLayout) {
+        m_centralLayout->addWidget(m_historyPanel);
+    }
+    m_historyPanel->setDocument(m_document.get());
+    m_historyPanel->setViewport(m_viewport);
+    m_historyPanel->setCommandProcessor(m_commandProcessor.get());
+
+    connect(m_historyPanel, &HistoryPanel::rollbackRequested, this, [this](const QString& opId) {
+        auto cmd = std::make_unique<app::commands::RollbackCommand>(
+            m_document.get(), opId.toStdString());
+        m_commandProcessor->execute(std::move(cmd));
+        if (m_viewport) {
+            m_viewport->update();
+        }
+    });
+
+    connect(m_historyPanel, &HistoryPanel::suppressRequested, this,
+            [this](const QString& opId, bool suppress) {
+                auto cmd = std::make_unique<app::commands::SetOperationSuppressionCommand>(
+                    m_document.get(), opId.toStdString(), suppress);
+                m_commandProcessor->execute(std::move(cmd));
+                if (m_viewport) {
+                    m_viewport->update();
+                }
+            });
+
+    connect(m_historyPanel, &HistoryPanel::deleteRequested, this, [this](const QString& opId) {
+        auto cmd = std::make_unique<app::commands::RemoveOperationCommand>(
+            m_document.get(), opId.toStdString());
+        m_commandProcessor->execute(std::move(cmd));
+        if (m_viewport) {
+            m_viewport->update();
+        }
+    });
+
+    // Create toggle button
+    m_historyOverlayButton = new SidebarToolButton("H", tr("Toggle History Panel (Cmd+H)"), m_viewport);
+    m_historyOverlayButton->setFixedSize(42, 42);
+    m_historyOverlayButton->setVisible(true);
+
+    connect(m_historyOverlayButton, &SidebarToolButton::clicked, this, [this]() {
+        if (m_historyPanel) {
+            m_historyPanel->setCollapsed(!m_historyPanel->isCollapsed());
+        }
+    });
+
+    connect(m_historyPanel, &HistoryPanel::collapsedChanged, this, [this](bool collapsed) {
+        if (m_historyOverlayButton) {
+            positionHistoryPanel();
+            m_historyOverlayButton->setToolTip(collapsed ? tr("Show history")
+                                                         : tr("Hide history"));
+        }
+        QSettings settings("OneCAD", "OneCAD");
+        settings.setValue("ui/historyPanelVisible", !collapsed);
+    });
+
+    auto* shortcut = new QShortcut(QKeySequence("Ctrl+H"), m_viewport);
+    connect(shortcut, &QShortcut::activated, this, [this]() {
+        if (m_historyPanel) {
+            m_historyPanel->setCollapsed(!m_historyPanel->isCollapsed());
+        }
+    });
+
+    QSettings settings("OneCAD", "OneCAD");
+    const bool historyVisible = settings.value("ui/historyPanelVisible", false).toBool();
+    m_historyPanel->setCollapsed(!historyVisible);
+    m_historyOverlayButton->setToolTip(historyVisible ? tr("Hide history")
+                                                      : tr("Show history"));
+
+    positionHistoryPanel();
+}
+
+void MainWindow::positionHistoryPanel() {
+    if (!m_viewport || !m_historyOverlayButton) return;
+
+    const int margin = 20;
+    int x = m_viewport->width() - m_historyOverlayButton->width() - margin;
+    int y = margin;
+    m_historyOverlayButton->move(x, y);
+    m_historyOverlayButton->raise();
 }
 
 } // namespace ui

@@ -23,6 +23,10 @@ QString operationTypeToString(OperationType type) {
     switch (type) {
         case OperationType::Extrude: return "Extrude";
         case OperationType::Revolve: return "Revolve";
+        case OperationType::Fillet: return "Fillet";
+        case OperationType::Chamfer: return "Chamfer";
+        case OperationType::Shell: return "Shell";
+        case OperationType::Boolean: return "Boolean";
         default: return "Unknown";
     }
 }
@@ -30,7 +34,39 @@ QString operationTypeToString(OperationType type) {
 OperationType stringToOperationType(const QString& str) {
     if (str == "Extrude") return OperationType::Extrude;
     if (str == "Revolve") return OperationType::Revolve;
+    if (str == "Fillet") return OperationType::Fillet;
+    if (str == "Chamfer") return OperationType::Chamfer;
+    if (str == "Shell") return OperationType::Shell;
+    if (str == "Boolean") return OperationType::Boolean;
     return OperationType::Extrude;  // Default
+}
+
+QString filletChamferModeToString(FilletChamferParams::Mode mode) {
+    switch (mode) {
+        case FilletChamferParams::Mode::Fillet: return "Fillet";
+        case FilletChamferParams::Mode::Chamfer: return "Chamfer";
+        default: return "Fillet";
+    }
+}
+
+FilletChamferParams::Mode stringToFilletChamferMode(const QString& str) {
+    if (str == "Chamfer") return FilletChamferParams::Mode::Chamfer;
+    return FilletChamferParams::Mode::Fillet;
+}
+
+QString booleanOpToString(BooleanParams::Op op) {
+    switch (op) {
+        case BooleanParams::Op::Union: return "Union";
+        case BooleanParams::Op::Cut: return "Cut";
+        case BooleanParams::Op::Intersect: return "Intersect";
+        default: return "Union";
+    }
+}
+
+BooleanParams::Op stringToBooleanOp(const QString& str) {
+    if (str == "Cut") return BooleanParams::Op::Cut;
+    if (str == "Intersect") return BooleanParams::Op::Intersect;
+    return BooleanParams::Op::Union;
 }
 
 QString booleanModeToString(BooleanMode mode) {
@@ -54,7 +90,8 @@ BooleanMode stringToBooleanMode(const QString& str) {
 } // anonymous namespace
 
 bool HistoryIO::saveHistory(Package* package,
-                            const std::vector<OperationRecord>& operations) {
+                            const std::vector<OperationRecord>& operations,
+                            const std::unordered_map<std::string, bool>& suppressionState) {
     // Write ops.jsonl - one JSON object per line
     QByteArray opsData;
     for (const auto& op : operations) {
@@ -76,7 +113,13 @@ bool HistoryIO::saveHistory(Package* package,
         cursor["lastAppliedOpId"] = QString::fromStdString(operations.back().opId);
     }
     stateJson["cursor"] = cursor;
-    stateJson["suppressedOps"] = QJsonArray();
+    QJsonArray suppressedOps;
+    for (const auto& [opId, suppressed] : suppressionState) {
+        if (suppressed) {
+            suppressedOps.append(QString::fromStdString(opId));
+        }
+    }
+    stateJson["suppressedOps"] = suppressedOps;
     
     return package->writeFile("history/state.json", JSONUtils::toCanonicalJson(stateJson));
 }
@@ -106,6 +149,23 @@ bool HistoryIO::loadHistory(Package* package,
         OperationRecord op = deserializeOperation(doc.object());
         document->addOperation(op);
     }
+
+    // Read state.json (suppression + cursor)
+    QByteArray stateData = package->readFile("history/state.json");
+    if (!stateData.isEmpty()) {
+        QJsonParseError stateError;
+        QJsonDocument stateDoc = QJsonDocument::fromJson(stateData, &stateError);
+        if (stateError.error == QJsonParseError::NoError && stateDoc.isObject()) {
+            QJsonObject stateJson = stateDoc.object();
+            QJsonArray suppressedOps = stateJson["suppressedOps"].toArray();
+            std::unordered_map<std::string, bool> suppressionState;
+            suppressionState.reserve(static_cast<size_t>(suppressedOps.size()));
+            for (const auto& opVal : suppressedOps) {
+                suppressionState[opVal.toString().toStdString()] = true;
+            }
+            document->setOperationSuppressionState(suppressionState);
+        }
+    }
     
     return true;
 }
@@ -132,6 +192,12 @@ QJsonObject HistoryIO::serializeOperation(const OperationRecord& op) {
         face["faceId"] = QString::fromStdString(ref.faceId);
         inputs["face"] = face;
     }
+    else if (std::holds_alternative<BodyRef>(op.input)) {
+        const auto& ref = std::get<BodyRef>(op.input);
+        QJsonObject body;
+        body["bodyId"] = QString::fromStdString(ref.bodyId);
+        inputs["body"] = body;
+    }
     json["inputs"] = inputs;
     
     // Serialize parameters
@@ -146,7 +212,7 @@ QJsonObject HistoryIO::serializeOperation(const OperationRecord& op) {
         const auto& p = std::get<RevolveParams>(op.params);
         params["angleDeg"] = p.angleDeg;
         params["booleanMode"] = booleanModeToString(p.booleanMode);
-        
+
         // Serialize axis reference
         if (std::holds_alternative<SketchLineRef>(p.axis)) {
             const auto& axis = std::get<SketchLineRef>(p.axis);
@@ -162,6 +228,34 @@ QJsonObject HistoryIO::serializeOperation(const OperationRecord& op) {
             axisJson["edgeId"] = QString::fromStdString(axis.edgeId);
             params["axisEdge"] = axisJson;
         }
+    }
+    else if (std::holds_alternative<FilletChamferParams>(op.params)) {
+        const auto& p = std::get<FilletChamferParams>(op.params);
+        params["mode"] = filletChamferModeToString(p.mode);
+        params["radius"] = p.radius;
+        params["chainTangentEdges"] = p.chainTangentEdges;
+
+        QJsonArray edgeIds;
+        for (const auto& edgeId : p.edgeIds) {
+            edgeIds.append(QString::fromStdString(edgeId));
+        }
+        params["edgeIds"] = edgeIds;
+    }
+    else if (std::holds_alternative<ShellParams>(op.params)) {
+        const auto& p = std::get<ShellParams>(op.params);
+        params["thickness"] = p.thickness;
+
+        QJsonArray openFaceIds;
+        for (const auto& faceId : p.openFaceIds) {
+            openFaceIds.append(QString::fromStdString(faceId));
+        }
+        params["openFaceIds"] = openFaceIds;
+    }
+    else if (std::holds_alternative<BooleanParams>(op.params)) {
+        const auto& p = std::get<BooleanParams>(op.params);
+        params["operation"] = booleanOpToString(p.operation);
+        params["targetBodyId"] = QString::fromStdString(p.targetBodyId);
+        params["toolBodyId"] = QString::fromStdString(p.toolBodyId);
     }
     json["params"] = params;
     
@@ -197,7 +291,13 @@ OperationRecord HistoryIO::deserializeOperation(const QJsonObject& json) {
         ref.faceId = face["faceId"].toString().toStdString();
         op.input = ref;
     }
-    
+    else if (inputs.contains("body")) {
+        QJsonObject body = inputs["body"].toObject();
+        BodyRef ref;
+        ref.bodyId = body["bodyId"].toString().toStdString();
+        op.input = ref;
+    }
+
     // Parse parameters
     QJsonObject params = json["params"].toObject();
     
@@ -212,7 +312,7 @@ OperationRecord HistoryIO::deserializeOperation(const QJsonObject& json) {
         RevolveParams p;
         p.angleDeg = params["angleDeg"].toDouble();
         p.booleanMode = stringToBooleanMode(params["booleanMode"].toString());
-        
+
         if (params.contains("axisSketchLine")) {
             QJsonObject axisJson = params["axisSketchLine"].toObject();
             SketchLineRef axis;
@@ -227,10 +327,48 @@ OperationRecord HistoryIO::deserializeOperation(const QJsonObject& json) {
             axis.edgeId = axisJson["edgeId"].toString().toStdString();
             p.axis = axis;
         }
-        
+
         op.params = p;
     }
-    
+    else if (op.type == OperationType::Fillet || op.type == OperationType::Chamfer) {
+        FilletChamferParams p;
+        if (params.contains("mode")) {
+            p.mode = stringToFilletChamferMode(params["mode"].toString());
+        } else {
+            p.mode = (op.type == OperationType::Chamfer)
+                         ? FilletChamferParams::Mode::Chamfer
+                         : FilletChamferParams::Mode::Fillet;
+        }
+        p.radius = params["radius"].toDouble();
+        p.chainTangentEdges = params["chainTangentEdges"].toBool(true);
+
+        QJsonArray edgeIds = params["edgeIds"].toArray();
+        for (const auto& edgeVal : edgeIds) {
+            p.edgeIds.push_back(edgeVal.toString().toStdString());
+        }
+
+        op.params = p;
+    }
+    else if (op.type == OperationType::Shell) {
+        ShellParams p;
+        p.thickness = params["thickness"].toDouble();
+
+        QJsonArray openFaceIds = params["openFaceIds"].toArray();
+        for (const auto& faceVal : openFaceIds) {
+            p.openFaceIds.push_back(faceVal.toString().toStdString());
+        }
+
+        op.params = p;
+    }
+    else if (op.type == OperationType::Boolean) {
+        BooleanParams p;
+        p.operation = stringToBooleanOp(params["operation"].toString());
+        p.targetBodyId = params["targetBodyId"].toString().toStdString();
+        p.toolBodyId = params["toolBodyId"].toString().toStdString();
+
+        op.params = p;
+    }
+
     // Parse result bodies
     QJsonArray resultBodies = json["resultBodyIds"].toArray();
     for (const auto& bodyVal : resultBodies) {

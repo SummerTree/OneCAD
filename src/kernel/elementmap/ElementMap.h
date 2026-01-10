@@ -92,7 +92,10 @@ public:
     std::vector<ElementId> ids() const;
     std::vector<ElementId> findIdsByShape(const TopoDS_Shape& shape) const;
     void clear();
+    void clearShape(const ElementId& id);
     void removeElementsForBody(const std::string& bodyId);
+    void rebindBody(const std::string& bodyId, const TopoDS_Shape& shape,
+                    const std::string& opId = {});
 
     // Updates tracked shapes using the history from a boolean operation. Returns IDs that were deleted.
     std::vector<ElementId> update(BRepAlgoAPI_BooleanOperation& algo, const std::string& opId);
@@ -226,6 +229,17 @@ inline void ElementMap::clear() {
     shapeToIds_.Clear();
 }
 
+inline void ElementMap::clearShape(const ElementId& id) {
+    auto it = entries_.find(id.value);
+    if (it == entries_.end()) {
+        return;
+    }
+    if (!it->second.shape.IsNull()) {
+        unbindShape(it->second.shape, it->second.id);
+    }
+    it->second.shape.Nullify();
+}
+
 inline void ElementMap::removeElementsForBody(const std::string& bodyId) {
     if (bodyId.empty()) {
         return;
@@ -242,6 +256,108 @@ inline void ElementMap::removeElementsForBody(const std::string& bodyId) {
             ++it;
         }
     }
+}
+
+inline void ElementMap::rebindBody(const std::string& bodyId, const TopoDS_Shape& shape,
+                                   const std::string& opId) {
+    if (bodyId.empty() || shape.IsNull()) {
+        return;
+    }
+
+    ElementId bodyElem = ElementId::From(bodyId);
+    if (contains(bodyElem)) {
+        attachShape(bodyElem, shape, opId);
+    } else {
+        registerElement(bodyElem, ElementKind::Body, shape, opId);
+    }
+
+    struct Candidate {
+        TopoDS_Shape shape;
+        ElementDescriptor descriptor;
+        DescriptorKey key;
+        bool assigned{false};
+    };
+
+    auto collectEntries = [&](ElementKind kind) {
+        std::vector<Entry*> entries;
+        const std::string prefix = bodyId + "/";
+        for (auto& [key, entry] : entries_) {
+            if (entry.kind != kind) {
+                continue;
+            }
+            if (entry.id.value == bodyId || entry.id.value.rfind(prefix, 0) == 0) {
+                entries.push_back(&entry);
+            }
+        }
+        std::sort(entries.begin(), entries.end(),
+                  [](const Entry* a, const Entry* b) {
+                      return a->id.value < b->id.value;
+                  });
+        return entries;
+    };
+
+    auto collectCandidates = [&](TopAbs_ShapeEnum kind) {
+        std::vector<Candidate> candidates;
+        TopTools_IndexedMapOfShape map;
+        TopExp::MapShapes(shape, kind, map);
+        candidates.reserve(static_cast<std::size_t>(map.Extent()));
+        for (int i = 1; i <= map.Extent(); ++i) {
+            TopoDS_Shape candidateShape = map(i);
+            ElementDescriptor descriptor = computeDescriptor(candidateShape);
+            candidates.push_back(Candidate{
+                candidateShape,
+                descriptor,
+                makeKey(descriptor),
+                false
+            });
+        }
+        std::sort(candidates.begin(), candidates.end(),
+                  [](const Candidate& a, const Candidate& b) {
+                      return a.key < b.key;
+                  });
+        return candidates;
+    };
+
+    auto matchKind = [&](ElementKind kind, TopAbs_ShapeEnum shapeKind) {
+        auto entries = collectEntries(kind);
+        auto candidates = collectCandidates(shapeKind);
+
+        for (auto* entry : entries) {
+            double bestScore = std::numeric_limits<double>::max();
+            int bestIndex = -1;
+            for (std::size_t i = 0; i < candidates.size(); ++i) {
+                if (candidates[i].assigned) {
+                    continue;
+                }
+                double currentScore = score(entry->descriptor, candidates[i].descriptor);
+                if (currentScore < bestScore) {
+                    bestScore = currentScore;
+                    bestIndex = static_cast<int>(i);
+                }
+            }
+
+            if (bestIndex >= 0) {
+                attachShape(entry->id, candidates[bestIndex].shape, opId);
+                candidates[bestIndex].assigned = true;
+            } else {
+                clearShape(entry->id);
+            }
+        }
+
+        std::size_t ordinal = 0;
+        for (auto& candidate : candidates) {
+            if (candidate.assigned) {
+                continue;
+            }
+            ElementId childId = makeChildId(bodyElem, kind, candidate.descriptor, opId,
+                                            ChildReason::Generated, ordinal++);
+            upsertEntry(childId, kind, candidate.shape, candidate.descriptor, opId, {bodyElem});
+        }
+    };
+
+    matchKind(ElementKind::Face, TopAbs_FACE);
+    matchKind(ElementKind::Edge, TopAbs_EDGE);
+    matchKind(ElementKind::Vertex, TopAbs_VERTEX);
 }
 
 inline bool ElementMap::DescriptorKey::operator<(const DescriptorKey& other) const {

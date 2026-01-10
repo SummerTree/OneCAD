@@ -149,7 +149,11 @@ void Document::clear() {
     sketchVisibility_.clear();
     bodies_.clear();
     bodyNames_.clear();
+    bodyVisibilityCache_.clear();
+    baseBodyIds_.clear();
     operations_.clear();
+    suppressedOperations_.clear();
+    operationFailures_.clear();
     elementMap_.clear();
     if (sceneMeshStore_) {
         sceneMeshStore_->clear();
@@ -251,21 +255,48 @@ bool Document::addBodyWithId(const std::string& id,
     }
 
     std::string finalName = name;
+    auto nameIt = bodyNames_.find(id);
     if (finalName.empty()) {
-        finalName = "Body " + std::to_string(nextBodyNumber_++);
+        if (nameIt != bodyNames_.end()) {
+            finalName = nameIt->second;
+        } else {
+            finalName = "Body " + std::to_string(nextBodyNumber_++);
+        }
     }
 
     bodyNames_[id] = finalName;
 
     BodyEntry entry;
     entry.shape = shape;
+    auto visibilityIt = bodyVisibilityCache_.find(id);
+    if (visibilityIt != bodyVisibilityCache_.end()) {
+        entry.visible = visibilityIt->second;
+        bodyVisibilityCache_.erase(visibilityIt);
+    }
     bodies_[id] = entry;
 
-    registerBodyElements(id, shape);
+    elementMap_.rebindBody(id, shape);
     updateBodyMesh(id, shape, false);
 
     setModified(true);
     emit bodyAdded(QString::fromStdString(id));
+    return true;
+}
+
+bool Document::updateBodyShape(const std::string& id, const TopoDS_Shape& shape,
+                               bool emitSignal, const std::string& opId) {
+    if (shape.IsNull()) {
+        return false;
+    }
+    auto it = bodies_.find(id);
+    if (it == bodies_.end()) {
+        return false;
+    }
+
+    it->second.shape = shape;
+    elementMap_.rebindBody(id, shape, opId);
+    updateBodyMesh(id, shape, emitSignal);
+    setModified(true);
     return true;
 }
 
@@ -293,12 +324,31 @@ bool Document::removeBody(const std::string& id) {
         return false;
     }
 
+    bodyVisibilityCache_.erase(id);
+    baseBodyIds_.erase(id);
     bodies_.erase(it);
     bodyNames_.erase(id);
     if (sceneMeshStore_) {
         sceneMeshStore_->removeBody(id);
     }
     elementMap_.removeElementsForBody(id);
+
+    setModified(true);
+    emit bodyRemoved(QString::fromStdString(id));
+    return true;
+}
+
+bool Document::removeBodyPreserveElementMap(const std::string& id) {
+    auto it = bodies_.find(id);
+    if (it == bodies_.end()) {
+        return false;
+    }
+
+    bodyVisibilityCache_[id] = it->second.visible;
+    bodies_.erase(it);
+    if (sceneMeshStore_) {
+        sceneMeshStore_->removeBody(id);
+    }
 
     setModified(true);
     emit bodyRemoved(QString::fromStdString(id));
@@ -333,9 +383,164 @@ void Document::setBodyName(const std::string& id, const std::string& name) {
     emit bodyRenamed(QString::fromStdString(id), QString::fromStdString(finalName));
 }
 
+void Document::setBaseBodyIds(const std::unordered_set<std::string>& ids) {
+    baseBodyIds_ = ids;
+}
+
+void Document::addBaseBodyId(const std::string& id) {
+    if (!id.empty()) {
+        baseBodyIds_.insert(id);
+    }
+}
+
+bool Document::isBaseBody(const std::string& id) const {
+    return baseBodyIds_.find(id) != baseBodyIds_.end();
+}
+
 void Document::addOperation(const OperationRecord& record) {
-    operations_.push_back(record);
+    insertOperation(operations_.size(), record);
+}
+
+bool Document::insertOperation(std::size_t index, const OperationRecord& record) {
+    if (index > operations_.size()) {
+        return false;
+    }
+    operations_.insert(operations_.begin() + static_cast<std::ptrdiff_t>(index), record);
     setModified(true);
+    emit operationAdded(QString::fromStdString(record.opId));
+    return true;
+}
+
+bool Document::updateOperationParams(const std::string& opId, const OperationParams& params) {
+    for (auto& op : operations_) {
+        if (op.opId == opId) {
+            op.params = params;
+            setModified(true);
+            emit operationUpdated(QString::fromStdString(opId));
+            return true;
+        }
+    }
+    return false;
+}
+
+bool Document::removeOperation(const std::string& opId) {
+    auto it = std::remove_if(operations_.begin(), operations_.end(),
+                             [&](const OperationRecord& op) { return op.opId == opId; });
+    if (it == operations_.end()) {
+        return false;
+    }
+    operations_.erase(it, operations_.end());
+    suppressedOperations_.erase(opId);
+    operationFailures_.erase(opId);
+    setModified(true);
+    emit operationRemoved(QString::fromStdString(opId));
+    return true;
+}
+
+int Document::operationIndex(const std::string& opId) const {
+    for (std::size_t i = 0; i < operations_.size(); ++i) {
+        if (operations_[i].opId == opId) {
+            return static_cast<int>(i);
+        }
+    }
+    return -1;
+}
+
+OperationRecord* Document::findOperation(const std::string& opId) {
+    for (auto& op : operations_) {
+        if (op.opId == opId) {
+            return &op;
+        }
+    }
+    return nullptr;
+}
+
+const OperationRecord* Document::findOperation(const std::string& opId) const {
+    for (const auto& op : operations_) {
+        if (op.opId == opId) {
+            return &op;
+        }
+    }
+    return nullptr;
+}
+
+bool Document::setOperationSuppressed(const std::string& opId, bool suppressed) {
+    if (!findOperation(opId)) {
+        return false;
+    }
+    const bool wasSuppressed = suppressedOperations_.count(opId) > 0;
+    if (suppressed) {
+        suppressedOperations_.insert(opId);
+    } else {
+        suppressedOperations_.erase(opId);
+    }
+    if (wasSuppressed != suppressed) {
+        emit operationSuppressionChanged(QString::fromStdString(opId), suppressed);
+    }
+    return true;
+}
+
+bool Document::isOperationSuppressed(const std::string& opId) const {
+    return suppressedOperations_.count(opId) > 0;
+}
+
+std::unordered_map<std::string, bool> Document::operationSuppressionState() const {
+    std::unordered_map<std::string, bool> state;
+    state.reserve(operations_.size());
+    for (const auto& op : operations_) {
+        state[op.opId] = suppressedOperations_.count(op.opId) > 0;
+    }
+    return state;
+}
+
+void Document::setOperationSuppressionState(const std::unordered_map<std::string, bool>& state) {
+    suppressedOperations_.clear();
+    for (const auto& [opId, suppressed] : state) {
+        if (suppressed && findOperation(opId)) {
+            suppressedOperations_.insert(opId);
+        }
+    }
+}
+
+void Document::setOperationFailed(const std::string& opId, const std::string& reason) {
+    if (!findOperation(opId)) {
+        return;
+    }
+    auto it = operationFailures_.find(opId);
+    if (it != operationFailures_.end() && it->second == reason) {
+        return;
+    }
+    operationFailures_[opId] = reason;
+    emit operationFailed(QString::fromStdString(opId), QString::fromStdString(reason));
+}
+
+void Document::clearOperationFailed(const std::string& opId) {
+    auto it = operationFailures_.find(opId);
+    if (it == operationFailures_.end()) {
+        return;
+    }
+    operationFailures_.erase(it);
+    emit operationSucceeded(QString::fromStdString(opId));
+}
+
+void Document::clearOperationFailures() {
+    for (const auto& [opId, reason] : operationFailures_) {
+        (void)reason;
+        emit operationSucceeded(QString::fromStdString(opId));
+    }
+    operationFailures_.clear();
+}
+
+bool Document::isOperationFailed(const std::string& opId) const {
+    return operationFailures_.find(opId) != operationFailures_.end();
+}
+
+std::string Document::operationFailureReason(const std::string& opId) const {
+    auto it = operationFailures_.find(opId);
+    if (it == operationFailures_.end()) {
+        return {};
+    }
+    return it->second;
 }
 
 // Visibility management
@@ -504,7 +709,7 @@ void Document::updateBodyMesh(const std::string& bodyId,
 void Document::rebuildElementMap() {
     elementMap_.clear();
     for (const auto& [id, body] : bodies_) {
-        registerBodyElements(id, body.shape);
+        elementMap_.rebindBody(id, body.shape);
     }
 }
 

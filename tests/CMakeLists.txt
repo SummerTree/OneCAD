@@ -126,3 +126,13 @@ target_link_libraries(proto_pick_topology_promotion
     Qt6::Gui
 )
 target_include_directories(proto_pick_topology_promotion PRIVATE ${CMAKE_SOURCE_DIR}/src)
+
+# Regeneration Engine Prototype
+add_executable(proto_regeneration prototypes/proto_regeneration.cpp)
+target_link_libraries(proto_regeneration
+    PRIVATE
+    onecad_app
+    onecad_core
+    Qt6::Core
+)
+target_include_directories(proto_regeneration PRIVATE ${CMAKE_SOURCE_DIR}/src)

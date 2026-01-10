@@ -4,10 +4,13 @@
 #include "ShellTool.h"
 
 #include "../viewport/Viewport.h"
-#include "../../app/commands/ModifyBodyCommand.h"
+#include "../../app/commands/AddOperationCommand.h"
 #include "../../app/commands/CommandProcessor.h"
 #include "../../app/document/Document.h"
+#include "../../app/document/OperationRecord.h"
 #include "../../render/Camera3D.h"
+
+#include <QUuid>
 
 #include <BRepOffsetAPI_MakeThickSolid.hxx>
 #include <BRepGProp.hxx>
@@ -132,11 +135,32 @@ bool ShellTool::handleMouseRelease(const QPoint& screenPos, Qt::MouseButton butt
         return true;
     }
 
-    // Apply via ModifyBodyCommand
-    if (document_ && commandProcessor_ && !targetBodyId_.empty()) {
-        auto command = std::make_unique<app::commands::ModifyBodyCommand>(
-            document_, targetBodyId_, resultShape);
-        commandProcessor_->execute(std::move(command));
+    if (document_ && !targetBodyId_.empty()) {
+        app::OperationRecord record;
+        record.opId = QUuid::createUuid().toString(QUuid::WithoutBraces).toStdString();
+        record.type = app::OperationType::Shell;
+        record.input = app::BodyRef{targetBodyId_};
+
+        app::ShellParams params;
+        params.thickness = finalThickness;
+
+        // Collect open face IDs from ElementMap
+        for (const auto& face : openFaces_) {
+            auto ids = document_->elementMap().findIdsByShape(face);
+            if (!ids.empty()) {
+                params.openFaceIds.push_back(ids.front().value);
+            }
+        }
+
+        record.params = params;
+        record.resultBodyIds.push_back(targetBodyId_);
+
+        auto command = std::make_unique<app::commands::AddOperationCommand>(document_, record);
+        if (commandProcessor_) {
+            commandProcessor_->execute(std::move(command));
+        } else {
+            command->execute();
+        }
     }
 
     clearPreview();

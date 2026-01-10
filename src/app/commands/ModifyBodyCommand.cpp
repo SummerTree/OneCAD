@@ -32,21 +32,17 @@ bool ModifyBodyCommand::execute() {
     // Actually, looking at Document.h, addBodyWithId is public.
     // removeBody is public.
     // So:
-    std::string name = document_->getBodyName(bodyId_);
-    document_->removeBody(bodyId_);
-    document_->addBodyWithId(bodyId_, newShape_, name);
+    if (!document_->updateBodyShape(bodyId_, newShape_)) {
+        return false;
+    }
     
     return true;
 }
 
 bool ModifyBodyCommand::undo() {
     if (!document_) return false;
-    
-    std::string name = document_->getBodyName(bodyId_);
-    document_->removeBody(bodyId_);
-    document_->addBodyWithId(bodyId_, oldShape_, name);
-    
-    return true;
+
+    return document_->updateBodyShape(bodyId_, oldShape_);
 }
 
 } // namespace onecad::app::commands

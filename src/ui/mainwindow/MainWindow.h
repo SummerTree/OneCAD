@@ -10,6 +10,7 @@ class QLabel;
 class QSlider;
 class QEvent;
 class QAction;
+class QHBoxLayout;
 namespace onecad {
 namespace ui {
 class SidebarToolButton;
@@ -36,6 +37,7 @@ class ConstraintPanel;
 class SketchModePanel;
 class RenderDebugPanel;
 class StartOverlay;
+class HistoryPanel;
 
 /**
  * @brief Main application window for OneCAD.
@@ -97,6 +99,9 @@ private:
     void positionConstraintPanel();
     void positionSketchModePanel();
     void positionStartOverlay();
+    void setupHistoryPanel();
+    void positionHistoryPanel();
+    void handleRegenerationFailures();
     void showStartDialog();
     bool loadDocumentFromPath(const QString& fileName);
     bool saveDocumentToPath(const QString& filePath);
@@ -119,6 +124,9 @@ private:
     SketchModePanel* m_sketchModePanel = nullptr;
     RenderDebugPanel* m_renderDebugPanel = nullptr;
     StartOverlay* m_startOverlay = nullptr;
+    HistoryPanel* m_historyPanel = nullptr;
+    SidebarToolButton* m_historyOverlayButton = nullptr;
+    QHBoxLayout* m_centralLayout = nullptr;
 
     // Document model (owns all sketches)
     std::unique_ptr<app::Document> m_document;

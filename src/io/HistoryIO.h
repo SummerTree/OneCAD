@@ -7,6 +7,7 @@
 
 #include <QJsonObject>
 #include <QString>
+#include <unordered_map>
 #include <vector>
 
 namespace onecad::app {
@@ -30,7 +31,8 @@ public:
      * @brief Save operation history to package
      */
     static bool saveHistory(Package* package,
-                            const std::vector<app::OperationRecord>& operations);
+                            const std::vector<app::OperationRecord>& operations,
+                            const std::unordered_map<std::string, bool>& suppressionState);
     
     /**
      * @brief Load operation history from package

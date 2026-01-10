@@ -1,14 +1,21 @@
 add_library(onecad_app STATIC
     Application.cpp
     commands/AddBodyCommand.cpp
+    commands/AddOperationCommand.cpp
     commands/DeleteBodyCommand.cpp
     commands/DeleteSketchCommand.cpp
     commands/ModifyBodyCommand.cpp
+    commands/RemoveOperationCommand.cpp
     commands/RenameBodyCommand.cpp
     commands/RenameSketchCommand.cpp
+    commands/SetOperationSuppressionCommand.cpp
     commands/ToggleVisibilityCommand.cpp
+    commands/UpdateOperationParamsCommand.cpp
     commands/CommandProcessor.cpp
+    commands/RollbackCommand.cpp
     document/Document.cpp
+    history/DependencyGraph.cpp
+    history/RegenerationEngine.cpp
     selection/SelectionManager.cpp
 )
 
