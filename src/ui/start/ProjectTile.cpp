@@ -135,16 +135,7 @@ void ProjectTile::paintEvent(QPaintEvent* event) {
 
     style()->drawPrimitive(QStyle::PE_Widget, &option, &painter, this);
 
-    if (m_thumbnailLabel) {
-        QRect shadowRect = m_thumbnailLabel->geometry().adjusted(-4, -2, 4, 6);
-        QRect innerRect = m_thumbnailLabel->geometry().adjusted(-2, -1, 2, 3);
-
-        painter.setPen(Qt::NoPen);
-        painter.setBrush(QColor(0, 0, 0, 18));
-        painter.drawRoundedRect(shadowRect.translated(0, 2), 10, 10);
-        painter.setBrush(QColor(0, 0, 0, 28));
-        painter.drawRoundedRect(innerRect.translated(0, 1), 9, 9);
-    }
+    // No thumbnail shadow - border is handled by stylesheet.
 }
 
 void ProjectTile::contextMenuEvent(QContextMenuEvent* event) {
@@ -171,14 +162,22 @@ void ProjectTile::applyTheme() {
         ? theme.ui.treeHoverBackground
         : QColor(0, 0, 0, 24);
     QColor baseColor(0, 0, 0, 0);
+    QColor borderColor = theme.ui.panelBorder.isValid()
+        ? theme.ui.panelBorder
+        : theme.ui.toolButtonBorder;
+    QColor hoverBorder = theme.ui.toolButtonHoverBorder.isValid()
+        ? theme.ui.toolButtonHoverBorder
+        : borderColor;
     QString style = QString(
-        "QWidget#projectTile { background: %1; border-radius: 10px; }"
-        "QWidget#projectTile:hover { background: %2; }"
-        "QLabel#projectName { background: transparent; color: %3; font-weight: 600; font-size: 12px; }"
-        "QLabel#projectPath { background: transparent; color: %4; font-size: 10px; }"
-        "QLabel#projectDate { background: transparent; color: %4; font-size: 10px; }"
+        "QWidget#projectTile { background: %1; border-radius: 10px; border: 1px solid %2; }"
+        "QWidget#projectTile:hover { background: %3; border: 1px solid %4; }"
+        "QLabel#projectName { background: transparent; color: %5; font-weight: 600; font-size: 12px; }"
+        "QLabel#projectPath { background: transparent; color: %6; font-size: 10px; }"
+        "QLabel#projectDate { background: transparent; color: %6; font-size: 10px; }"
     ).arg(toQssColor(baseColor),
+          toQssColor(borderColor),
           toQssColor(hoverColor),
+          toQssColor(hoverBorder),
           textColor.name(),
           hintColor.name());
 
