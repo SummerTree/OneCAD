@@ -1,17 +1,20 @@
 #include "SnapSettingsPanel.h"
 #include "../theme/ThemeManager.h"
+#include "../components/ToggleSwitch.h" // Include custom component
 
-#include <QCheckBox>
 #include <QGridLayout>
 #include <QGroupBox>
 #include <QLabel>
 #include <QVBoxLayout>
 #include <QFrame>
+#include <QMouseEvent>
+#include <QWheelEvent>
 
 namespace onecad::ui {
 
 SnapSettingsPanel::SnapSettingsPanel(QWidget* parent)
     : QWidget(parent) {
+    setFocusPolicy(Qt::ClickFocus);
     setupUi();
     connect(&ThemeManager::instance(), &ThemeManager::themeChanged,
             this, &SnapSettingsPanel::updateTheme, Qt::UniqueConnection);
@@ -19,124 +22,125 @@ SnapSettingsPanel::SnapSettingsPanel(QWidget* parent)
 }
 
 void SnapSettingsPanel::setupUi() {
+    if (layout()) {
+        return; // Build UI only once; theme updates should not rebuild widgets
+    }
+
     setObjectName("SnapSettingsPanel");
     setWindowFlag(Qt::FramelessWindowHint, true);
     setAttribute(Qt::WA_StyledBackground, true);
     setFixedWidth(260);
 
-    // switch-like style for checkboxes
-    setStyleSheet(R"(
-        SnapSettingsPanel {
-            background-color: palette(window);
-            border: 1px solid palette(mid);
-            border-radius: 8px;
-        }
-        QLabel.header {
-            font-weight: bold;
-            font-size: 11px;
-            color: palette(text);
-            padding: 4px 0px;
-        }
-        QCheckBox {
-            font-size: 12px;
-            padding: 4px;
-        }
-        QCheckBox::indicator {
-            width: 32px;
-            height: 18px;
-            border-radius: 9px;
-            background-color: #555; /* Default off */
-        }
-        QCheckBox::indicator:checked {
-            background-color: #007AFF; /* Blue on */
-        }
-        QCheckBox::indicator:unchecked:hover {
-            background-color: #666;
-        }
-        QCheckBox::indicator:checked:hover {
-            background-color: #0066DD;
-        }
-        /* Knob */
-        QCheckBox::indicator::subcontrol {
-            background-color: white;
-            border-radius: 7px;
-            width: 14px;
-            height: 14px;
-            margin: 2px;
-        }
-        QCheckBox::indicator:checked::subcontrol {
-            subcontrol-position: center right;
-        }
-        QCheckBox::indicator:unchecked::subcontrol {
-            subcontrol-position: center left;
-        }
-        QFrame.separator {
-            background-color: palette(mid);
-            max-height: 1px;
-            border: none;
-        }
-    )");
-
     auto* layout = new QVBoxLayout(this);
-    layout->setContentsMargins(12, 12, 12, 12);
+    layout->setContentsMargins(16, 16, 16, 16);
     layout->setSpacing(8);
 
     // Section: Snap to
-    auto* snapLabel = new QLabel(tr("Snap to"), this);
-    snapLabel->setProperty("class", "header"); // Doesn't work with qss directly without explicit support or workaround, using objectName or direct style usually better but let's try selector
-    snapLabel->setStyleSheet("font-weight: bold; font-size: 11px; color: grey;"); 
+    auto* snapLabel = new QLabel(tr("SNAP TO"), this);
+    snapLabel->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Fixed);
+    snapLabel->setFixedHeight(22);
     layout->addWidget(snapLabel);
-
+    
+    // Group options tightly
+    auto* snapLayout = new QVBoxLayout();
+    snapLayout->setSpacing(4);
+    
     m_snapGrid = createToggle(tr("Grid"));
-    layout->addWidget(m_snapGrid);
+    snapLayout->addWidget(m_snapGrid);
 
     m_snapSketchLines = createToggle(tr("Sketch Guide Lines"));
-    layout->addWidget(m_snapSketchLines);
+    snapLayout->addWidget(m_snapSketchLines);
 
     m_snapSketchPoints = createToggle(tr("Sketch Guide Points"));
-    layout->addWidget(m_snapSketchPoints);
+    snapLayout->addWidget(m_snapSketchPoints);
 
     m_snap3DPoints = createToggle(tr("3D Guide Points"));
-    layout->addWidget(m_snap3DPoints);
+    snapLayout->addWidget(m_snap3DPoints);
 
     m_snap3DEdges = createToggle(tr("Distant Edges"));
-    layout->addWidget(m_snap3DEdges);
+    snapLayout->addWidget(m_snap3DEdges);
+    
+    layout->addLayout(snapLayout);
 
     // Separator
+    layout->addSpacing(8);
     auto* sep = new QFrame(this);
-    sep->setObjectName("separator");
     sep->setFrameShape(QFrame::HLine);
-    sep->setFrameShadow(QFrame::Sunken);
+    sep->setFrameShadow(QFrame::Plain);
     sep->setFixedHeight(1);
-    sep->setStyleSheet("background-color: #444; border: none;");
     layout->addWidget(sep);
+    layout->addSpacing(8);
 
     // Section: Show
-    auto* showLabel = new QLabel(tr("Show"), this);
-    showLabel->setStyleSheet("font-weight: bold; font-size: 11px; color: grey;");
+    auto* showLabel = new QLabel(tr("SHOW"), this);
+    showLabel->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Fixed);
+    showLabel->setFixedHeight(22);
     layout->addWidget(showLabel);
-
+    
+    auto* showLayout = new QVBoxLayout();
+    showLayout->setSpacing(4);
+    
     m_showGuidePoints = createToggle(tr("Guide Points"));
-    layout->addWidget(m_showGuidePoints);
+    showLayout->addWidget(m_showGuidePoints);
 
     m_showHints = createToggle(tr("Snapping Hints"));
-    layout->addWidget(m_showHints);
+    showLayout->addWidget(m_showHints);
+    
+    layout->addLayout(showLayout);
+    
+    // Initialize to default ON state
+    m_snapGrid->setChecked(true);
+    m_snapSketchLines->setChecked(true);
+    m_snapSketchPoints->setChecked(true);
+    m_snap3DPoints->setChecked(true);
+    m_snap3DEdges->setChecked(true);
+    m_showGuidePoints->setChecked(true);
+    m_showHints->setChecked(true);
 }
 
-QCheckBox* SnapSettingsPanel::createToggle(const QString& text) {
-    auto* box = new QCheckBox(text, this);
-    box->setCursor(Qt::PointingHandCursor);
-    // Move text to left and indicator to right? Layout direction?
-    // QCheckBox default is text right, indicator left.
-    // To mimic screenshot: Text Left, Toggle Right.
-    box->setLayoutDirection(Qt::RightToLeft);
+class ToggleSwitch* SnapSettingsPanel::createToggle(const QString& text) {
+    auto* box = new ToggleSwitch(text, this);
+    box->setChecked(true); // Default to ON
     
+    // Connect standard toggled signal
     connect(box, &QCheckBox::toggled, this, &SnapSettingsPanel::settingsChanged);
     return box;
 }
 
 void SnapSettingsPanel::updateTheme() {
-    // Rely on palette updates
+    const ThemeDefinition& theme = ThemeManager::instance().currentTheme();
+
+    auto toHex = [](const QColor& c) {
+        return QString("#%1%2%3")
+            .arg(c.red(), 2, 16, QChar('0'))
+            .arg(c.green(), 2, 16, QChar('0'))
+            .arg(c.blue(), 2, 16, QChar('0'));
+    };
+
+    const QString bgColor = toHex(theme.ui.sidebarButtonBackground);
+    const QString borderColor = toHex(theme.ui.sidebarButtonBorder);
+    const QString headerColor = toHex(theme.ui.sidebarButtonText);
+
+    setStyleSheet(QString(R"(
+        #SnapSettingsPanel {
+            background-color: %1;
+            border: 1px solid %2;
+            border-radius: 12px;
+        }
+        #SnapSettingsPanel QLabel {
+            font-size: 12px;
+            color: %3;
+            font-weight: 600;
+            letter-spacing: 0.6px;
+            margin-bottom: 6px;
+            background-color: transparent;
+        }
+        #SnapSettingsPanel QFrame {
+            background-color: #333;
+            max-height: 1px;
+            border: none;
+        }
+    )").arg(bgColor, borderColor, headerColor));
 }
 
 void SnapSettingsPanel::setSettings(const SnapSettings& settings) {
@@ -167,6 +171,22 @@ SnapSettingsPanel::SnapSettings SnapSettingsPanel::settings() const {
     s.showGuidePoints = m_showGuidePoints->isChecked();
     s.showSnappingHints = m_showHints->isChecked();
     return s;
+}
+
+void SnapSettingsPanel::mousePressEvent(QMouseEvent* event) {
+    event->accept();
+}
+
+void SnapSettingsPanel::mouseReleaseEvent(QMouseEvent* event) {
+    event->accept();
+}
+
+void SnapSettingsPanel::mouseMoveEvent(QMouseEvent* event) {
+    event->accept();
+}
+
+void SnapSettingsPanel::wheelEvent(QWheelEvent* event) {
+    event->accept();
 }
 
 } // namespace onecad::ui

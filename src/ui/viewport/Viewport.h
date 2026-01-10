@@ -12,6 +12,7 @@
 #include <QStringList>
 #include <QSize>
 #include <QImage>
+#include "SnapSettingsPanel.h"
 #include "selection/ModelPickerAdapter.h"
 #include "../../render/scene/SceneMeshStore.h"
 #include "../../app/selection/SelectionTypes.h"
@@ -166,6 +167,9 @@ public slots:
                            const QVector3D& gradientDir,
                            float gradientStrength);
 
+    // Snap settings
+    void updateSnapSettings(const SnapSettingsPanel::SnapSettings& settings);
+
     // Views
     void setFrontView();
     void setBackView();
@@ -234,6 +238,9 @@ private:
     app::selection::PickResult buildSketchPickResult(const QPoint& screenPos) const;
     QStringList buildDeepSelectLabels(const std::vector<app::selection::SelectionItem>& candidates) const;
     
+    // Snap integration
+    void updateSnapGeometry();
+
     // Animation
     void animateCamera(const CameraState& targetState);
     void setExtrudeToolActive(bool active);

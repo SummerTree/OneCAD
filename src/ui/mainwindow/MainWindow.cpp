@@ -2,6 +2,7 @@
 #include "../theme/ThemeManager.h"
 #include "../viewport/Viewport.h"
 #include "../viewport/RenderDebugPanel.h"
+#include "../viewport/SnapSettingsPanel.h"
 #include "../../render/Camera3D.h"
 #include "../../core/sketch/Sketch.h"
 #include "../../core/sketch/tools/SketchToolManager.h"
@@ -955,9 +956,15 @@ void MainWindow::setupViewport() {
         }
     });
 
-    setupHomeOverlayButton();
     setupNavigatorOverlayButton();
+    setupHomeOverlayButton();
     setupRenderDebugOverlay();
+    setupSnapOverlay(); // Before History panel to reserve space
+    setupHistoryPanel();
+    
+    // Initial resize to position overlays
+    positionHomeOverlayButton();
+    positionNavigatorOverlayButton();
 
     // Create constraint panel (hidden initially)
     m_constraintPanel = new ConstraintPanel(m_viewport);
@@ -970,7 +977,7 @@ void MainWindow::setupViewport() {
             this, &MainWindow::onConstraintRequested);
 
     // Setup history panel
-    setupHistoryPanel();
+    // setupHistoryPanel(); // Moved up
 
     m_viewport->installEventFilter(this);
 }
@@ -1007,6 +1014,8 @@ bool MainWindow::eventFilter(QObject* obj, QEvent* event) {
         positionRenderDebugPanel();
         positionConstraintPanel();
         positionSketchModePanel();
+        positionSnapOverlay();
+        positionSnapSettingsPanel();
         positionHistoryPanel();
     }
 
@@ -1883,6 +1892,59 @@ void MainWindow::saveSettings() {
     settings.sync(); // Force immediate write
 }
 
+void MainWindow::setupSnapOverlay() {
+    if (!m_viewport) return;
+
+    m_snapSettingsButton = new SidebarToolButton(":/icons/ic_snap.svg", tr("Snap Settings"), m_viewport);
+    m_snapSettingsButton->setFixedSize(42, 42);
+    m_snapSettingsButton->setVisible(true);
+
+    m_snapSettingsPanel = new SnapSettingsPanel(m_viewport);
+    m_snapSettingsPanel->setVisible(false);
+
+    connect(m_snapSettingsButton, &SidebarToolButton::clicked, this, [this]() {
+        if (m_snapSettingsPanel) {
+            m_snapSettingsPanel->setVisible(!m_snapSettingsPanel->isVisible());
+            positionSnapSettingsPanel();
+        }
+    });
+    
+    // Connect settings changes to viewport
+    connect(m_snapSettingsPanel, &SnapSettingsPanel::settingsChanged, this, [this]() {
+        if (m_viewport && m_snapSettingsPanel) {
+            m_viewport->updateSnapSettings(m_snapSettingsPanel->settings());
+        }
+    });
+
+    positionSnapOverlay();
+}
+
+void MainWindow::positionSnapOverlay() {
+    if (!m_viewport || !m_snapSettingsButton) return;
+
+    const int margin = 20;
+    int x = m_viewport->width() - m_snapSettingsButton->width() - margin;
+    int y = margin;
+    m_snapSettingsButton->move(x, y);
+    m_snapSettingsButton->raise();
+}
+
+void MainWindow::positionSnapSettingsPanel() {
+    if (!m_viewport || !m_snapSettingsPanel || !m_snapSettingsButton) return;
+    
+    if (!m_snapSettingsPanel->isVisible()) return;
+
+    const int margin = 10;
+    int x = m_snapSettingsButton->x() - m_snapSettingsPanel->width() - margin;
+    int y = m_snapSettingsButton->y();
+    
+    // Ensure it doesn't go off screen
+    if (x < margin) x = margin;
+    
+    m_snapSettingsPanel->move(x, y);
+    m_snapSettingsPanel->raise();
+}
+
 void MainWindow::setupHistoryPanel() {
     if (!m_viewport) return;
 
@@ -1938,7 +2000,10 @@ void MainWindow::setupHistoryPanel() {
 
     connect(m_historyPanel, &HistoryPanel::collapsedChanged, this, [this](bool collapsed) {
         if (m_historyOverlayButton) {
-            positionHistoryPanel();
+      // Right side
+    positionSnapOverlay();
+    positionSnapSettingsPanel();
+    positionHistoryPanel();
             m_historyOverlayButton->setToolTip(collapsed ? tr("Show history")
                                                          : tr("Hide history"));
         }
@@ -1968,6 +2033,12 @@ void MainWindow::positionHistoryPanel() {
     const int margin = 20;
     int x = m_viewport->width() - m_historyOverlayButton->width() - margin;
     int y = margin;
+    
+    // Position below Snap button if it exists
+    if (m_snapSettingsButton && m_snapSettingsButton->isVisible()) {
+        y = m_snapSettingsButton->y() + m_snapSettingsButton->height() + 10;
+    }
+
     m_historyOverlayButton->move(x, y);
     m_historyOverlayButton->raise();
 }

@@ -38,6 +38,7 @@ class SketchModePanel;
 class RenderDebugPanel;
 class StartOverlay;
 class HistoryPanel;
+class SnapSettingsPanel;
 
 /**
  * @brief Main application window for OneCAD.
@@ -101,6 +102,9 @@ private:
     void positionStartOverlay();
     void setupHistoryPanel();
     void positionHistoryPanel();
+    void setupSnapOverlay();
+    void positionSnapOverlay();
+    void positionSnapSettingsPanel();
     void handleRegenerationFailures();
     void showStartDialog();
     bool loadDocumentFromPath(const QString& fileName);
@@ -126,6 +130,8 @@ private:
     StartOverlay* m_startOverlay = nullptr;
     HistoryPanel* m_historyPanel = nullptr;
     SidebarToolButton* m_historyOverlayButton = nullptr;
+    SnapSettingsPanel* m_snapSettingsPanel = nullptr;
+    SidebarToolButton* m_snapSettingsButton = nullptr;
     QHBoxLayout* m_centralLayout = nullptr;
 
     // Document model (owns all sketches)

@@ -1,6 +1,7 @@
 # UI module - Qt Widgets UI components
 add_library(onecad_ui STATIC
     components/SidebarToolButton.cpp
+    components/ToggleSwitch.cpp
     mainwindow/MainWindow.cpp
     theme/ThemeConfig.cpp
     theme/ThemeManager.cpp
@@ -28,6 +29,7 @@ add_library(onecad_ui STATIC
     history/FeatureCard.cpp
     history/EditParameterDialog.cpp
     history/RegenFailureDialog.cpp
+    viewport/SnapSettingsPanel.cpp
 )
 
 target_include_directories(onecad_ui PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
