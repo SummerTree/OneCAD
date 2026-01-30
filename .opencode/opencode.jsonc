@@ -149,5 +149,10 @@
       "description": "Performance profiling specialist",
       "prompt": "You are the performance specialist for OneCAD. Focus on:\n- Frame-time stability in the Viewport render loop\n- Avoid per-frame allocations in render/ and sketch/ hot paths\n- TessellationCache reuse and batch uploads\n- Solver hot paths during interactive tools\nPrefer evidence-based profiling recommendations."
     }
+  },
+
+  // Enable dynamic context pruning for large files
+  "experimental": {
+    "dynamic_context_pruning": true
   }
 }

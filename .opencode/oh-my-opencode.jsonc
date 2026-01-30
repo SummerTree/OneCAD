@@ -1,82 +1,125 @@
 {
   "$schema": "https://raw.githubusercontent.com/code-yeongyu/oh-my-opencode/master/assets/oh-my-opencode.schema.json",
 
-  // Keep Sisyphus orchestration on, but be explicit.
+  // Sisyphus orchestration
   "sisyphus_agent": {
     "disabled": false,
     "planner_enabled": true,
     "replace_plan": true
   },
 
-  // Git integration settings
+  // Git integration
   "git_master": {
     "commit_footer": false,
     "include_co_authored_by": true
   },
 
-  // Background task concurrency
+  // Background concurrency (5 accounts)
   "background_task": {
-    "defaultConcurrency": 4,
+    "defaultConcurrency": 5,
     "providerConcurrency": {
       "anthropic": 2,
       "openai": 3,
-      "google": 4
+      "google": 5,
+      "github-copilot": 5
     },
     "modelConcurrency": {
       "github-copilot/claude-sonnet-4.5": 2
     }
   },
 
-  // Curated agent customizations for CAD context
+  // ═══════════════════════════════════════════
+  // AGENT DOMAIN KNOWLEDGE (prompt_append only)
+  // ═══════════════════════════════════════════
   "agents": {
+    "sisyphus": {
+      "prompt_append": "OneCAD C++ CAD app context:\n- Non-standard coords: Sketch X→World Y+, Sketch Y→World X-\n- EntityID = UUID string\n- OCCT Handle<> always null-check before use\n- PlaneGCS uses direct parameter binding\n- Run proto_* tests to validate changes"
+    },
+    "prometheus": {
+      "prompt_append": "OneCAD planning context:\n1. Layers: UI→Render→Core→Kernel\n2. Check ElementMap impact (topological naming hash stability)\n3. Verify PlaneGCS solver integration\n4. List required proto_* tests\n5. Flag coordinate system implications\n6. Note: STEP I/O and undo/redo not fully wired"
+    },
+    "atlas": {
+      "prompt_append": "OneCAD orchestration:\n- Run proto_elementmap_rigorous BEFORE kernel changes\n- Run proto_sketch_solver AFTER constraint changes\n- Verify clangd diagnostics after edits\n- Delegate complex geometry to 'ultrabrain'\n- Delegate sketch math to 'sketching'"
+    },
     "oracle": {
-      "prompt_append": "When reviewing OneCAD code, prioritize:\n1. Topological naming invariants (ElementMap hash stability)\n2. OCCT Handle<> null checks before dereference\n3. PlaneGCS solver parameter binding correctness\n4. Sketch entity lifecycle consistency (EntityID = UUID)\n5. Qt/OpenGL thread safety\n6. Geometric correctness and numerical robustness\n7. Avoid assuming unimplemented features (feature history, STEP I/O, undo/redo)"
+      "prompt_append": "OneCAD architecture review:\n1. Topological naming (ElementMap descriptor hash stability)\n2. OCCT Handle<> null checks (crash prevention)\n3. PlaneGCS parameter binding correctness\n4. Qt/OpenGL thread safety (QueuedConnection for cross-thread)\n5. Geometric numerical robustness\n6. Memory ownership (unique_ptr preferred)"
     },
     "explore": {
       "permission": { "edit": "deny", "bash": "ask", "webfetch": "allow" },
-      "prompt_append": "For OneCAD exploration, always locate first:\n1. Sketch engine: src/core/sketch/ (entities, tools, constraints, solver)\n2. Kernel: src/kernel/elementmap/ElementMap.h (topological naming)\n3. Rendering: src/render/ (Camera3D, Grid3D, BodyRenderer)\n4. UI: src/ui/ (Viewport, tools, panels)\n5. I/O: src/io/ (placeholder; STEP/native formats not wired)\nNote non-standard coordinate mapping in SketchPlane::XY()."
+      "prompt_append": "OneCAD paths:\n- Sketch: src/core/sketch/ (entities, tools, constraints, solver)\n- Kernel: src/kernel/elementmap/\n- Render: src/render/, src/core/sketch/SketchRenderer.h\n- UI: src/ui/viewport/, src/ui/mainwindow/\n- Tests: tests/proto_*"
     },
     "librarian": {
-      "prompt_append": "For OneCAD external references, prioritize:\n1. OpenCASCADE (OCCT) documentation and examples\n2. PlaneGCS constraint solver patterns\n3. Qt6 widgets and OpenGL integration\n4. CAD parametric modeling best practices\n5. BRep topology and Boolean operations"
+      "prompt_append": "OneCAD external docs:\n1. OpenCASCADE (OCCT) - BRep, Handle<>, TopoDS_*\n2. PlaneGCS constraint solver patterns\n3. Qt6 OpenGL integration\n4. CAD parametric modeling references\n5. Eigen3 linear algebra"
+    },
+    "metis": {
+      "prompt_append": "OneCAD gap analysis:\n- Missing proto_* test coverage\n- Unhandled OCCT exceptions\n- Solver convergence edge cases\n- Coordinate system transformation bugs\n- ElementMap hash collision risks"
+    },
+    "momus": {
+      "prompt_append": "OneCAD plan review:\n- ElementMap regression risk (hash changes = ID remapping)\n- Solver constraint completeness (15 types)\n- OpenGL state leaks (bind/unbind pairs)\n- Memory ownership clarity (raw new without parent)"
     }
   },
 
-  // CAD-specific specialist categories for sisyphus_task
+  // ═══════════════════════════════════════════
+  // CAD-SPECIFIC CATEGORIES
+  // ═══════════════════════════════════════════
   "categories": {
+    // Complex algorithms - use global ultrabrain + CAD context
+    "ultrabrain": {
+      "prompt_append": "OneCAD complex algorithm:\n- Numerical algorithms (solver convergence, tessellation precision)\n- Graph algorithms (LoopDetector DFS cycles, point-in-polygon)\n- OCCT Boolean operation edge cases\n- ElementMap descriptor hashing (14 fields)"
+    },
+
+    // Geometry/kernel work
     "geometry-kernel": {
-      "model": "github-copilot/claude-sonnet-4.5",
+      "model": "openai/gpt-5.2-codex",
+      "variant": "high",
       "temperature": 0.1,
-      "prompt_append": "You are the geometry/kernel specialist for OneCAD. Focus on:\n- OCCT BRep operations (TopoDS_*, BRepBuilderAPI_*, BRepAlgoAPI_*)\n- ElementMap topological naming (14-field descriptor hashing, ID persistence)\n- Shape evolution tracking (Modified/Generated/Deleted)\n- Numerical robustness and tolerance handling\n- Boolean operations correctness\nNote: ElementMap is header-only and used mainly by prototypes today.\nNever suppress OCCT exceptions. Always null-check Handle<> objects."
+      "prompt_append": "Geometry/kernel specialist:\n- OCCT BRep (TopoDS_*, BRepBuilderAPI_*, BRepAlgoAPI_*)\n- ElementMap topological naming (src/kernel/elementmap/)\n- Shape evolution (Modified/Generated/Deleted)\n- Boolean operations correctness\n- Always null-check Handle<> objects"
     },
+
+    // Sketch engine work
     "sketching": {
-      "model": "github-copilot/claude-sonnet-4.5",
+      "model": "openai/gpt-5.2-codex",
+      "variant": "high",
       "temperature": 0.1,
-      "prompt_append": "You are the sketching specialist for OneCAD. Focus on:\n- PlaneGCS constraint solver (ConstraintSolver.cpp)\n- 15 constraint types (see constraints/Constraints.h)\n- Sketch tools (LineTool, ArcTool, CircleTool, etc.)\n- SnapManager (2mm radius, priority: Vertex > Endpoint > Midpoint...)\n- AutoConstrainer (±5° tolerance inference)\n- Loop detection and FaceBuilder OCCT bridge\n- EntityID = std::string UUID pattern\n- SketchPlane::XY() non-standard axis mapping\nPreserve solver parameter binding invariants."
+      "prompt_append": "Sketching specialist:\n- PlaneGCS solver (src/core/sketch/solver/ConstraintSolver.cpp 1014 LOC)\n- 15 constraint types (src/core/sketch/constraints/Constraints.h)\n- SnapManager (2mm radius, priority: Vertex>Endpoint>Midpoint>Center>Quadrant>Intersection>Grid)\n- AutoConstrainer (±5° for H/V, 2mm for coincident)\n- CRITICAL: Non-standard SketchPlane::XY() mapping"
     },
+
+    // Rendering/viewport work
     "rendering": {
-      "model": "github-copilot/claude-sonnet-4.5",
+      "model": "google/antigravity-claude-sonnet-4-5",
       "temperature": 0.2,
-      "prompt_append": "You are the rendering specialist for OneCAD. Focus on:\n- OpenGL 4.1 Core Profile pipeline\n- Camera3D orbit/pan/zoom (missing inertia = known issue)\n- Grid3D (fixed 10mm spacing, shader-based)\n- SketchRenderer (constraint visualization, DOF colors)\n- BodyRenderer + SceneMeshStore\n- ViewCube 3D navigation\n- Viewport picking and selection highlighting\nEnsure OpenGL state is properly managed (bind/unbind pairs)."
+      "prompt_append": "Rendering specialist:\n- OpenGL 4.1 Core Profile\n- Camera3D orbit/pan/zoom (missing inertia = known)\n- Grid3D (fixed 10mm, shader-based)\n- SketchRenderer (1903 LOC) + BodyRenderer (727 LOC)\n- Viewport picking and selection\n- Ensure GL state bind/unbind pairs"
     },
-    "interaction-ux": {
-      "model": "github-copilot/claude-sonnet-4.5",
-      "temperature": 0.3,
-      "prompt_append": "You are the UI/interaction specialist for OneCAD (Qt6 Widgets). Focus on:\n- MainWindow, Viewport, ModelNavigator architecture\n- ContextToolbar, SketchModePanel, ConstraintPanel\n- ThemeManager (Light/Dark, 885 LOC)\n- Qt signal/slot connections (Queued for cross-thread)\n- Parent ownership for memory management\n- DimensionEditor inline editing\nPropertyInspector exists but is not wired into the app yet.\nEnsure proper OpenGL context setup (must happen before QApplication)."
+
+    // Qt UI work
+    "visual-engineering": {
+      "prompt_append": "Qt6 UI specialist:\n- MainWindow (2047 LOC), Viewport (3146 LOC)\n- ModelNavigator, ContextToolbar, panels\n- ThemeManager (Light/Dark)\n- Qt signal/slot (QueuedConnection for cross-thread)\n- Parent ownership for QObject lifetimes"
     },
+
+    // Performance profiling
     "perf-profiling": {
-      "model": "github-copilot/claude-sonnet-4.5",
+      "model": "github-copilot/gpt-5-mini",
       "temperature": 0.1,
-      "prompt_append": "You are the performance specialist for OneCAD. Focus on:\n- Frame-time stability in Viewport render loop\n- Avoid per-frame allocations in SketchRenderer/BodyRenderer\n- TessellationCache reuse and mesh upload batching\n- Solver hot paths (PlaneGCS integration points)\n- Qt signal/slot churn during interactive tools\nPrefer profiling hypotheses backed by evidence."
+      "prompt_append": "OneCAD perf:\n- Viewport render loop frame-time\n- Avoid per-frame allocations\n- TessellationCache reuse\n- Solver hot paths\n- Evidence-based profiling"
     },
+
+    // Build/CMake
     "build-cmake": {
-      "model": "github-copilot/claude-sonnet-4.5",
+      "model": "github-copilot/gpt-5-mini",
       "temperature": 0.2,
-      "prompt_append": "You are the build/CI specialist for OneCAD. Focus on:\n- CMake 3.25+ with C++20 enforcement\n- Qt6 setup (AUTOMOC, AUTORCC, AUTOUIC)\n- OCCT and Eigen3 dependency discovery\n- Ninja generator for fast builds\n- compile_commands.json for clangd\n- Prototype test targets in tests/CMakeLists.txt\n- macOS bundle configuration"
+      "prompt_append": "CMake specialist:\n- CMake 3.25+ C++20\n- Qt6 AUTOMOC/AUTORCC/AUTOUIC\n- OCCT and Eigen3 detection\n- Ninja generator + compile_commands.json\n- macOS bundle configuration"
     },
+
+    // Tests
     "tests": {
-      "model": "github-copilot/claude-sonnet-4.5",
+      "model": "github-copilot/gpt-5-mini",
       "temperature": 0.2,
-      "prompt_append": "You are the testing specialist for OneCAD. Focus on:\n- Prototype executables (no ctest yet)\n- Sketch engine validation: proto_sketch_geometry, proto_sketch_constraints, proto_sketch_solver\n- Loop/face validation: proto_loop_detector, proto_face_builder\n- ElementMap validation: proto_elementmap_rigorous (REQUIRED for kernel changes)\n- UI compile check: test_compile\nAdd regression coverage for geometry operations. Keep tests deterministic."
+      "prompt_append": "Test specialist:\n- Prototype executables (no ctest framework yet)\n- proto_elementmap_rigorous - REQUIRED for kernel changes\n- proto_sketch_geometry, proto_sketch_constraints, proto_sketch_solver\n- proto_loop_detector, proto_face_builder\n- proto_regeneration (10.8KB - extensive)"
+    },
+
+    // Quick fixes (inherit global)
+    "quick": {
+      "prompt_append": "OneCAD quick fix. Keep minimal, verify with clangd."
     }
   }
 }
