@@ -1,0 +1,35 @@
+---
+description: Sketch engine patterns – entities, tools, constraints, solver, snap, coordinate system. Apply when editing src/core/sketch.
+globs: ["src/core/sketch/**"]
+alwaysApply: false
+---
+
+# Sketch Layer Rules
+
+When editing under `src/core/sketch/`:
+
+## Entities & IDs
+
+- EntityID = `std::string` (UUID). All entities: Point, Line, Arc, Circle, Ellipse – non-copyable, movable.
+- Base: `SketchEntity`, tools in `tools/`, constraints in `constraints/`, solver in `solver/`.
+
+## Coordinate system (critical)
+
+- Sketch X → World Y+ (0,1,0), Sketch Y → World X- (-1,0,0), Normal → World Z+ (0,0,1). See `SketchPlane::XY()` in `Sketch.h`.
+
+## Tools
+
+- Each tool extends `SketchTool`; manager: `SketchToolManager`. Lifecycle: `handleMousePress`, `handleMouseMove`, `handleMouseRelease`, `handleDoubleClick`; implement `cancel()` and preview in `render(SketchRenderer&)`.
+- Snap: use `SnapManager`; radius 2mm (sketch coords). Always check `snapped` before using position. Priority: Vertex > Endpoint > Midpoint > Center > Quadrant > Intersection > Grid.
+- AutoConstrainer: ±5° for Horizontal/Vertical, 2mm for coincidence. Returns ghost constraints (50% opacity); apply on commit.
+
+## Constraints
+
+- Types in `SketchTypes.h`. Implement `SketchConstraint` (or `DimensionalConstraint`) with `type()`, `referencedEntities()`, `degreesRemoved()`, `isSatisfied()`, `getError()`, serialize/deserialize.
+- Solver: PlaneGCS adapter in `solver/`; direct parameter binding to entity coordinates. Phase 2 integration pending.
+
+## Patterns
+
+- Prevent degenerate geometry (e.g. min length). Use `getSnappedPos()` and existing point IDs when snapping. After creating entities, call auto-constrain inference and apply inferred constraints.
+
+Reference: [.cursor/skills/sketch-tool/SKILL.md](.cursor/skills/sketch-tool/SKILL.md), [.cursor/skills/constraint/SKILL.md](.cursor/skills/constraint/SKILL.md).

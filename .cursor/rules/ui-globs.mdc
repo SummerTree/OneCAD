@@ -1,0 +1,26 @@
+---
+description: Qt6 widgets UI – MainWindow, Viewport, panels, signals/slots, ThemeManager. Apply when editing src/ui.
+globs: ["src/ui/**"]
+alwaysApply: false
+---
+
+# UI Layer Rules
+
+When editing under `src/ui/`:
+
+## Structure
+
+- MainWindow, Viewport (OpenGL + sketch interaction), ModelNavigator, ContextToolbar, SketchModePanel, ConstraintPanel, DimensionEditor, ViewCube, ThemeManager. PropertyInspector exists but is not wired.
+
+## Qt patterns
+
+- Parent ownership: `new QWidget(parent)` or `new QWidget(this)` so parent owns lifetime. No raw `new` without parent.
+- Signals: same thread use default (Direct); cross-thread use `Qt::QueuedConnection`.
+
+## Panels
+
+- Typical: Q_OBJECT, signals, private slots, `setupUI()`. ThemeManager: connect to `themeChanged`, update colors from `ThemeManager::instance().isDarkMode()`.
+
+## References
+
+- ContextToolbar: connects sketch tools. Viewport: plane overlay, ViewCube, inline DimensionEditor. See [.cursor/skills/qt-widget/SKILL.md](.cursor/skills/qt-widget/SKILL.md).

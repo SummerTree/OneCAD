@@ -1,0 +1,26 @@
+---
+description: Kernel and OCCT safety – Handle null checks, ElementMap, topological naming. Apply when editing src/kernel or OCCT code.
+globs: ["src/kernel/**", "**/elementmap/**"]
+alwaysApply: false
+---
+
+# Kernel & OCCT Rules
+
+When editing kernel or OCCT-touching code:
+
+## Handle<> safety (mandatory)
+
+- Every `Handle<>` must be checked before use: `if (handle.IsNull()) { handle error; return; }`.
+- Check `BRep_Tool::Surface(face)`, `BRep_Tool::Curve(edge)` for null. Check builder `IsDone()` before `Shape()`.
+- Common crash points: BRep_Tool results, TopExp_Explorer iteration, BRepAlgoAPI_* results.
+
+## ElementMap
+
+- Topological naming; descriptor hashing is regression-sensitive. Do not change descriptor field order or hash function without migration notes and golden test update.
+- Run `cmake --build build --target proto_elementmap_rigorous && ./build/tests/proto_elementmap_rigorous` before committing kernel changes.
+
+## Ownership & shapes
+
+- Track Modified/Generated/Deleted; call `update()` with operation name. No raw `new` without parent/owner; prefer `unique_ptr` for single-owner shapes.
+
+Reference: [.cursor/skills/occt-safe/SKILL.md](.cursor/skills/occt-safe/SKILL.md), [.cursor/skills/review-kernel/SKILL.md](.cursor/skills/review-kernel/SKILL.md).

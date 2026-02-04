@@ -1,0 +1,28 @@
+---
+description: OneCAD testing – prototype executables, which proto to run for which change, how to add a new prototype. Use when running or adding tests.
+globs: []
+alwaysApply: false
+---
+
+# Testing Rules
+
+No ctest; use prototype executables. All from repo root via `cmake --build build --target <name>` then `./build/tests/<name>`.
+
+## When to run which
+
+- **Kernel / ElementMap changes**: run `proto_elementmap_rigorous` (required before commit).
+- **Sketch entities**: `proto_sketch_geometry`.
+- **Constraints**: `proto_sketch_constraints`.
+- **Solver**: `proto_sketch_solver`.
+- **Loop / region**: `proto_loop_detector`, `proto_face_builder`.
+- **Full pipeline**: `proto_regeneration`.
+- **UI compile**: `test_compile`.
+
+## Add new prototype
+
+1. Add `tests/prototypes/proto_<name>.cpp`.
+2. In `tests/CMakeLists.txt`: `add_executable(proto_<name> ...)`, `target_link_libraries(proto_<name> PRIVATE onecad_core)`, `target_include_directories(...)`.
+
+Use tolerance helpers (e.g. `approx()`), `BRepCheck_Analyzer` for shape validity, `constraint.isSatisfied(sketch, tol)` for constraints.
+
+Reference: [.cursor/skills/proto-test/SKILL.md](.cursor/skills/proto-test/SKILL.md).

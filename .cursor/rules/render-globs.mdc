@@ -1,0 +1,28 @@
+---
+description: OpenGL 4.1 Core and rendering – Camera3D, Grid3D, SketchRenderer, bind/unbind pairs. Apply when editing src/render or viewport GL.
+globs: ["src/render/**", "src/ui/viewport/**"]
+alwaysApply: false
+---
+
+# Rendering Rules
+
+When editing render or viewport OpenGL code:
+
+## OpenGL 4.1 Core
+
+- No fixed-function pipeline. Always pair bind with unbind: VAO, VBO, shader program. Avoid state leaks.
+- Call `makeCurrent()` before GL operations. GL context is single-threaded.
+
+## Components
+
+- Camera3D: orbit/pan/zoom; view/projection matrices; scale-preserving ortho ↔ perspective.
+- Grid3D: fixed 10mm spacing, shader-based.
+- SketchRenderer: entities, constraints, dimensions, ghost feedback, preview helpers (`setPreviewLine`, `setPreviewCircle`, `clearPreview`, `showSnapIndicator`, `setGhostConstraints`).
+- BodyRenderer / SceneMeshStore: mesh upload and draw calls.
+
+## Patterns
+
+- Use `QOpenGLShaderProgram`: addShaderFromSourceCode, link(), bind(), release(). VAO/VBO: glGen*, glBind*, glVertexAttribPointer, glEnableVertexAttribArray; then unbind.
+- Depth and blending: enable/disable as needed; transparency: GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA.
+
+Reference: [.cursor/skills/render-gl/SKILL.md](.cursor/skills/render-gl/SKILL.md).

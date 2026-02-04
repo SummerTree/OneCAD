@@ -1,0 +1,41 @@
+---
+description: OneCAD project overview, build commands, and critical patterns. Apply to every session.
+globs: []
+alwaysApply: true
+---
+
+# OneCAD – Cursor Agent Context
+
+C++ CAD application. C++20. Qt6, OpenCASCADE (OCCT), Eigen3. Tested on macOS 14+ (Apple Silicon). Default Qt: `/opt/homebrew/opt/qt`.
+
+## Build & Run
+
+- `make init` – install deps (macOS/Homebrew) + configure CMake
+- `make run` – build + run app
+- `make test` – build + run prototype tests
+- Manual: `mkdir build && cd build && cmake .. -DCMAKE_PREFIX_PATH=/opt/homebrew/opt/qt && cmake --build .` then `./OneCAD`
+
+Qt override: `CMAKE_PREFIX_PATH=/path/to/qt cmake ..` or `-DCMAKE_PREFIX_PATH=...`. OCCT: set `OpenCASCADE_DIR` if not auto-detected.
+
+## Architecture (layers)
+
+- **UI** → `src/ui/` (MainWindow, Viewport, ContextToolbar, panels). Qt6 widgets.
+- **Render** → `src/render/` (Camera3D, Grid3D), `src/core/sketch/SketchRenderer` (OpenGL 4.1 Core).
+- **Core/Sketch** → `src/core/sketch/` (entities, tools, constraints, solver). EntityID = UUID string.
+- **Kernel** → `src/kernel/` (ElementMap, topological naming). OCCT wrappers.
+- **Tests** → `tests/` prototype executables; no ctest. Register in `tests/CMakeLists.txt`.
+
+## Critical patterns
+
+- **OCCT**: Always null-check `Handle<>` before use. Check `IsDone()` on builders before `Shape()`.
+- **Sketch coordinates**: Non-standard. Sketch X → World Y+; Sketch Y → World X-; Normal → Z+. See `SketchPlane::XY()` in `src/core/sketch/Sketch.h`.
+- **Qt**: Parent ownership for QObject; use `Qt::QueuedConnection` for cross-thread signals.
+- **Ownership**: Prefer `std::unique_ptr`; `std::shared_ptr` only when needed. Const correctness.
+- **ElementMap**: Descriptor/hash changes can remap IDs. Run `proto_elementmap_rigorous` after kernel changes.
+
+## Canonical docs
+
+- [CLAUDE.md](CLAUDE.md) – full build, architecture, code standards, troubleshooting.
+- [AGENTS.md](AGENTS.md) – repository snapshot, modules, testing, commit/PR guidelines.
+
+Reference these files instead of duplicating long content. Keep edits minimal and run build/tests after changes.
