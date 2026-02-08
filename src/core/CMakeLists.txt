@@ -10,6 +10,7 @@ add_library(onecad_core STATIC
     sketch/SketchConstraint.cpp
     sketch/SketchRenderer.cpp
     sketch/SnapManager.cpp
+    sketch/SpatialHashGrid.cpp
     sketch/IntersectionManager.cpp
     sketch/AutoConstrainer.cpp
     sketch/constraints/Constraints.cpp
@@ -61,6 +62,7 @@ set(SKETCH_HEADERS
     sketch/Sketch.h
     sketch/SketchRenderer.h
     sketch/SnapManager.h
+    sketch/SpatialHashGrid.h
     sketch/IntersectionManager.h
     sketch/AutoConstrainer.h
     sketch/constraints/Constraints.h

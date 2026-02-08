@@ -142,6 +142,67 @@ TestResult testPriorityOrder() {
     return expectSnap(result, SnapType::Vertex);
 }
 
+TestResult testSpatialHashEquivalentToBruteforce() {
+    Sketch sketch;
+    std::mt19937 rng(1337);
+    std::uniform_real_distribution<double> pointDist(-100.0, 100.0);
+    std::uniform_real_distribution<double> radiusDist(1.0, 12.0);
+
+    std::vector<EntityID> points;
+    points.reserve(80);
+    for (int i = 0; i < 80; ++i) {
+        points.push_back(sketch.addPoint(pointDist(rng), pointDist(rng), false));
+    }
+
+    for (int i = 0; i < 40; ++i) {
+        sketch.addLine(points[2 * i], points[2 * i + 1], false);
+    }
+
+    for (int i = 0; i < 12; ++i) {
+        sketch.addCircle(points[i], radiusDist(rng), false);
+    }
+
+    for (int i = 0; i < 8; ++i) {
+        const double start = 0.1 * static_cast<double>(i + 1);
+        const double end = start + 1.7;
+        sketch.addArc(points[12 + i], radiusDist(rng), start, end, false);
+    }
+
+    SnapManager fast;
+    fast.setSpatialHashEnabled(true);
+
+    SnapManager brute;
+    brute.setSpatialHashEnabled(false);
+
+    std::uniform_real_distribution<double> cursorDist(-110.0, 110.0);
+    for (int i = 0; i < 120; ++i) {
+        const Vec2d cursor{cursorDist(rng), cursorDist(rng)};
+        const SnapResult fastResult = fast.findBestSnap(cursor, sketch);
+        const SnapResult bruteResult = brute.findBestSnap(cursor, sketch);
+
+        if (fastResult.snapped != bruteResult.snapped) {
+            return {false, "equal snapped", "different snapped"};
+        }
+        if (!fastResult.snapped) {
+            continue;
+        }
+        if (fastResult.type != bruteResult.type) {
+            return {false,
+                    std::to_string(static_cast<int>(bruteResult.type)),
+                    std::to_string(static_cast<int>(fastResult.type))};
+        }
+        if (!approx(fastResult.position.x, bruteResult.position.x, 1e-5) ||
+            !approx(fastResult.position.y, bruteResult.position.y, 1e-5)) {
+            return {false,
+                    "equal position",
+                    "(" + std::to_string(fastResult.position.x) + "," + std::to_string(fastResult.position.y) +
+                        ") vs (" + std::to_string(bruteResult.position.x) + "," + std::to_string(bruteResult.position.y) + ")"};
+        }
+    }
+
+    return {true, "", ""};
+}
+
 bool shouldSkipInLegacy(const std::string& testName) {
     static const std::vector<std::string> blocked = {
         "perpendicular",
@@ -190,7 +251,10 @@ void runBenchmark() {
         p95Index = queryMicros.size() - 1;
     }
 
-    std::cout << "Benchmark: p95 query time " << queryMicros[p95Index] << " us" << std::endl;
+    const double p95Micros = queryMicros[p95Index];
+    const double p95Millis = p95Micros / 1000.0;
+    std::cout << "Benchmark: p95 query time " << p95Micros << " us (" << p95Millis << " ms)" << std::endl;
+    std::cout << "Benchmark target (<2ms): " << (p95Millis < 2.0 ? "PASS" : "FAIL") << std::endl;
 }
 
 } // namespace
@@ -217,7 +281,8 @@ int main(int argc, char** argv) {
         {"test_intersection_snap", testIntersectionSnap},
         {"test_oncurve_snap", testOnCurveSnap},
         {"test_grid_snap", testGridSnap},
-        {"test_priority_order", testPriorityOrder}
+        {"test_priority_order", testPriorityOrder},
+        {"test_spatial_hash_equivalent_to_bruteforce", testSpatialHashEquivalentToBruteforce}
     };
 
     int passed = 0;

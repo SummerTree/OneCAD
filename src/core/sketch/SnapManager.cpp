@@ -69,6 +69,10 @@ SnapResult SnapManager::findBestSnap(
         return SnapResult{};
     }
 
+    if (spatialHashEnabled_) {
+        rebuildSpatialHash(sketch);
+    }
+
     auto snaps = findAllSnaps(cursorPos, sketch, excludeEntities);
     if (snaps.empty()) {
         return SnapResult{};
@@ -88,30 +92,39 @@ std::vector<SnapResult> SnapManager::findAllSnaps(
         return {};
     }
 
+    std::unordered_set<EntityID> candidateSet;
+    const std::unordered_set<EntityID>* candidateFilter = nullptr;
+    if (spatialHashEnabled_) {
+        rebuildSpatialHash(sketch);
+        const std::vector<EntityID> candidateIds = spatialHash_.query(cursorPos, snapRadius_);
+        candidateSet.insert(candidateIds.begin(), candidateIds.end());
+        candidateFilter = &candidateSet;
+    }
+
     std::vector<SnapResult> results;
     const double radiusSq = snapRadius_ * snapRadius_;
 
     // Find all snap types in priority order
     if (isSnapEnabled(SnapType::Vertex)) {
-        findVertexSnaps(cursorPos, sketch, excludeEntities, radiusSq, results);
+        findVertexSnaps(cursorPos, sketch, excludeEntities, candidateFilter, radiusSq, results);
     }
     if (isSnapEnabled(SnapType::Endpoint)) {
-        findEndpointSnaps(cursorPos, sketch, excludeEntities, radiusSq, results);
+        findEndpointSnaps(cursorPos, sketch, excludeEntities, candidateFilter, radiusSq, results);
     }
     if (isSnapEnabled(SnapType::Midpoint)) {
-        findMidpointSnaps(cursorPos, sketch, excludeEntities, radiusSq, results);
+        findMidpointSnaps(cursorPos, sketch, excludeEntities, candidateFilter, radiusSq, results);
     }
     if (isSnapEnabled(SnapType::Center)) {
-        findCenterSnaps(cursorPos, sketch, excludeEntities, radiusSq, results);
+        findCenterSnaps(cursorPos, sketch, excludeEntities, candidateFilter, radiusSq, results);
     }
     if (isSnapEnabled(SnapType::Quadrant)) {
-        findQuadrantSnaps(cursorPos, sketch, excludeEntities, radiusSq, results);
+        findQuadrantSnaps(cursorPos, sketch, excludeEntities, candidateFilter, radiusSq, results);
     }
     if (isSnapEnabled(SnapType::Intersection)) {
-        findIntersectionSnaps(cursorPos, sketch, excludeEntities, radiusSq, results);
+        findIntersectionSnaps(cursorPos, sketch, excludeEntities, candidateFilter, radiusSq, results);
     }
     if (isSnapEnabled(SnapType::OnCurve)) {
-        findOnCurveSnaps(cursorPos, sketch, excludeEntities, radiusSq, results);
+        findOnCurveSnaps(cursorPos, sketch, excludeEntities, candidateFilter, radiusSq, results);
     }
     if (gridSnapEnabled_ && isSnapEnabled(SnapType::Grid)) {
         findGridSnaps(cursorPos, radiusSq, results);
@@ -123,16 +136,37 @@ std::vector<SnapResult> SnapManager::findAllSnaps(
     return results;
 }
 
+void SnapManager::rebuildSpatialHash(const Sketch& sketch) const {
+    const size_t entityCount = sketch.getEntityCount();
+    if (entityCount == lastEntityCount_) {
+        return;
+    }
+
+    spatialHash_.rebuild(sketch);
+    lastEntityCount_ = entityCount;
+}
+
+bool SnapManager::shouldConsiderEntity(const EntityID& entityId,
+                                       const std::unordered_set<EntityID>* candidateSet) const
+{
+    if (!candidateSet) {
+        return true;
+    }
+    return candidateSet->count(entityId) > 0;
+}
+
 // ========== Individual Snap Type Finders ==========
 
 void SnapManager::findVertexSnaps(
     const Vec2d& cursorPos,
     const Sketch& sketch,
     const std::unordered_set<EntityID>& excludeEntities,
+    const std::unordered_set<EntityID>* candidateSet,
     double radiusSq,
     std::vector<SnapResult>& results) const
 {
     for (const auto& entity : sketch.getAllEntities()) {
+        if (!shouldConsiderEntity(entity->id(), candidateSet)) continue;
         if (excludeEntities.count(entity->id())) continue;
         if (entity->type() != EntityType::Point) continue;
 
@@ -157,10 +191,12 @@ void SnapManager::findEndpointSnaps(
     const Vec2d& cursorPos,
     const Sketch& sketch,
     const std::unordered_set<EntityID>& excludeEntities,
+    const std::unordered_set<EntityID>* candidateSet,
     double radiusSq,
     std::vector<SnapResult>& results) const
 {
     for (const auto& entity : sketch.getAllEntities()) {
+        if (!shouldConsiderEntity(entity->id(), candidateSet)) continue;
         if (excludeEntities.count(entity->id())) continue;
 
         if (entity->type() == EntityType::Line) {
@@ -240,10 +276,12 @@ void SnapManager::findMidpointSnaps(
     const Vec2d& cursorPos,
     const Sketch& sketch,
     const std::unordered_set<EntityID>& excludeEntities,
+    const std::unordered_set<EntityID>* candidateSet,
     double radiusSq,
     std::vector<SnapResult>& results) const
 {
     for (const auto& entity : sketch.getAllEntities()) {
+        if (!shouldConsiderEntity(entity->id(), candidateSet)) continue;
         if (excludeEntities.count(entity->id())) continue;
 
         if (entity->type() == EntityType::Line) {
@@ -291,10 +329,12 @@ void SnapManager::findCenterSnaps(
     const Vec2d& cursorPos,
     const Sketch& sketch,
     const std::unordered_set<EntityID>& excludeEntities,
+    const std::unordered_set<EntityID>* candidateSet,
     double radiusSq,
     std::vector<SnapResult>& results) const
 {
     for (const auto& entity : sketch.getAllEntities()) {
+        if (!shouldConsiderEntity(entity->id(), candidateSet)) continue;
         if (excludeEntities.count(entity->id())) continue;
 
         const SketchPoint* centerPt = nullptr;
@@ -330,6 +370,7 @@ void SnapManager::findQuadrantSnaps(
     const Vec2d& cursorPos,
     const Sketch& sketch,
     const std::unordered_set<EntityID>& excludeEntities,
+    const std::unordered_set<EntityID>* candidateSet,
     double radiusSq,
     std::vector<SnapResult>& results) const
 {
@@ -337,6 +378,7 @@ void SnapManager::findQuadrantSnaps(
     constexpr double quadrantAngles[4] = {0.0, PI / 2.0, PI, 3.0 * PI / 2.0};
 
     for (const auto& entity : sketch.getAllEntities()) {
+        if (!shouldConsiderEntity(entity->id(), candidateSet)) continue;
         if (excludeEntities.count(entity->id())) continue;
 
         if (entity->type() == EntityType::Circle) {
@@ -401,12 +443,14 @@ void SnapManager::findIntersectionSnaps(
     const Vec2d& cursorPos,
     const Sketch& sketch,
     const std::unordered_set<EntityID>& excludeEntities,
+    const std::unordered_set<EntityID>* candidateSet,
     double radiusSq,
     std::vector<SnapResult>& results) const
 {
     // Collect all non-excluded entities for intersection testing
     std::vector<const SketchEntity*> entities;
     for (const auto& entity : sketch.getAllEntities()) {
+        if (!shouldConsiderEntity(entity->id(), candidateSet)) continue;
         if (excludeEntities.count(entity->id())) continue;
         if (entity->type() == EntityType::Line ||
             entity->type() == EntityType::Arc ||
@@ -442,10 +486,12 @@ void SnapManager::findOnCurveSnaps(
     const Vec2d& cursorPos,
     const Sketch& sketch,
     const std::unordered_set<EntityID>& excludeEntities,
+    const std::unordered_set<EntityID>* candidateSet,
     double radiusSq,
     std::vector<SnapResult>& results) const
 {
     for (const auto& entity : sketch.getAllEntities()) {
+        if (!shouldConsiderEntity(entity->id(), candidateSet)) continue;
         if (excludeEntities.count(entity->id())) continue;
 
         Vec2d nearestPt;

@@ -11,6 +11,9 @@
 #define ONECAD_CORE_SKETCH_SNAP_MANAGER_H
 
 #include "SketchTypes.h"
+#include "SpatialHashGrid.h"
+#include <cstddef>
+#include <limits>
 #include <optional>
 #include <unordered_map>
 #include <unordered_set>
@@ -158,6 +161,9 @@ public:
     void setShowSnappingHints(bool show) { showSnappingHints_ = show; }
     bool showSnappingHints() const { return showSnappingHints_; }
 
+    void setSpatialHashEnabled(bool enabled) { spatialHashEnabled_ = enabled; }
+    bool isSpatialHashEnabled() const { return spatialHashEnabled_; }
+
     /**
      * @brief Find intersections between two entities (public for IntersectionManager)
      */
@@ -174,10 +180,18 @@ private:
 
     bool showGuidePoints_ = true;
     bool showSnappingHints_ = true;
+    bool spatialHashEnabled_ = true;
 
     // External geometry (projected 3D entities)
     std::vector<Vec2d> extPoints_;
     std::vector<std::pair<Vec2d, Vec2d>> extLines_;
+
+    mutable SpatialHashGrid spatialHash_;
+    mutable size_t lastEntityCount_ = std::numeric_limits<size_t>::max();
+
+    void rebuildSpatialHash(const Sketch& sketch) const;
+    bool shouldConsiderEntity(const EntityID& entityId,
+                              const std::unordered_set<EntityID>* candidateSet) const;
 
     // ========== Individual Snap Type Finders ==========
 
@@ -187,6 +201,7 @@ private:
     void findVertexSnaps(const Vec2d& cursorPos,
                          const Sketch& sketch,
                          const std::unordered_set<EntityID>& excludeEntities,
+                         const std::unordered_set<EntityID>* candidateSet,
                          double radiusSq,
                          std::vector<SnapResult>& results) const;
 
@@ -196,6 +211,7 @@ private:
     void findEndpointSnaps(const Vec2d& cursorPos,
                            const Sketch& sketch,
                            const std::unordered_set<EntityID>& excludeEntities,
+                           const std::unordered_set<EntityID>* candidateSet,
                            double radiusSq,
                            std::vector<SnapResult>& results) const;
 
@@ -205,6 +221,7 @@ private:
     void findMidpointSnaps(const Vec2d& cursorPos,
                            const Sketch& sketch,
                            const std::unordered_set<EntityID>& excludeEntities,
+                           const std::unordered_set<EntityID>* candidateSet,
                            double radiusSq,
                            std::vector<SnapResult>& results) const;
 
@@ -214,6 +231,7 @@ private:
     void findCenterSnaps(const Vec2d& cursorPos,
                          const Sketch& sketch,
                          const std::unordered_set<EntityID>& excludeEntities,
+                         const std::unordered_set<EntityID>* candidateSet,
                          double radiusSq,
                          std::vector<SnapResult>& results) const;
 
@@ -223,6 +241,7 @@ private:
     void findQuadrantSnaps(const Vec2d& cursorPos,
                            const Sketch& sketch,
                            const std::unordered_set<EntityID>& excludeEntities,
+                           const std::unordered_set<EntityID>* candidateSet,
                            double radiusSq,
                            std::vector<SnapResult>& results) const;
 
@@ -232,6 +251,7 @@ private:
     void findIntersectionSnaps(const Vec2d& cursorPos,
                                const Sketch& sketch,
                                const std::unordered_set<EntityID>& excludeEntities,
+                               const std::unordered_set<EntityID>* candidateSet,
                                double radiusSq,
                                std::vector<SnapResult>& results) const;
 
@@ -241,6 +261,7 @@ private:
     void findOnCurveSnaps(const Vec2d& cursorPos,
                           const Sketch& sketch,
                           const std::unordered_set<EntityID>& excludeEntities,
+                          const std::unordered_set<EntityID>* candidateSet,
                           double radiusSq,
                           std::vector<SnapResult>& results) const;
 
