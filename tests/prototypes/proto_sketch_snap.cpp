@@ -315,6 +315,53 @@ TestResult testTangentSnapArc() {
     return {true, "", ""};
 }
 
+TestResult testHorizontalAlignmentSnap() {
+    Sketch sketch;
+    sketch.addPoint(5.0, 5.0);
+
+    SnapManager manager = createSnapManagerFor({SnapType::Horizontal});
+    SnapResult result = manager.findBestSnap({15.0, 5.5}, sketch);
+    TestResult check = expectSnap(result, SnapType::Horizontal);
+    if (!check.pass) {
+        return check;
+    }
+    if (!approx(result.position.x, 15.0, 1e-6) || !approx(result.position.y, 5.0, 1e-6)) {
+        return {false,
+                "(15,5)",
+                "(" + std::to_string(result.position.x) + "," + std::to_string(result.position.y) + ")"};
+    }
+    if (!result.hasGuide) {
+        return {false, "hasGuide=true", "hasGuide=false"};
+    }
+    if (!approx(result.guideOrigin.x, 5.0, 1e-6) || !approx(result.guideOrigin.y, 5.0, 1e-6)) {
+        return {false,
+                "guideOrigin=(5,5)",
+                "(" + std::to_string(result.guideOrigin.x) + "," + std::to_string(result.guideOrigin.y) + ")"};
+    }
+    return {true, "", ""};
+}
+
+TestResult testVerticalAlignmentSnap() {
+    Sketch sketch;
+    sketch.addPoint(5.0, 5.0);
+
+    SnapManager manager = createSnapManagerFor({SnapType::Vertical});
+    SnapResult result = manager.findBestSnap({5.5, 15.0}, sketch);
+    TestResult check = expectSnap(result, SnapType::Vertical);
+    if (!check.pass) {
+        return check;
+    }
+    if (!approx(result.position.x, 5.0, 1e-6) || !approx(result.position.y, 15.0, 1e-6)) {
+        return {false,
+                "(5,15)",
+                "(" + std::to_string(result.position.x) + "," + std::to_string(result.position.y) + ")"};
+    }
+    if (!result.hasGuide) {
+        return {false, "hasGuide=true", "hasGuide=false"};
+    }
+    return {true, "", ""};
+}
+
 TestResult testPriorityOrder() {
     Sketch sketch = createTestSketch();
     SnapManager manager = createSnapManagerFor({SnapType::Vertex, SnapType::Endpoint});
@@ -470,6 +517,8 @@ int main(int argc, char** argv) {
         {"test_perpendicular_snap_arc", testPerpendicularSnapArc},
         {"test_tangent_snap_circle", testTangentSnapCircle},
         {"test_tangent_snap_arc", testTangentSnapArc},
+        {"test_horizontal_alignment_snap", testHorizontalAlignmentSnap},
+        {"test_vertical_alignment_snap", testVerticalAlignmentSnap},
         {"test_priority_order", testPriorityOrder},
         {"test_spatial_hash_equivalent_to_bruteforce", testSpatialHashEquivalentToBruteforce}
     };

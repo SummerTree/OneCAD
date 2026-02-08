@@ -137,6 +137,12 @@ std::vector<SnapResult> SnapManager::findAllSnaps(
     if (isSnapEnabled(SnapType::Tangent)) {
         findTangentSnaps(cursorPos, sketch, excludeEntities, radiusSq, results);
     }
+    if (isSnapEnabled(SnapType::Horizontal)) {
+        findHorizontalSnaps(cursorPos, sketch, excludeEntities, results);
+    }
+    if (isSnapEnabled(SnapType::Vertical)) {
+        findVerticalSnaps(cursorPos, sketch, excludeEntities, results);
+    }
     if (isSnapEnabled(SnapType::ActiveLayer3D)) {
         findExternalSnaps(cursorPos, radiusSq, results);
     }
@@ -855,6 +861,254 @@ void SnapManager::findTangentSnaps(
                 .distance = std::sqrt(bestDistSq)
             });
         }
+    }
+}
+
+void SnapManager::findHorizontalSnaps(
+    const Vec2d& cursorPos,
+    const Sketch& sketch,
+    const std::unordered_set<EntityID>& excludeEntities,
+    std::vector<SnapResult>& results) const
+{
+    struct CandidatePoint {
+        Vec2d position;
+        EntityID entityId;
+        EntityID pointId;
+    };
+
+    std::vector<CandidatePoint> points;
+    points.reserve(sketch.getEntityCount() * 2);
+
+    for (const auto& entity : sketch.getAllEntities()) {
+        if (excludeEntities.count(entity->id())) continue;
+
+        if (entity->type() == EntityType::Point) {
+            const auto* point = static_cast<const SketchPoint*>(entity.get());
+            points.push_back({
+                .position = toVec2d(point->position()),
+                .entityId = entity->id(),
+                .pointId = entity->id()
+            });
+        }
+        else if (entity->type() == EntityType::Line) {
+            const auto* line = static_cast<const SketchLine*>(entity.get());
+            const auto* startPt = sketch.getEntityAs<SketchPoint>(line->startPointId());
+            const auto* endPt = sketch.getEntityAs<SketchPoint>(line->endPointId());
+            if (!startPt || !endPt) continue;
+
+            if (!excludeEntities.count(line->startPointId())) {
+                points.push_back({
+                    .position = toVec2d(startPt->position()),
+                    .entityId = entity->id(),
+                    .pointId = line->startPointId()
+                });
+            }
+            if (!excludeEntities.count(line->endPointId())) {
+                points.push_back({
+                    .position = toVec2d(endPt->position()),
+                    .entityId = entity->id(),
+                    .pointId = line->endPointId()
+                });
+            }
+
+            points.push_back({
+                .position = {
+                    (startPt->position().X() + endPt->position().X()) * 0.5,
+                    (startPt->position().Y() + endPt->position().Y()) * 0.5
+                },
+                .entityId = entity->id(),
+                .pointId = {}
+            });
+        }
+        else if (entity->type() == EntityType::Circle) {
+            const auto* circle = static_cast<const SketchCircle*>(entity.get());
+            if (excludeEntities.count(circle->centerPointId())) continue;
+            const auto* centerPt = sketch.getEntityAs<SketchPoint>(circle->centerPointId());
+            if (!centerPt) continue;
+
+            points.push_back({
+                .position = toVec2d(centerPt->position()),
+                .entityId = entity->id(),
+                .pointId = circle->centerPointId()
+            });
+        }
+        else if (entity->type() == EntityType::Arc) {
+            const auto* arc = static_cast<const SketchArc*>(entity.get());
+            if (excludeEntities.count(arc->centerPointId())) continue;
+            const auto* centerPt = sketch.getEntityAs<SketchPoint>(arc->centerPointId());
+            if (!centerPt) continue;
+
+            points.push_back({
+                .position = toVec2d(centerPt->position()),
+                .entityId = entity->id(),
+                .pointId = arc->centerPointId()
+            });
+        }
+        else if (entity->type() == EntityType::Ellipse) {
+            const auto* ellipse = static_cast<const SketchEllipse*>(entity.get());
+            if (excludeEntities.count(ellipse->centerPointId())) continue;
+            const auto* centerPt = sketch.getEntityAs<SketchPoint>(ellipse->centerPointId());
+            if (!centerPt) continue;
+
+            points.push_back({
+                .position = toVec2d(centerPt->position()),
+                .entityId = entity->id(),
+                .pointId = ellipse->centerPointId()
+            });
+        }
+    }
+
+    double bestDeltaY = std::numeric_limits<double>::max();
+    SnapResult best;
+    bool found = false;
+
+    for (const auto& point : points) {
+        const double deltaY = std::abs(cursorPos.y - point.position.y);
+        if (deltaY >= snapRadius_ || deltaY >= bestDeltaY) {
+            continue;
+        }
+
+        bestDeltaY = deltaY;
+        best = SnapResult{
+            .snapped = true,
+            .type = SnapType::Horizontal,
+            .position = {cursorPos.x, point.position.y},
+            .entityId = point.entityId,
+            .pointId = point.pointId,
+            .distance = deltaY,
+            .guideOrigin = point.position,
+            .hasGuide = true,
+            .hintText = "H"
+        };
+        found = true;
+    }
+
+    if (found) {
+        results.push_back(best);
+    }
+}
+
+void SnapManager::findVerticalSnaps(
+    const Vec2d& cursorPos,
+    const Sketch& sketch,
+    const std::unordered_set<EntityID>& excludeEntities,
+    std::vector<SnapResult>& results) const
+{
+    struct CandidatePoint {
+        Vec2d position;
+        EntityID entityId;
+        EntityID pointId;
+    };
+
+    std::vector<CandidatePoint> points;
+    points.reserve(sketch.getEntityCount() * 2);
+
+    for (const auto& entity : sketch.getAllEntities()) {
+        if (excludeEntities.count(entity->id())) continue;
+
+        if (entity->type() == EntityType::Point) {
+            const auto* point = static_cast<const SketchPoint*>(entity.get());
+            points.push_back({
+                .position = toVec2d(point->position()),
+                .entityId = entity->id(),
+                .pointId = entity->id()
+            });
+        }
+        else if (entity->type() == EntityType::Line) {
+            const auto* line = static_cast<const SketchLine*>(entity.get());
+            const auto* startPt = sketch.getEntityAs<SketchPoint>(line->startPointId());
+            const auto* endPt = sketch.getEntityAs<SketchPoint>(line->endPointId());
+            if (!startPt || !endPt) continue;
+
+            if (!excludeEntities.count(line->startPointId())) {
+                points.push_back({
+                    .position = toVec2d(startPt->position()),
+                    .entityId = entity->id(),
+                    .pointId = line->startPointId()
+                });
+            }
+            if (!excludeEntities.count(line->endPointId())) {
+                points.push_back({
+                    .position = toVec2d(endPt->position()),
+                    .entityId = entity->id(),
+                    .pointId = line->endPointId()
+                });
+            }
+
+            points.push_back({
+                .position = {
+                    (startPt->position().X() + endPt->position().X()) * 0.5,
+                    (startPt->position().Y() + endPt->position().Y()) * 0.5
+                },
+                .entityId = entity->id(),
+                .pointId = {}
+            });
+        }
+        else if (entity->type() == EntityType::Circle) {
+            const auto* circle = static_cast<const SketchCircle*>(entity.get());
+            if (excludeEntities.count(circle->centerPointId())) continue;
+            const auto* centerPt = sketch.getEntityAs<SketchPoint>(circle->centerPointId());
+            if (!centerPt) continue;
+
+            points.push_back({
+                .position = toVec2d(centerPt->position()),
+                .entityId = entity->id(),
+                .pointId = circle->centerPointId()
+            });
+        }
+        else if (entity->type() == EntityType::Arc) {
+            const auto* arc = static_cast<const SketchArc*>(entity.get());
+            if (excludeEntities.count(arc->centerPointId())) continue;
+            const auto* centerPt = sketch.getEntityAs<SketchPoint>(arc->centerPointId());
+            if (!centerPt) continue;
+
+            points.push_back({
+                .position = toVec2d(centerPt->position()),
+                .entityId = entity->id(),
+                .pointId = arc->centerPointId()
+            });
+        }
+        else if (entity->type() == EntityType::Ellipse) {
+            const auto* ellipse = static_cast<const SketchEllipse*>(entity.get());
+            if (excludeEntities.count(ellipse->centerPointId())) continue;
+            const auto* centerPt = sketch.getEntityAs<SketchPoint>(ellipse->centerPointId());
+            if (!centerPt) continue;
+
+            points.push_back({
+                .position = toVec2d(centerPt->position()),
+                .entityId = entity->id(),
+                .pointId = ellipse->centerPointId()
+            });
+        }
+    }
+
+    double bestDeltaX = std::numeric_limits<double>::max();
+    SnapResult best;
+    bool found = false;
+
+    for (const auto& point : points) {
+        const double deltaX = std::abs(cursorPos.x - point.position.x);
+        if (deltaX >= snapRadius_ || deltaX >= bestDeltaX) {
+            continue;
+        }
+
+        bestDeltaX = deltaX;
+        best = SnapResult{
+            .snapped = true,
+            .type = SnapType::Vertical,
+            .position = {point.position.x, cursorPos.y},
+            .entityId = point.entityId,
+            .pointId = point.pointId,
+            .distance = deltaX,
+            .guideOrigin = point.position,
+            .hasGuide = true,
+            .hintText = "V"
+        };
+        found = true;
+    }
+
+    if (found) {
+        results.push_back(best);
     }
 }
 

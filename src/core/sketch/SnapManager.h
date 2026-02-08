@@ -15,6 +15,7 @@
 #include <cstddef>
 #include <limits>
 #include <optional>
+#include <string>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
@@ -62,6 +63,9 @@ struct SnapResult {
     EntityID secondEntityId;    // Second entity (for intersections)
     EntityID pointId;           // Existing point entity (if snap maps to a point)
     double distance = 0.0;      // Distance from cursor to snap point
+    Vec2d guideOrigin{0.0, 0.0};  // Reference point for guide line rendering
+    bool hasGuide = false;        // Whether to render a guide line
+    std::string hintText;         // Snap type label for rendering ("H", "V", etc.)
 
     /**
      * @brief Comparison for priority sorting
@@ -289,6 +293,22 @@ private:
                           const std::unordered_set<EntityID>& excludeEntities,
                           double radiusSq,
                           std::vector<SnapResult>& results) const;
+
+    /**
+     * @brief Find horizontal alignment inference snaps
+     */
+    void findHorizontalSnaps(const Vec2d& cursorPos,
+                             const Sketch& sketch,
+                             const std::unordered_set<EntityID>& excludeEntities,
+                             std::vector<SnapResult>& results) const;
+
+    /**
+     * @brief Find vertical alignment inference snaps
+     */
+    void findVerticalSnaps(const Vec2d& cursorPos,
+                           const Sketch& sketch,
+                           const std::unordered_set<EntityID>& excludeEntities,
+                           std::vector<SnapResult>& results) const;
 
     /**
      * @brief Find snap to external geometry (3D)
