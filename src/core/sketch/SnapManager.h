@@ -105,7 +105,8 @@ public:
      */
     SnapResult findBestSnap(const Vec2d& cursorPos,
                             const Sketch& sketch,
-                            const std::unordered_set<EntityID>& excludeEntities = {}) const;
+                            const std::unordered_set<EntityID>& excludeEntities = {},
+                            std::optional<Vec2d> referencePoint = std::nullopt) const;
 
     /**
      * @brief Set external 3D geometry for snapping
@@ -120,7 +121,8 @@ public:
      */
     std::vector<SnapResult> findAllSnaps(const Vec2d& cursorPos,
                                           const Sketch& sketch,
-                                          const std::unordered_set<EntityID>& excludeEntities = {}) const;
+                                          const std::unordered_set<EntityID>& excludeEntities = {},
+                                          std::optional<Vec2d> referencePoint = std::nullopt) const;
 
     // ========== Configuration ==========
 
@@ -318,6 +320,14 @@ private:
                         const std::unordered_set<EntityID>& excludeEntities,
                         double radiusSq,
                         std::vector<SnapResult>& results) const;
+
+    /**
+     * @brief Find angular (polar tracking) guide snaps at 15deg increments
+     */
+    void findAngularSnap(const Vec2d& cursorPos,
+                         const Vec2d& referencePoint,
+                         double radiusSq,
+                         std::vector<SnapResult>& results) const;
 
     /**
      * @brief Find snap to external geometry (3D)

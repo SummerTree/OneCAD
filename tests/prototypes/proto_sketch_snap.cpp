@@ -401,6 +401,84 @@ TestResult testExtensionSnapNoArc() {
     return {true, "", ""};
 }
 
+TestResult testAngularSnap15degRounding() {
+    Sketch sketch;
+    SnapManager manager = createSnapManagerFor({SnapType::SketchGuide});
+
+    const double dist = 10.0;
+    const double angleRad = 22.0 * M_PI / 180.0;
+    const Vec2d cursor{dist * std::cos(angleRad), dist * std::sin(angleRad)};
+
+    SnapResult result = manager.findBestSnap(cursor, sketch, {}, Vec2d{0.0, 0.0});
+    TestResult check = expectSnap(result, SnapType::SketchGuide);
+    if (!check.pass) {
+        return check;
+    }
+
+    const double expectedAngleRad = 15.0 * M_PI / 180.0;
+    const Vec2d expected{dist * std::cos(expectedAngleRad), dist * std::sin(expectedAngleRad)};
+    if (!approx(result.position.x, expected.x, 1e-6) || !approx(result.position.y, expected.y, 1e-6)) {
+        return {false,
+                "snapped to 15deg",
+                "(" + std::to_string(result.position.x) + "," + std::to_string(result.position.y) + ")"};
+    }
+    if (!result.hasGuide) {
+        return {false, "hasGuide=true", "hasGuide=false"};
+    }
+    if (!approx(result.guideOrigin.x, 0.0, 1e-6) || !approx(result.guideOrigin.y, 0.0, 1e-6)) {
+        return {false,
+                "guideOrigin=(0,0)",
+                "(" + std::to_string(result.guideOrigin.x) + "," + std::to_string(result.guideOrigin.y) + ")"};
+    }
+    if (result.hintText != "15\xC2\xB0") {
+        return {false, "15deg", result.hintText};
+    }
+
+    return {true, "", ""};
+}
+
+TestResult testAngularSnap45degExact() {
+    Sketch sketch;
+    SnapManager manager = createSnapManagerFor({SnapType::SketchGuide});
+
+    const double dist = 10.0;
+    const double angleRad = 45.0 * M_PI / 180.0;
+    const Vec2d cursor{dist * std::cos(angleRad), dist * std::sin(angleRad)};
+
+    SnapResult result = manager.findBestSnap(cursor, sketch, {}, Vec2d{0.0, 0.0});
+    TestResult check = expectSnap(result, SnapType::SketchGuide);
+    if (!check.pass) {
+        return check;
+    }
+    if (!approx(result.position.x, cursor.x, 1e-6) || !approx(result.position.y, cursor.y, 1e-6)) {
+        return {false,
+                "unchanged 45deg point",
+                "(" + std::to_string(result.position.x) + "," + std::to_string(result.position.y) + ")"};
+    }
+    if (result.hintText != "45\xC2\xB0") {
+        return {false, "45deg", result.hintText};
+    }
+
+    return {true, "", ""};
+}
+
+TestResult testAngularSnapNoReference() {
+    Sketch sketch;
+    sketch.addLine(0.0, 0.0, 10.0, 0.0);
+
+    SnapManager manager = createSnapManagerFor({SnapType::SketchGuide});
+
+    const double dist = 10.0;
+    const double angleRad = 22.0 * M_PI / 180.0;
+    const Vec2d cursor{dist * std::cos(angleRad), dist * std::sin(angleRad)};
+
+    SnapResult result = manager.findBestSnap(cursor, sketch);
+    if (result.snapped && result.type == SnapType::SketchGuide) {
+        return {false, "no angular SketchGuide without reference", "SketchGuide snapped"};
+    }
+    return {true, "", ""};
+}
+
 TestResult testPriorityOrder() {
     Sketch sketch = createTestSketch();
     SnapManager manager = createSnapManagerFor({SnapType::Vertex, SnapType::Endpoint});
@@ -561,6 +639,9 @@ int main(int argc, char** argv) {
         {"test_vertical_alignment_snap", testVerticalAlignmentSnap},
         {"test_extension_snap_line", testExtensionSnapLine},
         {"test_extension_snap_no_arc", testExtensionSnapNoArc},
+        {"test_angular_snap_15deg_rounding", testAngularSnap15degRounding},
+        {"test_angular_snap_45deg_exact", testAngularSnap45degExact},
+        {"test_angular_snap_no_reference", testAngularSnapNoReference},
         {"test_priority_order", testPriorityOrder},
         {"test_spatial_hash_equivalent_to_bruteforce", testSpatialHashEquivalentToBruteforce}
     };

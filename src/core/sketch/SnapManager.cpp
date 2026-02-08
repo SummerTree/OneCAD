@@ -65,7 +65,8 @@ void SnapManager::setExternalGeometry(const std::vector<Vec2d>& points,
 SnapResult SnapManager::findBestSnap(
     const Vec2d& cursorPos,
     const Sketch& sketch,
-    const std::unordered_set<EntityID>& excludeEntities) const
+    const std::unordered_set<EntityID>& excludeEntities,
+    std::optional<Vec2d> referencePoint) const
 {
     if (!enabled_) {
         return SnapResult{};
@@ -75,7 +76,7 @@ SnapResult SnapManager::findBestSnap(
         rebuildSpatialHash(sketch);
     }
 
-    auto snaps = findAllSnaps(cursorPos, sketch, excludeEntities);
+    auto snaps = findAllSnaps(cursorPos, sketch, excludeEntities, referencePoint);
     if (snaps.empty()) {
         return SnapResult{};
     }
@@ -88,7 +89,8 @@ SnapResult SnapManager::findBestSnap(
 std::vector<SnapResult> SnapManager::findAllSnaps(
     const Vec2d& cursorPos,
     const Sketch& sketch,
-    const std::unordered_set<EntityID>& excludeEntities) const
+    const std::unordered_set<EntityID>& excludeEntities,
+    std::optional<Vec2d> referencePoint) const
 {
     if (!enabled_) {
         return {};
@@ -145,6 +147,9 @@ std::vector<SnapResult> SnapManager::findAllSnaps(
     }
     if (isSnapEnabled(SnapType::SketchGuide)) {
         findGuideSnaps(cursorPos, sketch, excludeEntities, radiusSq, results);
+        if (referencePoint.has_value()) {
+            findAngularSnap(cursorPos, referencePoint.value(), radiusSq, results);
+        }
     }
     if (isSnapEnabled(SnapType::ActiveLayer3D)) {
         findExternalSnaps(cursorPos, radiusSq, results);
@@ -1162,6 +1167,50 @@ void SnapManager::findGuideSnaps(
             .hintText = "EXT"
         });
     }
+}
+
+void SnapManager::findAngularSnap(
+    const Vec2d& cursorPos,
+    const Vec2d& referencePoint,
+    double radiusSq,
+    std::vector<SnapResult>& results) const
+{
+    const double dx = cursorPos.x - referencePoint.x;
+    const double dy = cursorPos.y - referencePoint.y;
+    const double dist = std::sqrt(dx * dx + dy * dy);
+    if (dist < 1e-9) {
+        return;
+    }
+
+    const double theta = std::atan2(dy, dx);
+    constexpr double increment = PI / 12.0;
+    const double thetaSnapped = theta - std::remainder(theta, increment);
+
+    const Vec2d snappedPos{
+        referencePoint.x + dist * std::cos(thetaSnapped),
+        referencePoint.y + dist * std::sin(thetaSnapped)
+    };
+
+    const double dSq = distanceSquared(cursorPos, snappedPos);
+    if (dSq > radiusSq) {
+        return;
+    }
+
+    double angleDeg = thetaSnapped * 180.0 / PI;
+    if (angleDeg < 0.0) {
+        angleDeg += 360.0;
+    }
+    const int angleInt = static_cast<int>(std::round(angleDeg));
+
+    results.push_back({
+        .snapped = true,
+        .type = SnapType::SketchGuide,
+        .position = snappedPos,
+        .distance = std::sqrt(dSq),
+        .guideOrigin = referencePoint,
+        .hasGuide = true,
+        .hintText = std::to_string(angleInt) + "\xC2\xB0"
+    });
 }
 
 // ========== Geometry Helpers ==========
