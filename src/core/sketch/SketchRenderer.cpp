@@ -1002,8 +1002,8 @@ void SketchRendererImpl::buildVBOs(
     }
 
     if (snapActive) {
-        const double guideDash = 1.5 * std::max(pixelScale, 1e-9);
-        const double guideGap = 3.0 * std::max(pixelScale, 1e-9);
+        const double guideDash = 8.0 * std::max(pixelScale, 1e-9);
+        const double guideGap = 6.0 * std::max(pixelScale, 1e-9);
         const Vec2d vpMin = viewport.getMin();
         const Vec2d vpMax = viewport.getMax();
         const double viewportDiag = std::hypot(vpMax.x - vpMin.x, vpMax.y - vpMin.y);
@@ -1102,19 +1102,51 @@ void SketchRendererImpl::buildVBOs(
             }
         }
 
-        if (snapType == SnapType::Intersection && snapHasGuide) {
-            const Vec3d crossColor = pointSnap
-                ? guideColor
-                : Vec3d{kGuideColor.x * 0.65, kGuideColor.y * 0.65, kGuideColor.z * 0.65};
-            const double crossHalf = 2.0 * std::max(pixelScale, 1e-9);
+        // Crosshair at active guide intersections
+        const Vec3d crossColor = pointSnap
+            ? guideColor
+            : Vec3d{kGuideColor.x * 0.65, kGuideColor.y * 0.65, kGuideColor.z * 0.65};
+        const double crossHalf = 5.0 * std::max(pixelScale, 1e-9);
+
+        if (activeGuides.size() >= 2) {
+            auto guideIntersection = [](const Vec2d& p1, const Vec2d& p2,
+                                         const Vec2d& p3, const Vec2d& p4) -> std::optional<Vec2d> {
+                const double d1x = p2.x - p1.x;
+                const double d1y = p2.y - p1.y;
+                const double d2x = p4.x - p3.x;
+                const double d2y = p4.y - p3.y;
+                const double cross = d1x * d2y - d1y * d2x;
+                if (std::abs(cross) < 1e-12) return std::nullopt;  // parallel
+                const double dx = p3.x - p1.x;
+                const double dy = p3.y - p1.y;
+                const double t = (dx * d2y - dy * d2x) / cross;
+                return Vec2d{p1.x + t * d1x, p1.y + t * d1y};
+            };
+
+            for (size_t i = 0; i < activeGuides.size(); ++i) {
+                for (size_t j = i + 1; j < activeGuides.size(); ++j) {
+                    auto ix = guideIntersection(
+                        activeGuides[i].origin, activeGuides[i].target,
+                        activeGuides[j].origin, activeGuides[j].target);
+                    if (!ix.has_value()) continue;
+                    // Check within viewport
+                    if (ix->x < vpMin.x || ix->x > vpMax.x ||
+                        ix->y < vpMin.y || ix->y > vpMax.y) continue;
+                    appendSegment(guideLineData,
+                                  {ix->x - crossHalf, ix->y},
+                                  {ix->x + crossHalf, ix->y}, crossColor);
+                    appendSegment(guideLineData,
+                                  {ix->x, ix->y - crossHalf},
+                                  {ix->x, ix->y + crossHalf}, crossColor);
+                }
+            }
+        } else if (snapType == SnapType::Intersection && snapHasGuide) {
             appendSegment(guideLineData,
                           {snapPos.x - crossHalf, snapPos.y},
-                          {snapPos.x + crossHalf, snapPos.y},
-                          crossColor);
+                          {snapPos.x + crossHalf, snapPos.y}, crossColor);
             appendSegment(guideLineData,
                           {snapPos.x, snapPos.y - crossHalf},
-                          {snapPos.x, snapPos.y + crossHalf},
-                          crossColor);
+                          {snapPos.x, snapPos.y + crossHalf}, crossColor);
         }
 
         pointData.push_back(static_cast<float>(snapPos.x));
