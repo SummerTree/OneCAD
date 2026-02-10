@@ -635,6 +635,7 @@ public:
                    const std::vector<ConstraintRenderData>& constraints,
                    const std::vector<InferredConstraint>& ghosts,
                    bool snapActive,
+                   SnapType snapType,
                    const Vec2d& snapPos,
                    float snapSize,
                    const Vec3d& snapColor,
@@ -847,6 +848,7 @@ void SketchRendererImpl::buildVBOs(
     const std::vector<ConstraintRenderData>& constraints,
     const std::vector<InferredConstraint>& ghosts,
     bool snapActive,
+    SnapType snapType,
     const Vec2d& snapPos,
     float snapSize,
     const Vec3d& snapColor,
@@ -1000,13 +1002,28 @@ void SketchRendererImpl::buildVBOs(
     }
 
     if (snapActive) {
-        const double guideDash = 2.0 * std::max(pixelScale, 1e-9);
-        const double guideGap = 2.0 * std::max(pixelScale, 1e-9);
+        const double guideDash = 1.5 * std::max(pixelScale, 1e-9);
+        const double guideGap = 3.0 * std::max(pixelScale, 1e-9);
         const Vec2d vpMin = viewport.getMin();
         const Vec2d vpMax = viewport.getMax();
+        const double viewportDiag = std::hypot(vpMax.x - vpMin.x, vpMax.y - vpMin.y);
+        const double pointGuideMaxLength = 0.35 * viewportDiag;
 
-        auto clipGuideToViewport = [&](const Vec2d& origin, const Vec2d& target,
-                                       Vec2d& farStart, Vec2d& farEnd) {
+        constexpr Vec3d kGuideColor{0.58, 0.45, 0.78};
+        constexpr Vec3d kGuideColorFaint{0.17, 0.14, 0.23};
+        const bool pointSnap = (snapType == SnapType::Vertex || snapType == SnapType::Endpoint);
+        const double pointGuideZoomFade = std::clamp(
+            1.0 / std::sqrt(std::max(pixelScale, 1e-9) * 12.0),
+            0.45,
+            1.0);
+        const Vec3d guideColor = pointSnap
+            ? Vec3d{kGuideColorFaint.x * pointGuideZoomFade,
+                    kGuideColorFaint.y * pointGuideZoomFade,
+                    kGuideColorFaint.z * pointGuideZoomFade}
+            : kGuideColor;
+
+        auto clipGuideRayToViewport = [&](const Vec2d& origin, const Vec2d& target,
+                                          Vec2d& farStart, Vec2d& farEnd) {
             const double dx = target.x - origin.x;
             const double dy = target.y - origin.y;
             const double len = std::sqrt(dx * dx + dy * dy);
@@ -1039,13 +1056,28 @@ void SketchRendererImpl::buildVBOs(
                 return false;
             }
 
-            if (tMin >= tMax) {
+            const double rayStartT = std::max(0.0, tMin);
+            if (rayStartT >= tMax) {
                 return false;
             }
 
-            farStart = {origin.x + tMin * ndx, origin.y + tMin * ndy};
+            farStart = {origin.x + rayStartT * ndx, origin.y + rayStartT * ndy};
             farEnd = {origin.x + tMax * ndx, origin.y + tMax * ndy};
             return true;
+        };
+
+        auto clampGuideLength = [&](Vec2d& start, Vec2d& end) {
+            if (!pointSnap || pointGuideMaxLength <= 1e-9) {
+                return;
+            }
+            const double dx = end.x - start.x;
+            const double dy = end.y - start.y;
+            const double len = std::sqrt((dx * dx) + (dy * dy));
+            if (len <= pointGuideMaxLength || len <= 1e-9) {
+                return;
+            }
+            const double scale = pointGuideMaxLength / len;
+            end = {start.x + dx * scale, start.y + dy * scale};
         };
 
         if (!activeGuides.empty()) {
@@ -1054,18 +1086,35 @@ void SketchRendererImpl::buildVBOs(
                 if (count >= 4) break;
                 Vec2d farStart;
                 Vec2d farEnd;
-                if (!clipGuideToViewport(guide.origin, guide.target, farStart, farEnd)) continue;
-                appendDashedPolyline(guideLineData, {farStart, farEnd}, {0.9, 0.5, 0.1},
+                if (!clipGuideRayToViewport(guide.origin, guide.target, farStart, farEnd)) continue;
+                clampGuideLength(farStart, farEnd);
+                appendDashedPolyline(guideLineData, {farStart, farEnd}, guideColor,
                                      guideDash, guideGap);
                 count++;
             }
         } else if (snapHasGuide) {
             Vec2d farStart;
             Vec2d farEnd;
-            if (clipGuideToViewport(snapGuideOrigin, snapPos, farStart, farEnd)) {
-                appendDashedPolyline(guideLineData, {farStart, farEnd}, {0.9, 0.5, 0.1}, guideDash,
+            if (clipGuideRayToViewport(snapGuideOrigin, snapPos, farStart, farEnd)) {
+                clampGuideLength(farStart, farEnd);
+                appendDashedPolyline(guideLineData, {farStart, farEnd}, guideColor, guideDash,
                                      guideGap);
             }
+        }
+
+        if (snapType == SnapType::Intersection && snapHasGuide) {
+            const Vec3d crossColor = pointSnap
+                ? guideColor
+                : Vec3d{kGuideColor.x * 0.65, kGuideColor.y * 0.65, kGuideColor.z * 0.65};
+            const double crossHalf = 2.0 * std::max(pixelScale, 1e-9);
+            appendSegment(guideLineData,
+                          {snapPos.x - crossHalf, snapPos.y},
+                          {snapPos.x + crossHalf, snapPos.y},
+                          crossColor);
+            appendSegment(guideLineData,
+                          {snapPos.x, snapPos.y - crossHalf},
+                          {snapPos.x, snapPos.y + crossHalf},
+                          crossColor);
         }
 
         pointData.push_back(static_cast<float>(snapPos.x));
@@ -2053,6 +2102,7 @@ void SketchRenderer::buildVBOs() {
     }
 
     bool snapActive = snapIndicator_.active;
+    SnapType snapType = snapIndicator_.type;
     Vec2d snapPos = snapIndicator_.position;
     float snapSize = renderStyle.snapPointSize;
     Vec3d snapColor = snapActive ? snapColorForType(snapIndicator_.type)
@@ -2062,7 +2112,7 @@ void SketchRenderer::buildVBOs() {
     impl_->buildVBOs(entityRenderData_, regionRenderData_, renderStyle, entitySelections_,
                      selectedRegions_, hoverRegion_, hoverEntity_,
                      viewport_, pixelScale_, constraintRenderData_,
-                     ghostConstraints_, snapActive, snapPos, snapSize, snapColor,
+                     ghostConstraints_, snapActive, snapType, snapPos, snapSize, snapColor,
                      snapGuideOrigin, snapHasGuide, activeGuides_);
     vboDirty_ = false;
 }
