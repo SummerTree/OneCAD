@@ -8,6 +8,7 @@
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QJsonParseError>
+#include <QLoggingCategory>
 #include <QString>
 
 #include <algorithm>
@@ -16,6 +17,8 @@
 #include <utility>
 
 namespace onecad::core::sketch {
+
+Q_LOGGING_CATEGORY(logSketchEngine, "onecad.core.sketch")
 
 Sketch::Sketch(const SketchPlane& plane)
     : plane_(plane) {
@@ -28,6 +31,7 @@ Sketch::Sketch(Sketch&& other) noexcept = default;
 Sketch& Sketch::operator=(Sketch&& other) noexcept = default;
 
 EntityID Sketch::addPoint(double x, double y, bool construction) {
+    qCDebug(logSketchEngine) << "addPoint" << x << y << "construction=" << construction;
     auto point = std::make_unique<SketchPoint>(x, y);
     point->setConstruction(construction);
 
@@ -36,13 +40,21 @@ EntityID Sketch::addPoint(double x, double y, bool construction) {
     entities_.push_back(std::move(point));
 
     invalidateSolver();
+    qCDebug(logSketchEngine) << "addPoint:done"
+                             << "id=" << QString::fromStdString(id)
+                             << "totalEntities=" << entities_.size();
     return id;
 }
 
 EntityID Sketch::addLine(EntityID startId, EntityID endId, bool construction) {
+    qCDebug(logSketchEngine) << "addLine"
+                             << "startId=" << QString::fromStdString(startId)
+                             << "endId=" << QString::fromStdString(endId)
+                             << "construction=" << construction;
     auto* startPoint = getEntityAs<SketchPoint>(startId);
     auto* endPoint = getEntityAs<SketchPoint>(endId);
     if (!startPoint || !endPoint) {
+        qCWarning(logSketchEngine) << "addLine:missing-endpoints";
         return {};
     }
 
@@ -445,11 +457,18 @@ std::vector<SketchEntity*> Sketch::getEntitiesByType(EntityType type) {
 
 ConstraintID Sketch::addConstraint(std::unique_ptr<SketchConstraint> constraint) {
     if (!constraint) {
+        qCWarning(logSketchEngine) << "addConstraint:null";
         return {};
     }
 
+    qCDebug(logSketchEngine) << "addConstraint:start"
+                             << "type=" << static_cast<int>(constraint->type())
+                             << "id=" << QString::fromStdString(constraint->id());
+
     for (const auto& entityId : constraint->referencedEntities()) {
         if (entityId.empty() || !getEntity(entityId)) {
+            qCWarning(logSketchEngine) << "addConstraint:invalid-reference"
+                                      << QString::fromStdString(entityId);
             return {};
         }
     }
@@ -459,6 +478,9 @@ ConstraintID Sketch::addConstraint(std::unique_ptr<SketchConstraint> constraint)
     constraints_.push_back(std::move(constraint));
 
     invalidateSolver();
+    qCDebug(logSketchEngine) << "addConstraint:done"
+                             << "id=" << QString::fromStdString(id)
+                             << "totalConstraints=" << constraints_.size();
     return id;
 }
 
@@ -692,8 +714,10 @@ CurvePosition Sketch::detectArcPosition(EntityID pointId, EntityID arcId) const 
 }
 
 bool Sketch::removeConstraint(ConstraintID id) {
+    qCDebug(logSketchEngine) << "removeConstraint" << QString::fromStdString(id);
     auto it = constraintIndex_.find(id);
     if (it == constraintIndex_.end()) {
+        qCWarning(logSketchEngine) << "removeConstraint:not-found" << QString::fromStdString(id);
         return false;
     }
 
@@ -1420,13 +1444,20 @@ std::vector<EntityID> Sketch::findInRect(const Vec2d& min, const Vec2d& max) con
 void Sketch::invalidateSolver() {
     solverDirty_ = true;
     dofDirty_ = true;
+    qCDebug(logSketchEngine) << "invalidateSolver"
+                             << "entityCount=" << entities_.size()
+                             << "constraintCount=" << constraints_.size();
 }
 
 void Sketch::rebuildSolver() {
+    qCDebug(logSketchEngine) << "rebuildSolver:start"
+                             << "entities=" << entities_.size()
+                             << "constraints=" << constraints_.size();
     solver_ = std::make_unique<ConstraintSolver>();
     SolverAdapter::populateSolver(*this, *solver_);
 
     solverDirty_ = false;
+    qCDebug(logSketchEngine) << "rebuildSolver:done";
 }
 
 void Sketch::rebuildEntityIndex() {
