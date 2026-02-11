@@ -38,8 +38,8 @@
 #include <QSizePolicy>
 #include <QVector2D>
 #include <QEasingCurve>
+#include <QLoggingCategory>
 #include <QtMath>
-#include <QDebug>
 #include <algorithm>
 #include <array>
 #include <cmath>
@@ -56,6 +56,8 @@
 
 namespace onecad {
 namespace ui {
+
+Q_LOGGING_CATEGORY(logViewport, "onecad.ui.viewport")
 
 namespace sketch = core::sketch;
 namespace sketchTools = core::sketch::tools;
@@ -505,11 +507,12 @@ Viewport::~Viewport() {
 void Viewport::initializeGL() {
     initializeOpenGLFunctions();
     
-    // Debug: Print OpenGL info
+    // Log OpenGL runtime info once at initialization.
     const char* version = reinterpret_cast<const char*>(glGetString(GL_VERSION));
     const char* renderer = reinterpret_cast<const char*>(glGetString(GL_RENDERER));
-    qDebug() << "OpenGL Version:" << (version ? version : "unknown");
-    qDebug() << "OpenGL Renderer:" << (renderer ? renderer : "unknown");
+    qCInfo(logViewport) << "initializeGL:opengl"
+                        << "version=" << (version ? version : "unknown")
+                        << "renderer=" << (renderer ? renderer : "unknown");
     
     // Background color set via updateTheme
     glClearColor(m_backgroundColor.redF(), m_backgroundColor.greenF(), m_backgroundColor.blueF(), m_backgroundColor.alphaF());
@@ -530,7 +533,7 @@ void Viewport::initializeGL() {
     // Create and initialize sketch renderer (requires OpenGL context)
     m_sketchRenderer = std::make_unique<sketch::SketchRenderer>();
     if (!m_sketchRenderer->initialize()) {
-        qWarning() << "Failed to initialize SketchRenderer";
+        qCWarning(logViewport) << "initializeGL:failed-to-initialize-sketch-renderer";
     }
     updateTheme();
 }
@@ -1441,6 +1444,8 @@ void Viewport::mouseMoveEvent(QMouseEvent* event) {
                     }
                 }
                 if (regionContainsLockedReference) {
+                    qCWarning(logViewport) << "mouseMoveEvent:region-move-blocked-by-locked-reference"
+                                           << "regionId=" << QString::fromStdString(m_regionMoveCandidateId);
                     emit statusMessageRequested(tr("Reference geometry is locked"));
                     m_sketchInteractionState = SketchInteractionState::Idle;
                     m_regionMoveCandidateId.clear();
@@ -1458,6 +1463,8 @@ void Viewport::mouseMoveEvent(QMouseEvent* event) {
             int distSq = delta.x() * delta.x() + delta.y() * delta.y();
             if (distSq >= kPointDragThresholdPixels * kPointDragThresholdPixels) {
                 if (m_activeSketch->isEntityReferenceLocked(m_pointDragCandidateId)) {
+                    qCWarning(logViewport) << "mouseMoveEvent:point-drag-blocked-by-locked-reference"
+                                           << "entityId=" << QString::fromStdString(m_pointDragCandidateId);
                     emit statusMessageRequested(tr("Reference geometry is locked"));
                     m_sketchInteractionState = SketchInteractionState::Idle;
                     m_pointDragCandidateId.clear();
@@ -1978,9 +1985,11 @@ void Viewport::animateCamera(const CameraState& targetState) {
         float finalScale = (m_camera->projectionType() == render::Camera3D::ProjectionType::Perspective)
             ? 2.0f * finalDist * qTan(qDegreesToRadians(m_camera->fov() * 0.5f))
             : m_camera->orthoScale();
-        qDebug() << "[AnimationFinished] angle=" << m_camera->cameraAngle()
-                 << "distance=" << finalDist << "visualScale=" << finalScale
-                 << "expected=" << targetState.orthoScale;
+        qCDebug(logViewport) << "animateCamera:finished"
+                             << "angle=" << m_camera->cameraAngle()
+                             << "distance=" << finalDist
+                             << "visualScale=" << finalScale
+                             << "expectedScale=" << targetState.orthoScale;
 
         update();
         emit cameraChanged();
@@ -2042,11 +2051,14 @@ void Viewport::enterSketchMode(sketch::Sketch* sketch) {
     if (m_camera->projectionType() == render::Camera3D::ProjectionType::Perspective) {
         float halfFovRad = qDegreesToRadians(m_camera->fov() * 0.5f);
         currentVisualScale = 2.0f * currentDist * qTan(halfFovRad);
-        qDebug() << "[EnterSketch] Perspective→Ortho: dist=" << currentDist
-                 << "FOV=" << m_camera->fov() << "visualScale=" << currentVisualScale;
+        qCDebug(logViewport) << "enterSketchMode:perspective-to-ortho"
+                             << "distance=" << currentDist
+                             << "fov=" << m_camera->fov()
+                             << "visualScale=" << currentVisualScale;
     } else {
         currentVisualScale = m_camera->orthoScale();
-        qDebug() << "[EnterSketch] Ortho→Ortho: preserving orthoScale=" << currentVisualScale;
+        qCDebug(logViewport) << "enterSketchMode:ortho-to-ortho"
+                             << "orthoScale=" << currentVisualScale;
     }
 
     // Align camera to sketch plane and switch to orthographic
@@ -2148,7 +2160,8 @@ void Viewport::exitSketchMode() {
     if (m_savedCameraAngle < 0.01f) {
         // Ortho → Ortho: just preserve current ortho scale (no projection change)
         savedState.orthoScale = m_camera->orthoScale();
-        qDebug() << "[ExitSketch] Ortho→Ortho: preserving orthoScale=" << savedState.orthoScale;
+        qCDebug(logViewport) << "exitSketchMode:ortho-to-ortho"
+                             << "orthoScale=" << savedState.orthoScale;
     } else {
         // Ortho → Perspective: calculate ortho scale that produces correct distance
         // Formula: when setCameraAngle switches to perspective, it computes:
@@ -2157,8 +2170,10 @@ void Viewport::exitSketchMode() {
         float savedDistance = (m_savedCameraPosition - m_savedCameraTarget).length();
         float halfFovRad = qDegreesToRadians(m_savedCameraAngle * 0.5f);
         savedState.orthoScale = 2.0f * savedDistance * qTan(halfFovRad);
-        qDebug() << "[ExitSketch] Ortho→Perspective: savedDist=" << savedDistance
-                 << "savedFOV=" << m_savedCameraAngle << "requiredOrthoScale=" << savedState.orthoScale;
+        qCDebug(logViewport) << "exitSketchMode:ortho-to-perspective"
+                             << "savedDistance=" << savedDistance
+                             << "savedFov=" << m_savedCameraAngle
+                             << "requiredOrthoScale=" << savedState.orthoScale;
     }
 
     animateCamera(savedState);
@@ -2328,27 +2343,32 @@ void Viewport::keyPressEvent(QKeyEvent* event) {
     switch (event->key()) {
     case Qt::Key_F1:
         setDebugToggles(!m_debugNormals, false, m_wireframeOnly, m_disableGamma, m_useMatcap);
-        qDebug() << "Debug normals:" << (m_debugNormals ? "ON" : "OFF");
+        qCDebug(logViewport) << "keyPressEvent:debug-normals"
+                             << (m_debugNormals ? "ON" : "OFF");
         event->accept();
         return;
     case Qt::Key_F2:
         setDebugToggles(false, !m_debugDepth, m_wireframeOnly, m_disableGamma, m_useMatcap);
-        qDebug() << "Debug depth:" << (m_debugDepth ? "ON" : "OFF");
+        qCDebug(logViewport) << "keyPressEvent:debug-depth"
+                             << (m_debugDepth ? "ON" : "OFF");
         event->accept();
         return;
     case Qt::Key_F3:
         setDebugToggles(m_debugNormals, m_debugDepth, !m_wireframeOnly, m_disableGamma, m_useMatcap);
-        qDebug() << "Wireframe only:" << (m_wireframeOnly ? "ON" : "OFF");
+        qCDebug(logViewport) << "keyPressEvent:wireframe-only"
+                             << (m_wireframeOnly ? "ON" : "OFF");
         event->accept();
         return;
     case Qt::Key_F4:
         setDebugToggles(m_debugNormals, m_debugDepth, m_wireframeOnly, !m_disableGamma, m_useMatcap);
-        qDebug() << "Gamma correction:" << (m_disableGamma ? "DISABLED" : "ENABLED");
+        qCDebug(logViewport) << "keyPressEvent:gamma-correction"
+                             << (m_disableGamma ? "DISABLED" : "ENABLED");
         event->accept();
         return;
     case Qt::Key_F5:
         setDebugToggles(m_debugNormals, m_debugDepth, m_wireframeOnly, m_disableGamma, !m_useMatcap);
-        qDebug() << "MatCap shading:" << (m_useMatcap ? "ON" : "OFF");
+        qCDebug(logViewport) << "keyPressEvent:matcap"
+                             << (m_useMatcap ? "ON" : "OFF");
         event->accept();
         return;
     default:
@@ -3489,9 +3509,13 @@ void Viewport::setReferenceSketch(const QString& sketchId) {
     bool sketchBackfilled = false;
     if (m_document && !id.empty()) {
         sketchBackfilled = m_document->ensureHostFaceBoundariesProjected(id);
+        qCDebug(logViewport) << "setReferenceSketch:ensure-host-boundaries"
+                             << "sketchId=" << sketchId
+                             << "backfilled=" << sketchBackfilled;
     }
 
     if (id == m_referenceSketchId && m_referenceSketch && !sketchBackfilled) {
+        qCDebug(logViewport) << "setReferenceSketch:no-op" << sketchId;
         return;
     }
     m_referenceSketchId = id;
@@ -3505,6 +3529,9 @@ void Viewport::setReferenceSketch(const QString& sketchId) {
     }
     m_documentSketchesDirty = true;
     updateModelSelectionFilter();
+    qCInfo(logViewport) << "setReferenceSketch:updated"
+                        << "sketchId=" << sketchId
+                        << "hasSketch=" << (m_referenceSketch != nullptr);
     update();
 }
 

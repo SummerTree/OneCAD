@@ -12,10 +12,13 @@
 #include <QJsonDocument>
 #include <QJsonArray>
 #include <QCryptographicHash>
+#include <QLoggingCategory>
 
 namespace onecad::io {
 
 using namespace app;
+
+Q_LOGGING_CATEGORY(logHistoryIO, "onecad.io.history")
 
 namespace {
 
@@ -92,6 +95,9 @@ BooleanMode stringToBooleanMode(const QString& str) {
 bool HistoryIO::saveHistory(Package* package,
                             const std::vector<OperationRecord>& operations,
                             const std::unordered_map<std::string, bool>& suppressionState) {
+    qCInfo(logHistoryIO) << "saveHistory:start"
+                         << "operationCount=" << operations.size()
+                         << "suppressionEntries=" << suppressionState.size();
     // Write ops.jsonl - one JSON object per line
     QByteArray opsData;
     for (const auto& op : operations) {
@@ -102,6 +108,7 @@ bool HistoryIO::saveHistory(Package* package,
     }
     
     if (!package->writeFile("history/ops.jsonl", opsData)) {
+        qCWarning(logHistoryIO) << "saveHistory:failed-write-ops";
         return false;
     }
     
@@ -121,16 +128,24 @@ bool HistoryIO::saveHistory(Package* package,
     }
     stateJson["suppressedOps"] = suppressedOps;
     
-    return package->writeFile("history/state.json", JSONUtils::toCanonicalJson(stateJson));
+    const bool wroteState = package->writeFile("history/state.json", JSONUtils::toCanonicalJson(stateJson));
+    if (!wroteState) {
+        qCWarning(logHistoryIO) << "saveHistory:failed-write-state";
+        return false;
+    }
+    qCInfo(logHistoryIO) << "saveHistory:done";
+    return true;
 }
 
 bool HistoryIO::loadHistory(Package* package,
                             Document* document,
                             QString& errorMessage) {
+    qCInfo(logHistoryIO) << "loadHistory:start";
     // Read ops.jsonl
     QByteArray opsData = package->readFile("history/ops.jsonl");
     if (opsData.isEmpty()) {
         // Not an error - new document may not have history
+        qCDebug(logHistoryIO) << "loadHistory:no-ops-file";
         return true;
     }
     
@@ -143,6 +158,8 @@ bool HistoryIO::loadHistory(Package* package,
         QJsonDocument doc = QJsonDocument::fromJson(line, &parseError);
         if (parseError.error != QJsonParseError::NoError) {
             errorMessage = QString("Invalid JSON in ops.jsonl: %1").arg(parseError.errorString());
+            qCWarning(logHistoryIO) << "loadHistory:invalid-ops-json"
+                                    << parseError.errorString();
             return false;
         }
         
@@ -164,9 +181,12 @@ bool HistoryIO::loadHistory(Package* package,
                 suppressionState[opVal.toString().toStdString()] = true;
             }
             document->setOperationSuppressionState(suppressionState);
+            qCDebug(logHistoryIO) << "loadHistory:suppression-state-loaded"
+                                  << "suppressedCount=" << suppressionState.size();
         }
     }
-    
+
+    qCInfo(logHistoryIO) << "loadHistory:done";
     return true;
 }
 
@@ -314,6 +334,8 @@ OperationRecord HistoryIO::deserializeOperation(const QJsonObject& json) {
         p.booleanMode = stringToBooleanMode(params["booleanMode"].toString());
         if (params.contains("targetBodyId")) {
             p.targetBodyId = params["targetBodyId"].toString().toStdString();
+            qCDebug(logHistoryIO) << "deserializeOperation:extrude-target-body"
+                                  << QString::fromStdString(p.targetBodyId);
         }
         op.params = p;
     }
@@ -323,6 +345,8 @@ OperationRecord HistoryIO::deserializeOperation(const QJsonObject& json) {
         p.booleanMode = stringToBooleanMode(params["booleanMode"].toString());
         if (params.contains("targetBodyId")) {
             p.targetBodyId = params["targetBodyId"].toString().toStdString();
+            qCDebug(logHistoryIO) << "deserializeOperation:revolve-target-body"
+                                  << QString::fromStdString(p.targetBodyId);
         }
 
         if (params.contains("axisSketchLine")) {
