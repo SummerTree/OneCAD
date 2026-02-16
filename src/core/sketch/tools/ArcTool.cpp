@@ -48,6 +48,16 @@ std::optional<Vec2d> ArcTool::getReferencePoint() const {
     return std::nullopt;
 }
 
+std::vector<Vec2d> ArcTool::getCommittedAnchorPoints() const {
+    if (state_ == State::FirstClick) {
+        return {startPoint_};
+    }
+    if (state_ == State::Drawing) {
+        return {startPoint_, middlePoint_};
+    }
+    return {};
+}
+
 void ArcTool::onMousePress(const Vec2d& pos, Qt::MouseButton button) {
     if (button == Qt::RightButton) {
         cancel();

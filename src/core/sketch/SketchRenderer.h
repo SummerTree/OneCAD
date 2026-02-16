@@ -79,11 +79,11 @@ struct SketchRenderStyle {
     float selectedLineWidth = 6.0f;
     float previewLineWidth = 2.5f;
 
-    // Point sizes (in pixels) – 2x bigger for visibility
-    float pointSize = 16.0f;
-    float selectedPointSize = 24.0f;
-    float snapPointSize = 16.0f;
-    float midpointPointSize = 10.0f;
+    // Point sizes (in pixels)
+    float pointSize = 8.0f;
+    float selectedPointSize = 12.0f;
+    float snapPointSize = 8.0f;
+    float midpointPointSize = 5.0f;
 
     // Constraint icon size (in pixels)
     float constraintIconSize = 16.0f;
@@ -416,6 +416,11 @@ public:
     const auto& getSnapIndicator() const { return snapIndicator_; }
 
     /**
+     * @brief Get committed anchor indicators state
+     */
+    const std::vector<Vec2d>& getAnchorIndicators() const { return anchorIndicators_; }
+
+    /**
      * @brief Clear preview dimensions
      */
     void clearPreviewDimensions();
@@ -442,6 +447,16 @@ public:
      * @brief Hide snap indicator
      */
     void hideSnapIndicator();
+
+    /**
+     * @brief Set committed anchor indicators for preview rendering
+     */
+    void setAnchorIndicators(const std::vector<Vec2d>& positions);
+
+    /**
+     * @brief Clear committed anchor indicators
+     */
+    void clearAnchorIndicators();
 
     /**
      * @brief Set ghost constraints for preview during drawing
@@ -542,6 +557,7 @@ private:
         bool hasGuide = false;
         std::string hintText;
     } snapIndicator_;
+    std::vector<Vec2d> anchorIndicators_;
 
     std::vector<GuideLineInfo> activeGuides_;
 

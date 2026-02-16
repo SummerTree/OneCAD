@@ -40,6 +40,7 @@ public:
     void render(SketchRenderer& renderer) override;
     std::string name() const override;
     std::optional<Vec2d> getReferencePoint() const override;
+    std::vector<Vec2d> getCommittedAnchorPoints() const override;
     PreviewDimensionApplyResult applyPreviewDimensionValue(const std::string& id,
                                                            double value) override;
 

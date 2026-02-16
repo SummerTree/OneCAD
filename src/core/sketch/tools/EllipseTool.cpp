@@ -18,6 +18,13 @@ std::optional<Vec2d> EllipseTool::getReferencePoint() const {
     return std::nullopt;
 }
 
+std::vector<Vec2d> EllipseTool::getCommittedAnchorPoints() const {
+    if (state_ == State::FirstClick || state_ == State::Drawing) {
+        return {centerPoint_};
+    }
+    return {};
+}
+
 void EllipseTool::onMousePress(const Vec2d& pos, Qt::MouseButton button) {
     if (button == Qt::RightButton) {
         cancel();

@@ -31,6 +31,13 @@ std::optional<Vec2d> LineTool::getReferencePoint() const {
     return std::nullopt;
 }
 
+std::vector<Vec2d> LineTool::getCommittedAnchorPoints() const {
+    if (state_ == State::FirstClick) {
+        return {startPoint_};
+    }
+    return {};
+}
+
 void LineTool::onMousePress(const Vec2d& pos, Qt::MouseButton button) {
     qCDebug(logLineTool) << "onMousePress" << "state=" << static_cast<int>(state_)
                          << "pos=" << pos.x << pos.y << "button=" << static_cast<int>(button)

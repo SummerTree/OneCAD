@@ -23,6 +23,13 @@ std::optional<Vec2d> CircleTool::getReferencePoint() const {
     return std::nullopt;
 }
 
+std::vector<Vec2d> CircleTool::getCommittedAnchorPoints() const {
+    if (state_ == State::FirstClick) {
+        return {centerPoint_};
+    }
+    return {};
+}
+
 void CircleTool::onMousePress(const Vec2d& pos, Qt::MouseButton button) {
     if (button == Qt::RightButton) {
         cancel();

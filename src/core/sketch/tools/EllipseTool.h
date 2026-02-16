@@ -33,6 +33,7 @@ public:
     void render(SketchRenderer& renderer) override;
     std::string name() const override { return "Ellipse"; }
     std::optional<Vec2d> getReferencePoint() const override;
+    std::vector<Vec2d> getCommittedAnchorPoints() const override;
 
     bool wasEllipseCreated() const { return ellipseCreated_; }
     void clearEllipseCreatedFlag() { ellipseCreated_ = false; }

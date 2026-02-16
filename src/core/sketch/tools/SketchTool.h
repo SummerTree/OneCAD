@@ -104,6 +104,11 @@ public:
     virtual std::optional<Vec2d> getReferencePoint() const { return std::nullopt; }
 
     /**
+     * @brief Get committed anchor points that should remain visible during preview.
+     */
+    virtual std::vector<Vec2d> getCommittedAnchorPoints() const { return {}; }
+
+    /**
      * @brief Set the sketch this tool operates on
      */
     void setSketch(Sketch* sketch) { sketch_ = sketch; }

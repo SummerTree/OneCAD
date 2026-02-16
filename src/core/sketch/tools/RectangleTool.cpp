@@ -24,6 +24,13 @@ std::optional<Vec2d> RectangleTool::getReferencePoint() const {
     return std::nullopt;
 }
 
+std::vector<Vec2d> RectangleTool::getCommittedAnchorPoints() const {
+    if (state_ == State::FirstClick) {
+        return {corner1_};
+    }
+    return {};
+}
+
 void RectangleTool::onMousePress(const Vec2d& pos, Qt::MouseButton button) {
     if (button == Qt::RightButton) {
         cancel();

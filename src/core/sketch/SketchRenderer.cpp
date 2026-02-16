@@ -641,6 +641,7 @@ public:
                    const Vec3d& snapColor,
                    const Vec2d& snapGuideOrigin,
                    bool snapHasGuide,
+                   const std::vector<Vec2d>& anchorIndicators,
                    const std::vector<SketchRenderer::GuideLineInfo>& activeGuides);
     void render(const QMatrix4x4& mvp, const SketchRenderStyle& style);
     void renderPoints(const QMatrix4x4& mvp);
@@ -854,6 +855,7 @@ void SketchRendererImpl::buildVBOs(
     const Vec3d& snapColor,
     const Vec2d& snapGuideOrigin,
     bool snapHasGuide,
+    const std::vector<Vec2d>& anchorIndicators,
     const std::vector<SketchRenderer::GuideLineInfo>& activeGuides) {
 
     // Region data: pos(2) + color(4) = 6 floats per vertex
@@ -1128,6 +1130,22 @@ void SketchRendererImpl::buildVBOs(
         pointData.push_back(static_cast<float>(snapColor.z));
         pointData.push_back(1.0f);
         pointData.push_back(snapSize);
+    }
+
+    const Vec3d anchorColor = snapColorForType(SnapType::None);
+    for (const auto& anchor : anchorIndicators) {
+        if (viewport.size.x > 0.0 && viewport.size.y > 0.0) {
+            if (!viewport.contains(anchor)) {
+                continue;
+            }
+        }
+        pointData.push_back(static_cast<float>(anchor.x));
+        pointData.push_back(static_cast<float>(anchor.y));
+        pointData.push_back(static_cast<float>(anchorColor.x));
+        pointData.push_back(static_cast<float>(anchorColor.y));
+        pointData.push_back(static_cast<float>(anchorColor.z));
+        pointData.push_back(1.0f);
+        pointData.push_back(style.snapPointSize);
     }
 
     // Upload region data
@@ -1900,6 +1918,19 @@ void SketchRenderer::hideSnapIndicator() {
     vboDirty_ = true;
 }
 
+void SketchRenderer::setAnchorIndicators(const std::vector<Vec2d>& positions) {
+    anchorIndicators_ = positions;
+    vboDirty_ = true;
+}
+
+void SketchRenderer::clearAnchorIndicators() {
+    if (anchorIndicators_.empty()) {
+        return;
+    }
+    anchorIndicators_.clear();
+    vboDirty_ = true;
+}
+
 void SketchRenderer::setGhostConstraints(const std::vector<InferredConstraint>& ghosts) {
     ghostConstraints_ = ghosts;
     vboDirty_ = true;
@@ -2159,7 +2190,7 @@ void SketchRenderer::buildVBOs() {
                      selectedRegions_, hoverRegion_, hoverEntity_,
                      viewport_, pixelScale_, visibleConstraints,
                      ghostConstraints_, snapActive, snapType, snapPos, snapSize, snapColor,
-                     snapGuideOrigin, snapHasGuide, activeGuides_);
+                     snapGuideOrigin, snapHasGuide, anchorIndicators_, activeGuides_);
     vboDirty_ = false;
 }
 

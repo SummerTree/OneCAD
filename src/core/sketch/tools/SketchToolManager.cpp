@@ -12,6 +12,7 @@
 #include <QLoggingCategory>
 #include <QString>
 #include <cmath>
+#include <algorithm>
 #include <vector>
 
 namespace onecad::core::sketch::tools {
@@ -99,6 +100,7 @@ void SketchToolManager::deactivateTool() {
     if (renderer_) {
         renderer_->clearPreview();
         renderer_->hideSnapIndicator();
+        renderer_->clearAnchorIndicators();
         renderer_->clearGhostConstraints();
     }
 
@@ -328,8 +330,13 @@ void SketchToolManager::renderPreview() {
         return;
     }
     if (!activeTool_) {
+        renderer_->hideSnapIndicator();
+        renderer_->clearAnchorIndicators();
         return;
     }
+
+    bool hasCurrentIndicator = false;
+    Vec2d currentIndicatorPos{0.0, 0.0};
 
     // Show snap indicator if snapped
     if (currentSnapResult_.snapped) {
@@ -345,18 +352,40 @@ void SketchToolManager::renderPreview() {
             currentSnapResult_.guideOrigin,
             showGuide,
             hintText);
+        hasCurrentIndicator = true;
+        currentIndicatorPos = currentSnapResult_.position;
     } else {
-        const auto anchor = activeTool_->isActive() ? activeTool_->getReferencePoint()
-                                                    : std::optional<Vec2d>{};
-        if (anchor.has_value()) {
-            // Preserve first-click anchors for multi-step tools.
-            renderer_->showSnapIndicator(anchor.value(), SnapType::None);
-        } else if (hasRawCursorSample_) {
+        if (hasRawCursorSample_) {
             // Keep unsnapped cursor feedback visible while sketch tool is active.
             renderer_->showSnapIndicator(rawCursorPos_, SnapType::None);
+            hasCurrentIndicator = true;
+            currentIndicatorPos = rawCursorPos_;
         } else {
             renderer_->hideSnapIndicator();
         }
+    }
+
+    std::vector<Vec2d> filteredAnchors;
+    if (activeTool_->isActive()) {
+        const std::vector<Vec2d> anchorCandidates = activeTool_->getCommittedAnchorPoints();
+        filteredAnchors.reserve(anchorCandidates.size());
+        for (const auto& candidate : anchorCandidates) {
+            if (hasCurrentIndicator && sameCursorSample(candidate, currentIndicatorPos)) {
+                continue;
+            }
+            const bool duplicate = std::any_of(
+                filteredAnchors.begin(),
+                filteredAnchors.end(),
+                [&](const Vec2d& existing) { return sameCursorSample(existing, candidate); });
+            if (!duplicate) {
+                filteredAnchors.push_back(candidate);
+            }
+        }
+    }
+    if (filteredAnchors.empty()) {
+        renderer_->clearAnchorIndicators();
+    } else {
+        renderer_->setAnchorIndicators(filteredAnchors);
     }
 
     // Show ghost constraints (inferred constraints during drawing)
