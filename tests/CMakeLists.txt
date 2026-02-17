@@ -53,6 +53,22 @@ target_link_libraries(proto_sketch_solver
     onecad_core
 )
 
+# Sketch Group Drag Regression Prototype
+add_executable(proto_sketch_group_drag prototypes/proto_sketch_group_drag.cpp)
+target_link_libraries(proto_sketch_group_drag
+    PRIVATE
+    onecad_core
+)
+target_include_directories(proto_sketch_group_drag PRIVATE ${CMAKE_SOURCE_DIR}/src)
+
+# Sketch Drag Undo Prototype
+add_executable(proto_sketch_drag_undo prototypes/proto_sketch_drag_undo.cpp)
+target_link_libraries(proto_sketch_drag_undo
+    PRIVATE
+    onecad_app
+)
+target_include_directories(proto_sketch_drag_undo PRIVATE ${CMAKE_SOURCE_DIR}/src)
+
 # PlaneGCS Integration Prototype
 add_executable(proto_planegcs_integration prototypes/proto_planegcs_integration.cpp)
 target_link_libraries(proto_planegcs_integration
@@ -114,6 +130,68 @@ target_link_libraries(proto_model_picker
     Qt6::Core
 )
 target_include_directories(proto_model_picker PRIVATE ${CMAKE_SOURCE_DIR}/src)
+
+# Viewport drag-state regression prototype
+add_executable(proto_viewport_drag_state prototypes/proto_viewport_drag_state.cpp)
+target_link_libraries(proto_viewport_drag_state
+    PRIVATE
+    onecad_ui
+    onecad_app
+    onecad_io
+    onecad_core
+    Qt6::Widgets
+    Qt6::Gui
+    Qt6::Core
+    Qt6::OpenGL
+    Qt6::OpenGLWidgets
+)
+target_include_directories(proto_viewport_drag_state PRIVATE ${CMAKE_SOURCE_DIR}/src)
+set_target_properties(proto_viewport_drag_state PROPERTIES
+    AUTOMOC OFF
+    AUTOUIC OFF
+    AUTORCC OFF
+)
+
+add_executable(proto_viewport_drag_guide_capture prototypes/proto_viewport_drag_guide_capture.cpp)
+target_link_libraries(proto_viewport_drag_guide_capture
+    PRIVATE
+    onecad_ui
+    onecad_app
+    onecad_io
+    onecad_core
+    Qt6::Widgets
+    Qt6::Gui
+    Qt6::Core
+    Qt6::OpenGL
+    Qt6::OpenGLWidgets
+)
+target_include_directories(proto_viewport_drag_guide_capture PRIVATE ${CMAKE_SOURCE_DIR}/src)
+set_target_properties(proto_viewport_drag_guide_capture PROPERTIES
+    AUTOMOC OFF
+    AUTOUIC OFF
+    AUTORCC OFF
+)
+
+# Viewport group drag feedback prototype
+add_executable(proto_viewport_group_drag_feedback prototypes/proto_viewport_group_drag_feedback.cpp)
+target_link_libraries(proto_viewport_group_drag_feedback
+    PRIVATE
+    onecad_ui
+    onecad_app
+    onecad_io
+    onecad_core
+    Qt6::Widgets
+    Qt6::Gui
+    Qt6::Core
+    Qt6::OpenGL
+    Qt6::OpenGLWidgets
+)
+target_include_directories(proto_viewport_group_drag_feedback PRIVATE ${CMAKE_SOURCE_DIR}/src)
+set_target_properties(proto_viewport_group_drag_feedback PROPERTIES
+    AUTOMOC OFF
+    AUTOUIC OFF
+    AUTORCC OFF
+)
 
 # Tessellation Cache Prototype
 add_executable(proto_tessellation_cache prototypes/proto_tessellation_cache.cpp)

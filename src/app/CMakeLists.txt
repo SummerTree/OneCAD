@@ -10,6 +10,7 @@ add_library(onecad_app STATIC
     commands/RenameBodyCommand.cpp
     commands/RenameSketchCommand.cpp
     commands/SetOperationSuppressionCommand.cpp
+    commands/SketchDragGestureCommand.cpp
     commands/ToggleVisibilityCommand.cpp
     commands/UpdateOperationParamsCommand.cpp
     commands/CommandProcessor.cpp

@@ -6,6 +6,7 @@
 #include <QMouseEvent>
 #include <QObject>
 #include <QSurfaceFormat>
+#include <QTimer>
 #include <QWheelEvent>
 
 #include "app/Application.h"
@@ -204,6 +205,12 @@ int main(int argc, char* argv[]) {
     qCDebug(logMain) << "MainWindow created";
     window.show();
     qCInfo(logMain) << "MainWindow shown; entering event loop";
+
+    const QByteArray headlessSmoke = qgetenv("ONECAD_HEADLESS_SMOKE");
+    if (!headlessSmoke.isEmpty()) {
+        qCInfo(logMain) << "Headless smoke mode active; scheduling immediate clean quit";
+        QTimer::singleShot(0, &app, &QCoreApplication::quit);
+    }
 
     const int result = app.exec();
     qCInfo(logMain) << "Qt event loop exited" << "exitCode=" << result;

@@ -432,6 +432,10 @@ public:
      */
     void setActiveGuides(const std::vector<GuideLineInfo>& guides);
 
+    void setDragGuides(const std::vector<GuideLineInfo>& guides);
+
+    void clearDragGuides();
+
     /**
      * @brief Show snap indicator at point
      *
@@ -560,6 +564,7 @@ private:
     std::vector<Vec2d> anchorIndicators_;
 
     std::vector<GuideLineInfo> activeGuides_;
+    std::vector<GuideLineInfo> dragGuides_;
 
     // Region data
     struct RegionRenderData {

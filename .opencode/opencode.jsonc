@@ -13,6 +13,7 @@
 
     "bash": {
       "*": "ask",
+      "./build/test/*": "allow",
       // Build toolchain - safe, allow
       "git *": "allow",
       "cmake *": "allow",

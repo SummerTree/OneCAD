@@ -22,6 +22,17 @@ Q_LOGGING_CATEGORY(logConstraintSolver, "onecad.core.constraintsolver")
 
 namespace {
 
+constexpr double kDragSubstepThreshold = 100.0;
+constexpr int kMaxDragSubsteps = 10;
+
+int computeDragSubsteps(double maxDeltaMagnitude) {
+    if (maxDeltaMagnitude <= kDragSubstepThreshold) {
+        return 1;
+    }
+    const double rawSteps = std::ceil(maxDeltaMagnitude / kDragSubstepThreshold);
+    return std::min(kMaxDragSubsteps, std::max(1, static_cast<int>(rawSteps)));
+}
+
 double* coordPtr(SketchPoint* point, int coordIndex) {
     gp_XY& coords = point->position().ChangeCoord();
     return &coords.ChangeCoord(coordIndex);
@@ -397,6 +408,202 @@ SolverResult ConstraintSolver::solveWithDrag(EntityID pointId, const Vec2d& targ
                                  << "pointId=" << QString::fromStdString(pointId)
                                  << "target=" << targetPos.x << targetPos.y
                                  << "fixedPoints=" << pointIdsToFix.size();
+    auto draggedIt = pointsById_.find(pointId);
+    if (draggedIt == pointsById_.end() || !draggedIt->second) {
+        SolverResult result;
+        result.success = false;
+        result.status = SolverResult::Status::InvalidInput;
+        result.errorMessage = "Dragged point not found";
+        return result;
+    }
+
+    if (!gcsSystem_) {
+        SolverResult result;
+        result.success = false;
+        result.status = SolverResult::Status::InternalError;
+        result.errorMessage = "PlaneGCS system not available";
+        return result;
+    }
+
+    const Vec2d startPos{draggedIt->second->position().X(), draggedIt->second->position().Y()};
+    const double deltaX = targetPos.x - startPos.x;
+    const double deltaY = targetPos.y - startPos.y;
+    const double deltaMagnitude = std::sqrt((deltaX * deltaX) + (deltaY * deltaY));
+    const int substeps = computeDragSubsteps(deltaMagnitude);
+    if (substeps > 1) {
+        qCInfo(logConstraintSolver) << "solveWithDrag:substep-triggered"
+                                    << "pointId=" << QString::fromStdString(pointId)
+                                    << "delta=" << deltaMagnitude
+                                    << "steps=" << substeps;
+    }
+
+    const ConstraintSolver::DragSolveSnapshot snapshot = captureDragSolveSnapshot();
+    SolverResult lastResult;
+    for (int step = 1; step <= substeps; ++step) {
+        const double t = static_cast<double>(step) / static_cast<double>(substeps);
+        const Vec2d intermediateTarget{
+            .x = startPos.x + (deltaX * t),
+            .y = startPos.y + (deltaY * t),
+        };
+        lastResult = solveWithDragSingleStep(pointId, intermediateTarget, pointIdsToFix);
+        if (!lastResult.success) {
+            restoreDragSolveSnapshot(snapshot);
+            if (lastResult.errorMessage.empty()) {
+                lastResult.errorMessage = "Drag rejected by constraints";
+            }
+            return lastResult;
+        }
+    }
+
+    return lastResult;
+}
+
+SolverResult ConstraintSolver::solveWithGroupDrag(
+    const std::unordered_map<EntityID, Vec2d>& targetPositions) {
+    qCDebug(logConstraintSolver) << "solveWithGroupDrag:start"
+                                 << "targetPoints=" << targetPositions.size();
+
+    if (!gcsSystem_) {
+        SolverResult result;
+        result.success = false;
+        result.status = SolverResult::Status::InternalError;
+        result.errorMessage = "PlaneGCS system not available";
+        return result;
+    }
+
+    if (targetPositions.empty()) {
+        SolverResult result;
+        result.success = false;
+        result.status = SolverResult::Status::InvalidInput;
+        result.errorMessage = "No group drag targets";
+        return result;
+    }
+
+    std::unordered_map<EntityID, Vec2d> startPositions;
+    startPositions.reserve(targetPositions.size());
+    double maxDeltaMagnitude = 0.0;
+    for (const auto& [pointId, targetPos] : targetPositions) {
+        auto pointIt = pointsById_.find(pointId);
+        if (pointIt == pointsById_.end() || !pointIt->second) {
+            SolverResult result;
+            result.success = false;
+            result.status = SolverResult::Status::InvalidInput;
+            result.errorMessage = "Group drag point not found";
+            return result;
+        }
+        const Vec2d startPos{pointIt->second->position().X(), pointIt->second->position().Y()};
+        startPositions[pointId] = startPos;
+        const double dx = targetPos.x - startPos.x;
+        const double dy = targetPos.y - startPos.y;
+        maxDeltaMagnitude = std::max(maxDeltaMagnitude, std::sqrt((dx * dx) + (dy * dy)));
+    }
+
+    const int substeps = computeDragSubsteps(maxDeltaMagnitude);
+    if (substeps > 1) {
+        qCInfo(logConstraintSolver) << "solveWithGroupDrag:substep-triggered"
+                                    << "targetPoints=" << targetPositions.size()
+                                    << "maxDelta=" << maxDeltaMagnitude
+                                    << "steps=" << substeps;
+    }
+
+    const ConstraintSolver::DragSolveSnapshot snapshot = captureDragSolveSnapshot();
+    SolverResult lastResult;
+    std::unordered_map<EntityID, Vec2d> intermediateTargets;
+    intermediateTargets.reserve(targetPositions.size());
+    for (int step = 1; step <= substeps; ++step) {
+        intermediateTargets.clear();
+        const double t = static_cast<double>(step) / static_cast<double>(substeps);
+        for (const auto& [pointId, targetPos] : targetPositions) {
+            const Vec2d& startPos = startPositions.at(pointId);
+            intermediateTargets[pointId] = Vec2d{
+                .x = startPos.x + ((targetPos.x - startPos.x) * t),
+                .y = startPos.y + ((targetPos.y - startPos.y) * t),
+            };
+        }
+
+        lastResult = solveWithGroupDragSingleStep(intermediateTargets);
+        if (!lastResult.success) {
+            restoreDragSolveSnapshot(snapshot);
+            if (lastResult.errorMessage.empty()) {
+                lastResult.errorMessage = "Group drag rejected by constraints";
+            }
+            return lastResult;
+        }
+    }
+
+    return lastResult;
+}
+
+ConstraintSolver::DragSolveSnapshot ConstraintSolver::captureDragSolveSnapshot() const {
+    ConstraintSolver::DragSolveSnapshot snapshot;
+    snapshot.pointPositions.reserve(pointsById_.size());
+    for (const auto& [id, point] : pointsById_) {
+        if (!point) {
+            continue;
+        }
+        snapshot.pointPositions[id] = Vec2d{.x = point->position().X(), .y = point->position().Y()};
+    }
+
+    snapshot.arcStates.reserve(arcsById_.size());
+    for (const auto& [id, arc] : arcsById_) {
+        if (!arc) {
+            continue;
+        }
+        snapshot.arcStates[id] = ConstraintSolver::DragSolveSnapshot::ArcState{
+            .radius = arc->radius(),
+            .startAngle = arc->startAngle(),
+            .endAngle = arc->endAngle(),
+        };
+    }
+
+    snapshot.circleRadii.reserve(circlesById_.size());
+    for (const auto& [id, circle] : circlesById_) {
+        if (!circle) {
+            continue;
+        }
+        snapshot.circleRadii[id] = circle->radius();
+    }
+
+    return snapshot;
+}
+
+void ConstraintSolver::restoreDragSolveSnapshot(const ConstraintSolver::DragSolveSnapshot& snapshot) {
+    for (const auto& [id, pos] : snapshot.pointPositions) {
+        auto pointIt = pointsById_.find(id);
+        if (pointIt == pointsById_.end() || !pointIt->second) {
+            continue;
+        }
+        pointIt->second->setPosition(pos.x, pos.y);
+    }
+
+    for (const auto& [id, arcState] : snapshot.arcStates) {
+        auto arcIt = arcsById_.find(id);
+        if (arcIt == arcsById_.end() || !arcIt->second) {
+            continue;
+        }
+        arcIt->second->setRadius(arcState.radius);
+        arcIt->second->setStartAngle(arcState.startAngle);
+        arcIt->second->setEndAngle(arcState.endAngle);
+    }
+
+    for (const auto& [id, radius] : snapshot.circleRadii) {
+        auto circleIt = circlesById_.find(id);
+        if (circleIt == circlesById_.end() || !circleIt->second) {
+            continue;
+        }
+        circleIt->second->setRadius(radius);
+    }
+
+    if (gcsSystem_) {
+        gcsSystem_->clearByTag(-1);
+        gcsSystem_->invalidatedDiagnosis();
+    }
+}
+
+SolverResult ConstraintSolver::solveWithDragSingleStep(
+    EntityID pointId,
+    const Vec2d& targetPos,
+    const std::unordered_set<EntityID>& pointIdsToFix) {
     auto it = pointsById_.find(pointId);
     if (it == pointsById_.end() || !it->second) {
         SolverResult result;
@@ -417,9 +624,6 @@ SolverResult ConstraintSolver::solveWithDrag(EntityID pointId, const Vec2d& targ
     constexpr int dragTag = -1;
     gcsSystem_->clearByTag(dragTag);
 
-    // Fix either:
-    // - all non-dragged points (legacy/default behavior when pointIdsToFix is empty), or
-    // - only the explicitly requested set.
     struct FixedCoord {
         double x;
         double y;
@@ -452,6 +656,60 @@ SolverResult ConstraintSolver::solveWithDrag(EntityID pointId, const Vec2d& targ
     gcsSystem_->addConstraintCoordinateY(dragPoint, &targetY, dragTag, true);
 
     SolverResult result = solve();
+
+    gcsSystem_->clearByTag(dragTag);
+    gcsSystem_->invalidatedDiagnosis();
+
+    return result;
+}
+
+SolverResult ConstraintSolver::solveWithGroupDragSingleStep(
+    const std::unordered_map<EntityID, Vec2d>& targetPositions) {
+    if (!gcsSystem_) {
+        SolverResult result;
+        result.success = false;
+        result.status = SolverResult::Status::InternalError;
+        result.errorMessage = "PlaneGCS system not available";
+        return result;
+    }
+
+    if (targetPositions.empty()) {
+        SolverResult result;
+        result.success = false;
+        result.status = SolverResult::Status::InvalidInput;
+        result.errorMessage = "No group drag targets";
+        return result;
+    }
+
+    constexpr int dragTag = -1;
+    gcsSystem_->clearByTag(dragTag);
+
+    std::vector<std::pair<GCS::Point, std::pair<double, double>>> tempTargets;
+    tempTargets.reserve(targetPositions.size());
+    for (const auto& [pointId, targetPos] : targetPositions) {
+        auto pointIt = pointsById_.find(pointId);
+        if (pointIt == pointsById_.end() || !pointIt->second) {
+            SolverResult result;
+            result.success = false;
+            result.status = SolverResult::Status::InvalidInput;
+            result.errorMessage = "Group drag point not found";
+            gcsSystem_->clearByTag(dragTag);
+            gcsSystem_->invalidatedDiagnosis();
+            return result;
+        }
+        tempTargets.emplace_back(makePoint(pointIt->second),
+                                 std::make_pair(targetPos.x, targetPos.y));
+    }
+
+    for (auto& [point, target] : tempTargets) {
+        gcsSystem_->addConstraintCoordinateX(point, &target.first, dragTag, true);
+        gcsSystem_->addConstraintCoordinateY(point, &target.second, dragTag, true);
+    }
+
+    SolverResult result = solve();
+    if (!result.success && result.errorMessage.empty()) {
+        result.errorMessage = "Group drag rejected by constraints";
+    }
 
     gcsSystem_->clearByTag(dragTag);
     gcsSystem_->invalidatedDiagnosis();

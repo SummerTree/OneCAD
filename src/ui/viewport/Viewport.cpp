@@ -4,10 +4,13 @@
 #include "../../render/Grid3D.h"
 #include "../../core/sketch/SketchRenderer.h"
 #include "../../core/sketch/Sketch.h"
+#include "../../core/sketch/SketchPoint.h"
 #include "../../core/sketch/SketchConstraint.h"
 #include "../../core/sketch/constraints/Constraints.h"
 #include "../../core/sketch/tools/SketchToolManager.h"
 #include "../../core/loop/RegionUtils.h"
+#include "../../app/commands/CommandProcessor.h"
+#include "../../app/commands/SketchDragGestureCommand.h"
 #include "../../app/document/Document.h"
 #include "../../app/selection/SelectionManager.h"
 #include "../../app/selection/SelectionTypes.h"
@@ -40,7 +43,6 @@
 #include <QVector2D>
 #include <QEasingCurve>
 #include <QtMath>
-#include <QDebug>
 #include <algorithm>
 #include <array>
 #include <cmath>
@@ -91,6 +93,36 @@ constexpr std::array<sketch::SnapType, 8> kPointDragSnapTypes = {
     sketch::SnapType::OnCurve,
     sketch::SnapType::Grid
 };
+
+std::vector<sketch::SketchRenderer::GuideLineInfo> buildFeasibleDragGuides(
+    const sketch::Sketch* sketchModel,
+    const sketch::EntityID& pointId) {
+    if (!sketchModel || pointId.empty()) {
+        return {};
+    }
+
+    const auto* point = sketchModel->getEntityAs<sketch::SketchPoint>(pointId);
+    if (!point) {
+        return {};
+    }
+
+    const auto directions = sketchModel->getPointFreeDirections(pointId);
+    if (directions.size() != 1) {
+        return {};
+    }
+
+    const sketch::Vec2d& direction = directions.front();
+    const double length = std::sqrt(direction.x * direction.x + direction.y * direction.y);
+    if (length <= 1e-9) {
+        return {};
+    }
+
+    const sketch::Vec2d origin{point->position().X(), point->position().Y()};
+    const sketch::Vec2d target{origin.x + (direction.x / length),
+                               origin.y + (direction.y / length)};
+    return {{origin, target}};
+}
+
 } // namespace
 
 namespace {
@@ -462,12 +494,6 @@ Viewport::~Viewport() {
 
 void Viewport::initializeGL() {
     initializeOpenGLFunctions();
-    
-    // Debug: Print OpenGL info
-    const char* version = reinterpret_cast<const char*>(glGetString(GL_VERSION));
-    const char* renderer = reinterpret_cast<const char*>(glGetString(GL_RENDERER));
-    qDebug() << "OpenGL Version:" << (version ? version : "unknown");
-    qDebug() << "OpenGL Renderer:" << (renderer ? renderer : "unknown");
     
     // Background color set via updateTheme
     glClearColor(m_backgroundColor.redF(), m_backgroundColor.greenF(), m_backgroundColor.blueF(), m_backgroundColor.alphaF());
@@ -890,6 +916,62 @@ void Viewport::paintGL() {
     drawModelToolOverlay(viewProjection);
 }
 
+void Viewport::setSketchInteractionState(SketchInteractionState newState, const char* reason) {
+    if (m_sketchInteractionState == newState) {
+        return;
+    }
+    auto stateName = [](SketchInteractionState state) {
+        switch (state) {
+        case SketchInteractionState::Idle:
+            return "Idle";
+        case SketchInteractionState::PendingPointSingleDrag:
+            return "PendingPointSingleDrag";
+        case SketchInteractionState::PointSingleDragging:
+            return "PointSingleDragging";
+        case SketchInteractionState::PendingPointGroupDrag:
+            return "PendingPointGroupDrag";
+        case SketchInteractionState::PointGroupDragging:
+            return "PointGroupDragging";
+        case SketchInteractionState::SketchMoving:
+            return "SketchMoving";
+        }
+        return "Unknown";
+    };
+    qCDebug(logUiInput) << "sketch_interaction_transition"
+                        << stateName(m_sketchInteractionState)
+                        << "->"
+                        << stateName(newState)
+                        << "reason="
+                        << reason;
+    m_sketchInteractionState = newState;
+}
+
+void Viewport::setSketchDragIntent(SketchDragIntent newIntent, const char* reason) {
+    if (m_sketchDragIntent == newIntent) {
+        return;
+    }
+    auto intentName = [](SketchDragIntent intent) {
+        switch (intent) {
+        case SketchDragIntent::None:
+            return "None";
+        case SketchDragIntent::PointSingle:
+            return "PointSingle";
+        case SketchDragIntent::PointGroup:
+            return "PointGroup";
+        case SketchDragIntent::SelectionBox:
+            return "SelectionBox";
+        }
+        return "Unknown";
+    };
+    qCDebug(logUiInput) << "sketch_drag_intent_transition"
+                        << intentName(m_sketchDragIntent)
+                        << "->"
+                        << intentName(newIntent)
+                        << "reason="
+                        << reason;
+    m_sketchDragIntent = newIntent;
+}
+
 void Viewport::mousePressEvent(QMouseEvent* event) {
     m_lastMousePos = event->pos();
 
@@ -902,14 +984,51 @@ void Viewport::mousePressEvent(QMouseEvent* event) {
         m_pendingShellFaceToggle = false;
     }
 
-    // Move Sketch mode: left press starts sketch move gesture
     if (m_inSketchMode && m_moveSketchModeActive && event->button() == Qt::LeftButton &&
         m_activeSketch && (!m_toolManager || !m_toolManager->hasActiveTool())) {
-        m_sketchInteractionState = SketchInteractionState::SketchMoving;
+        m_groupDragPointIds.clear();
+        m_groupDragStartPositions.clear();
+        m_groupDragFailureFeedbackShown = false;
+
+        for (const auto& entity : m_activeSketch->getAllEntities()) {
+            if (!entity || entity->type() != sketch::EntityType::Point) {
+                continue;
+            }
+            const auto& pointId = entity->id();
+            const auto* point = dynamic_cast<const sketch::SketchPoint*>(entity.get());
+            if (!point) {
+                continue;
+            }
+            m_groupDragPointIds.insert(pointId);
+            m_groupDragStartPositions[pointId] =
+                sketch::Vec2d{point->position().X(), point->position().Y()};
+        }
+
+        if (m_groupDragPointIds.empty()) {
+            setSketchInteractionState(SketchInteractionState::Idle,
+                                      "move-sketch mode press without points");
+            setSketchDragIntent(SketchDragIntent::None,
+                                "move-sketch mode press without points");
+            setCursor(Qt::SizeAllCursor);
+            update();
+            return;
+        }
+
+        m_activeSketch->beginGroupDrag(m_groupDragPointIds);
+        beginSketchDragGestureCapture();
+        setSketchInteractionState(SketchInteractionState::SketchMoving,
+                                  "move-sketch mode immediate drag");
+        setSketchDragIntent(SketchDragIntent::PointGroup,
+                            "move-sketch mode immediate drag");
         m_moveSketchLastSketchPos = screenToSketch(event->pos());
         setCursor(Qt::SizeAllCursor);
         update();
         return;
+    }
+
+    if (m_inSketchMode && event->button() == Qt::LeftButton && m_activeSketch) {
+        m_groupDragPointIds.clear();
+        m_groupDragStartPositions.clear();
     }
 
     if (m_inSketchMode && m_sketchRenderer && event->button() == Qt::LeftButton &&
@@ -936,9 +1055,39 @@ void Viewport::mousePressEvent(QMouseEvent* event) {
         // Point drag must win over deep-select ambiguity at line endpoints.
         if (!m_moveSketchModeActive && bestPointForDrag.has_value()) {
             m_selectionManager->applySelectionCandidate(*bestPointForDrag, modifiers, event->pos());
-            m_sketchInteractionState = SketchInteractionState::PendingPointDrag;
+            beginSketchDragGestureCapture();
+
+            const auto selectedPointIds = selectedSketchPointIds();
+            const bool pressedPointSelected =
+                selectedPointIds.find(bestPointForDrag->id.elementId) != selectedPointIds.end();
+            if (pressedPointSelected && selectedPointIds.size() >= 2) {
+                m_groupDragPointIds.reserve(selectedPointIds.size());
+                m_groupDragStartPositions.reserve(selectedPointIds.size());
+                for (const auto& pointId : selectedPointIds) {
+                    const auto* point = m_activeSketch->getEntityAs<sketch::SketchPoint>(pointId);
+                    if (!point) {
+                        continue;
+                    }
+                    m_groupDragPointIds.insert(pointId);
+                    m_groupDragStartPositions[pointId] =
+                        sketch::Vec2d{point->position().X(), point->position().Y()};
+                }
+            }
+
+            if (m_groupDragPointIds.size() >= 2) {
+                setSketchInteractionState(SketchInteractionState::PendingPointGroupDrag,
+                                          "press selected point candidate for group drag");
+                setSketchDragIntent(SketchDragIntent::PointGroup,
+                                    "press selected point candidate for group drag");
+            } else {
+                setSketchInteractionState(SketchInteractionState::PendingPointSingleDrag,
+                                          "press point candidate");
+                setSketchDragIntent(SketchDragIntent::PointSingle, "press point candidate");
+            }
             m_sketchPressPos = event->pos();
+            m_moveSketchLastSketchPos = screenToSketch(event->pos());
             m_pointDragCandidateId = bestPointForDrag->id.elementId;
+            m_groupDragFailureFeedbackShown = false;
             m_pointDragFailureFeedbackShown = false;
             m_selectedRegionId.clear();
             update();
@@ -958,7 +1107,8 @@ void Viewport::mousePressEvent(QMouseEvent* event) {
             if (!m_pendingCandidates.empty()) {
                 m_selectionManager->setHoverItem(m_pendingCandidates.front());
             }
-            m_sketchInteractionState = SketchInteractionState::Idle;
+            setSketchInteractionState(SketchInteractionState::Idle, "deep select popup");
+            setSketchDragIntent(SketchDragIntent::None, "deep select popup");
             m_pointDragCandidateId.clear();
             return;
         }
@@ -983,22 +1133,27 @@ void Viewport::mousePressEvent(QMouseEvent* event) {
 
             if (!m_selectedRegionId.empty() &&
                 (!top.has_value() || hitInSelectedRegion || hitSelectedRegionFill)) {
-                m_sketchInteractionState = SketchInteractionState::PendingRegionMove;
-                m_sketchPressPos = event->pos();
-                m_regionMoveCandidateId = m_selectedRegionId;
+                setSketchInteractionState(SketchInteractionState::Idle,
+                                          "press selected region no-translate");
+                setSketchDragIntent(SketchDragIntent::SelectionBox,
+                                    "press selected region no-translate");
                 m_pointDragCandidateId.clear();
             } else if (!top.has_value()) {
-                m_sketchInteractionState = SketchInteractionState::PendingSketchMove;
-                m_sketchPressPos = event->pos();
+                setSketchInteractionState(SketchInteractionState::Idle,
+                                          "press empty sketch no-translate");
+                setSketchDragIntent(SketchDragIntent::SelectionBox,
+                                    "press empty sketch no-translate");
                 m_pointDragCandidateId.clear();
                 m_selectedRegionId.clear();
             } else {
-                m_sketchInteractionState = SketchInteractionState::Idle;
+                setSketchInteractionState(SketchInteractionState::Idle, "press selectable non-drag target");
+                setSketchDragIntent(SketchDragIntent::None, "press selectable non-drag target");
                 m_pointDragCandidateId.clear();
                 m_selectedRegionId.clear();
             }
         } else {
-            m_sketchInteractionState = SketchInteractionState::Idle;
+            setSketchInteractionState(SketchInteractionState::Idle, "move-sketch mode press");
+            setSketchDragIntent(SketchDragIntent::None, "move-sketch mode press");
             m_pointDragCandidateId.clear();
         }
 
@@ -1300,37 +1455,42 @@ void Viewport::mouseMoveEvent(QMouseEvent* event) {
         }
     }
 
-    // Move Sketch gesture: translate all geometry by delta in sketch coordinates
     if (m_inSketchMode && m_sketchInteractionState == SketchInteractionState::SketchMoving &&
+        m_moveSketchModeActive &&
         m_activeSketch && (event->buttons() & Qt::LeftButton)) {
-        sketch::Vec2d currentSketch = screenToSketch(event->pos());
-        sketch::Vec2d delta;
-        delta.x = currentSketch.x - m_moveSketchLastSketchPos.x;
-        delta.y = currentSketch.y - m_moveSketchLastSketchPos.y;
-        m_activeSketch->translateSketch(delta.x, delta.y);
-        m_moveSketchLastSketchPos = currentSketch;
-        if (m_sketchRenderer) {
-            m_sketchRenderer->updateGeometry();
+        if (m_groupDragStartPositions.empty()) {
             update();
+            return;
         }
-        notifySketchUpdated();
-        return;
-    }
 
-    // Move Region gesture: translate only the selected region
-    if (m_inSketchMode && m_sketchInteractionState == SketchInteractionState::RegionMoving &&
-        m_activeSketch && !m_regionMoveCandidateId.empty() && (event->buttons() & Qt::LeftButton)) {
-        sketch::Vec2d currentSketch = screenToSketch(event->pos());
-        sketch::Vec2d delta;
-        delta.x = currentSketch.x - m_moveSketchLastSketchPos.x;
-        delta.y = currentSketch.y - m_moveSketchLastSketchPos.y;
-        m_activeSketch->translateSketchRegion(m_regionMoveCandidateId, delta.x, delta.y);
-        m_moveSketchLastSketchPos = currentSketch;
-        if (m_sketchRenderer) {
-            m_sketchRenderer->updateGeometry();
-            update();
+        sketch::Vec2d sketchPos = screenToSketch(event->pos());
+        const sketch::Vec2d dragDelta{
+            sketchPos.x - m_moveSketchLastSketchPos.x,
+            sketchPos.y - m_moveSketchLastSketchPos.y,
+        };
+
+        std::unordered_map<sketch::EntityID, sketch::Vec2d> targetPositions;
+        targetPositions.reserve(m_groupDragStartPositions.size());
+        for (const auto& [pointId, startPos] : m_groupDragStartPositions) {
+            targetPositions[pointId] =
+                sketch::Vec2d{startPos.x + dragDelta.x, startPos.y + dragDelta.y};
         }
-        notifySketchUpdated();
+
+        const auto result = m_activeSketch->solveWithGroupDrag(targetPositions);
+        if (result.success) {
+            if (m_sketchRenderer) {
+                m_sketchRenderer->updateGeometry();
+                updateSketchRenderingState();
+            }
+            notifySketchUpdated();
+        } else if (!m_groupDragFailureFeedbackShown) {
+            m_groupDragFailureFeedbackShown = true;
+            const QString message = result.errorMessage.empty()
+                ? tr("Constrained or unsolved group drag")
+                : QString::fromStdString(result.errorMessage);
+            emit statusMessageRequested(message);
+        }
+        update();
         return;
     }
 
@@ -1344,71 +1504,53 @@ void Viewport::mouseMoveEvent(QMouseEvent* event) {
         }
     } else if (m_inSketchMode && m_sketchRenderer && !m_isOrbiting && !m_isPanning &&
                (!m_deepSelectPopup || !m_deepSelectPopup->isVisible())) {
-        // Sketch move: transition from PendingSketchMove when drag past threshold
-        if (m_sketchInteractionState == SketchInteractionState::PendingSketchMove &&
-            m_activeSketch && (event->buttons() & Qt::LeftButton)) {
-            QPoint delta = event->pos() - m_sketchPressPos;
-            int distSq = delta.x() * delta.x() + delta.y() * delta.y();
-            if (distSq >= kPointDragThresholdPixels * kPointDragThresholdPixels) {
-                m_sketchInteractionState = SketchInteractionState::SketchMoving;
-                m_moveSketchLastSketchPos = screenToSketch(event->pos());
-                setCursor(Qt::SizeAllCursor);
-            }
-        }
-        // Region move: transition from PendingRegionMove when drag past threshold
-        if (m_sketchInteractionState == SketchInteractionState::PendingRegionMove &&
-            m_activeSketch && (event->buttons() & Qt::LeftButton)) {
-            QPoint delta = event->pos() - m_sketchPressPos;
-            int distSq = delta.x() * delta.x() + delta.y() * delta.y();
-            if (distSq >= kPointDragThresholdPixels * kPointDragThresholdPixels) {
-                m_sketchInteractionState = SketchInteractionState::RegionMoving;
-                m_moveSketchLastSketchPos = screenToSketch(event->pos());
-                setCursor(Qt::SizeAllCursor);
-            }
-        }
         // Point drag state machine
-        if (m_sketchInteractionState == SketchInteractionState::PendingPointDrag &&
+        if (m_sketchInteractionState == SketchInteractionState::PendingPointSingleDrag &&
             m_activeSketch && !m_pointDragCandidateId.empty()) {
             QPoint delta = event->pos() - m_sketchPressPos;
             int distSq = delta.x() * delta.x() + delta.y() * delta.y();
             if (distSq >= kPointDragThresholdPixels * kPointDragThresholdPixels) {
                 if (m_activeSketch->hasFixedConstraint(m_pointDragCandidateId)) {
                     emit statusMessageRequested(tr("Point is fixed"));
-                    m_sketchInteractionState = SketchInteractionState::Idle;
+                    endSketchDragGestureCapture(false);
+                    if (m_sketchRenderer) {
+                        m_sketchRenderer->clearDragGuides();
+                    }
+                    setSketchInteractionState(SketchInteractionState::Idle, "fixed point drag blocked");
+                    setSketchDragIntent(SketchDragIntent::None, "fixed point drag blocked");
                     m_pointDragCandidateId.clear();
                 } else {
                     m_activeSketch->beginPointDrag(m_pointDragCandidateId);
-                    m_sketchInteractionState = SketchInteractionState::PointDragging;
+                    setSketchInteractionState(SketchInteractionState::PointSingleDragging,
+                                              "point drag threshold reached");
                     m_sketchRenderer->setEntitySelection(m_pointDragCandidateId,
                         sketch::SelectionState::Dragging);
+                    m_sketchRenderer->setDragGuides(
+                        buildFeasibleDragGuides(m_activeSketch, m_pointDragCandidateId));
                 }
             }
         }
-        if (m_sketchInteractionState == SketchInteractionState::PointDragging &&
+        if (m_sketchInteractionState == SketchInteractionState::PendingPointGroupDrag &&
+            m_activeSketch && !m_groupDragPointIds.empty()) {
+            QPoint delta = event->pos() - m_sketchPressPos;
+            int distSq = delta.x() * delta.x() + delta.y() * delta.y();
+            if (distSq >= kPointDragThresholdPixels * kPointDragThresholdPixels) {
+                m_activeSketch->beginGroupDrag(m_groupDragPointIds);
+                setSketchInteractionState(SketchInteractionState::PointGroupDragging,
+                                          "group drag threshold reached");
+                if (m_sketchRenderer) {
+                    m_sketchRenderer->setDragGuides(
+                        buildFeasibleDragGuides(m_activeSketch, m_pointDragCandidateId));
+                }
+            }
+        }
+        if (m_sketchInteractionState == SketchInteractionState::PointSingleDragging &&
             m_activeSketch && m_sketchRenderer && !m_pointDragCandidateId.empty()) {
+            m_sketchRenderer->setDragGuides(
+                buildFeasibleDragGuides(m_activeSketch, m_pointDragCandidateId));
             sketch::Vec2d sketchPos = screenToSketch(event->pos());
             sketch::Vec2d targetPos = sketchPos;
-            const bool shiftConstrainedDrag = (event->modifiers() & Qt::ShiftModifier);
-            if (shiftConstrainedDrag) {
-                std::vector<sketch::Vec2d> freeDirs = m_activeSketch->getPointFreeDirections(m_pointDragCandidateId);
-                if (freeDirs.empty()) {
-                    update();
-                    return;
-                }
-                auto* pt = m_activeSketch->getEntityAs<sketch::SketchPoint>(m_pointDragCandidateId);
-                if (pt) {
-                    sketch::Vec2d currentPos{pt->position().X(), pt->position().Y()};
-                    sketch::Vec2d delta{sketchPos.x - currentPos.x, sketchPos.y - currentPos.y};
-                    sketch::Vec2d projectedDelta{0.0, 0.0};
-                    for (const auto& d : freeDirs) {
-                        double dot = delta.x * d.x + delta.y * d.y;
-                        projectedDelta.x += dot * d.x;
-                        projectedDelta.y += dot * d.y;
-                    }
-                    targetPos.x = currentPos.x + projectedDelta.x;
-                    targetPos.y = currentPos.y + projectedDelta.y;
-                }
-            } else if (m_toolManager) {
+            if (m_toolManager) {
                 syncSnapGridSizeFromCamera();
                 const auto& baseSnapManager = m_toolManager->snapManager();
                 if (baseSnapManager.isEnabled()) {
@@ -1450,8 +1592,43 @@ void Viewport::mouseMoveEvent(QMouseEvent* event) {
             }
             return;
         }
-        if (m_sketchInteractionState != SketchInteractionState::PointDragging &&
-            m_sketchInteractionState != SketchInteractionState::RegionMoving) {
+        if (m_sketchInteractionState == SketchInteractionState::PointGroupDragging &&
+            m_activeSketch && m_sketchRenderer && !m_groupDragStartPositions.empty()) {
+            m_sketchRenderer->setDragGuides(
+                buildFeasibleDragGuides(m_activeSketch, m_pointDragCandidateId));
+            sketch::Vec2d sketchPos = screenToSketch(event->pos());
+            const sketch::Vec2d dragDelta{
+                sketchPos.x - m_moveSketchLastSketchPos.x,
+                sketchPos.y - m_moveSketchLastSketchPos.y,
+            };
+
+            std::unordered_map<sketch::EntityID, sketch::Vec2d> targetPositions;
+            targetPositions.reserve(m_groupDragStartPositions.size());
+            for (const auto& [pointId, startPos] : m_groupDragStartPositions) {
+                targetPositions[pointId] = sketch::Vec2d{startPos.x + dragDelta.x, startPos.y + dragDelta.y};
+            }
+
+            if (!targetPositions.empty()) {
+                const auto result = m_activeSketch->solveWithGroupDrag(targetPositions);
+                if (result.success) {
+                    m_sketchRenderer->updateGeometry();
+                    updateSketchRenderingState();
+                    update();
+                } else {
+                    if (!m_groupDragFailureFeedbackShown) {
+                        m_groupDragFailureFeedbackShown = true;
+                        const QString message = result.errorMessage.empty()
+                            ? tr("Constrained or unsolved group drag")
+                            : QString::fromStdString(result.errorMessage);
+                        emit statusMessageRequested(message);
+                    }
+                    update();
+                }
+            }
+            return;
+        }
+        if (m_sketchInteractionState != SketchInteractionState::PointSingleDragging &&
+            m_sketchInteractionState != SketchInteractionState::PointGroupDragging) {
             if (m_moveSketchModeActive) {
                 setCursor(Qt::SizeAllCursor);
             }
@@ -1518,27 +1695,58 @@ void Viewport::mouseReleaseEvent(QMouseEvent* event) {
     // End Move Sketch gesture
     if (m_inSketchMode && event->button() == Qt::LeftButton &&
         m_sketchInteractionState == SketchInteractionState::SketchMoving) {
-        m_sketchInteractionState = SketchInteractionState::Idle;
+        if (m_activeSketch) {
+            m_activeSketch->endGroupDrag();
+            m_activeSketch->solve();
+        }
+        if (m_sketchRenderer) {
+            m_sketchRenderer->updateGeometry();
+            m_sketchRenderer->updateConstraints();
+            updateSketchRenderingState();
+            updateSketchSelectionFromManager();
+        }
+        notifySketchUpdated();
+        endSketchDragGestureCapture(true);
+        setSketchInteractionState(SketchInteractionState::Idle, "release sketch move");
+        setSketchDragIntent(SketchDragIntent::None, "release sketch move");
         m_moveSketchLastSketchPos = sketch::Vec2d{0.0, 0.0};
+        m_groupDragPointIds.clear();
+        m_groupDragStartPositions.clear();
+        m_groupDragFailureFeedbackShown = false;
         setCursor(Qt::ArrowCursor);
         update();
         return;
     }
 
-    // End Move Region gesture
     if (m_inSketchMode && event->button() == Qt::LeftButton &&
-        m_sketchInteractionState == SketchInteractionState::RegionMoving) {
-        m_sketchInteractionState = SketchInteractionState::Idle;
-        m_regionMoveCandidateId.clear();
-        m_moveSketchLastSketchPos = sketch::Vec2d{0.0, 0.0};
-        setCursor(Qt::ArrowCursor);
+        m_sketchInteractionState == SketchInteractionState::PointGroupDragging) {
+        if (m_activeSketch) {
+            m_activeSketch->endGroupDrag();
+            m_activeSketch->solve();
+        }
+        if (m_sketchRenderer) {
+            m_sketchRenderer->updateGeometry();
+            m_sketchRenderer->updateConstraints();
+            updateSketchRenderingState();
+            updateSketchSelectionFromManager();
+        }
+        notifySketchUpdated();
+        endSketchDragGestureCapture(true);
+        if (m_sketchRenderer) {
+            m_sketchRenderer->clearDragGuides();
+        }
+        setSketchInteractionState(SketchInteractionState::Idle, "release point group drag");
+        setSketchDragIntent(SketchDragIntent::None, "release point group drag");
+        m_groupDragPointIds.clear();
+        m_groupDragStartPositions.clear();
+        m_groupDragFailureFeedbackShown = false;
         update();
         return;
     }
 
     // Finalize point drag (sketch mode, no tool)
     if (m_inSketchMode && event->button() == Qt::LeftButton &&
-        m_sketchInteractionState == SketchInteractionState::PointDragging) {
+        m_sketchInteractionState == SketchInteractionState::PointSingleDragging) {
         if (m_activeSketch) {
             m_activeSketch->endPointDrag();
         }
@@ -1550,19 +1758,40 @@ void Viewport::mouseReleaseEvent(QMouseEvent* event) {
             updateSketchSelectionFromManager();
             notifySketchUpdated();
         }
-        m_sketchInteractionState = SketchInteractionState::Idle;
+        endSketchDragGestureCapture(true);
+        if (m_sketchRenderer) {
+            m_sketchRenderer->clearDragGuides();
+        }
+        setSketchInteractionState(SketchInteractionState::Idle, "release point drag");
+        setSketchDragIntent(SketchDragIntent::None, "release point drag");
         m_pointDragCandidateId.clear();
         m_pointDragFailureFeedbackShown = false;
         update();
         return;
     }
     if (m_inSketchMode && event->button() == Qt::LeftButton &&
-        (m_sketchInteractionState == SketchInteractionState::PendingPointDrag ||
-         m_sketchInteractionState == SketchInteractionState::PendingSketchMove ||
-         m_sketchInteractionState == SketchInteractionState::PendingRegionMove)) {
-        m_sketchInteractionState = SketchInteractionState::Idle;
+        m_sketchInteractionState == SketchInteractionState::PendingPointSingleDrag) {
+        endSketchDragGestureCapture(false);
+        if (m_sketchRenderer) {
+            m_sketchRenderer->clearDragGuides();
+        }
+        setSketchInteractionState(SketchInteractionState::Idle, "release pending drag intent");
+        setSketchDragIntent(SketchDragIntent::None, "release pending drag intent");
         m_pointDragCandidateId.clear();
-        m_regionMoveCandidateId.clear();
+    }
+    if (m_inSketchMode && event->button() == Qt::LeftButton &&
+        m_sketchInteractionState == SketchInteractionState::PendingPointGroupDrag) {
+        endSketchDragGestureCapture(false);
+        if (m_sketchRenderer) {
+            m_sketchRenderer->clearDragGuides();
+        }
+        setSketchInteractionState(SketchInteractionState::Idle,
+                                  "release pending group drag intent");
+        setSketchDragIntent(SketchDragIntent::None,
+                            "release pending group drag intent");
+        m_groupDragPointIds.clear();
+        m_groupDragStartPositions.clear();
+        m_groupDragFailureFeedbackShown = false;
     }
 
     // Forward to sketch tool if active
@@ -2282,7 +2511,15 @@ void Viewport::exitSketchMode() {
 
     if (m_activeSketch) {
         m_activeSketch->endPointDrag();
+        m_activeSketch->endGroupDrag();
     }
+    endSketchDragGestureCapture(false);
+    if (m_sketchRenderer) {
+        m_sketchRenderer->clearDragGuides();
+    }
+    m_groupDragPointIds.clear();
+    m_groupDragStartPositions.clear();
+    m_groupDragFailureFeedbackShown = false;
 
     m_inSketchMode = false;
     m_activeSketch = nullptr;
@@ -2753,6 +2990,23 @@ std::vector<app::selection::SelectionItem> Viewport::sketchSelection() const {
         }
     }
     return result;
+}
+
+std::unordered_set<sketch::EntityID> Viewport::selectedSketchPointIds() const {
+    std::unordered_set<sketch::EntityID> pointIds;
+    if (!m_selectionManager) {
+        return pointIds;
+    }
+
+    for (const auto& item : m_selectionManager->selection()) {
+        if (item.kind != app::selection::SelectionKind::SketchPoint) {
+            continue;
+        }
+        if (!item.id.elementId.empty()) {
+            pointIds.insert(item.id.elementId);
+        }
+    }
+    return pointIds;
 }
 
 int Viewport::suppressedConstraintMarkerCount() const {
@@ -3770,6 +4024,44 @@ void Viewport::setCommandProcessor(app::commands::CommandProcessor* processor) {
     }
 }
 
+void Viewport::beginSketchDragGestureCapture() {
+    if (!m_sketchDragGestureCaptureEnabled || !m_document || !m_activeSketch) {
+        return;
+    }
+    if (m_sketchDragGestureCommand) {
+        return;
+    }
+
+    const std::string activeSketchId = resolveActiveSketchId();
+    if (activeSketchId.empty()) {
+        return;
+    }
+
+    auto command = std::make_unique<app::commands::SketchDragGestureCommand>(m_document,
+                                                                              activeSketchId);
+    if (!command->beginGesture()) {
+        return;
+    }
+    m_sketchDragGestureCommand = std::move(command);
+}
+
+void Viewport::endSketchDragGestureCapture(bool commit) {
+    if (!m_sketchDragGestureCommand) {
+        return;
+    }
+    if (commit) {
+        const bool finalized = m_sketchDragGestureCommand->finalizeGesture();
+        if (finalized && m_sketchDragGestureCommand->hasCapturedChange() && m_commandProcessor) {
+            auto command = std::move(m_sketchDragGestureCommand);
+            m_commandProcessor->execute(std::move(command));
+            return;
+        }
+    } else {
+        m_sketchDragGestureCommand->cancelGesture();
+    }
+    m_sketchDragGestureCommand.reset();
+}
+
 void Viewport::setReferenceSketch(const QString& sketchId) {
     const std::string id = sketchId.toStdString();
     if (id == m_referenceSketchId && m_referenceSketch) {
@@ -3932,10 +4224,21 @@ void Viewport::setMoveSketchMode(bool active) {
     } else {
         if (m_activeSketch) {
             m_activeSketch->endPointDrag();
+            m_activeSketch->endGroupDrag();
         }
-        m_sketchInteractionState = SketchInteractionState::Idle;
+        if (m_sketchRenderer) {
+            m_sketchRenderer->clearDragGuides();
+        }
+        if (m_sketchInteractionState == SketchInteractionState::SketchMoving) {
+            endSketchDragGestureCapture(false);
+        }
+        setSketchInteractionState(SketchInteractionState::Idle, "move-sketch mode disabled");
+        setSketchDragIntent(SketchDragIntent::None, "move-sketch mode disabled");
         m_pointDragCandidateId.clear();
         m_moveSketchLastSketchPos = sketch::Vec2d{0.0, 0.0};
+        m_groupDragPointIds.clear();
+        m_groupDragStartPositions.clear();
+        m_groupDragFailureFeedbackShown = false;
         setCursor(Qt::ArrowCursor);
     }
     if (m_moveSketchModeChangedCallback) {

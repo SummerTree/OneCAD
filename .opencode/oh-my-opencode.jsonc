@@ -9,6 +9,8 @@
       "prompt_append": "OneCAD C++ CAD app context:\n- Non-standard coords: Sketch X→World Y+, Sketch Y→World X-\n- EntityID = UUID string\n- OCCT Handle<> always null-check before use\n- PlaneGCS uses direct parameter binding\n- Run proto_* tests to validate changes"
     },
     "prometheus": {
+      "model": "openai/gpt-5.3-codex",
+      "variant": "xhigh",
       "prompt_append": "OneCAD planning context:\n1. Layers: UI→Render→Core→Kernel\n2. Check ElementMap impact (topological naming hash stability)\n3. Verify PlaneGCS solver integration\n4. List required proto_* tests\n5. Flag coordinate system implications\n6. Note: STEP I/O and undo/redo not fully wired"
     },
     "atlas": {

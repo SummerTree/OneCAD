@@ -986,6 +986,166 @@ void Sketch::endPointDrag() {
     isDraggingPoint_ = false;
 }
 
+void Sketch::beginGroupDrag(const std::unordered_set<EntityID>& selectedPointIds) {
+    activeGroupDragPoints_.clear();
+    groupDragStartPose_.clear();
+    isDraggingGroup_ = false;
+
+    if (selectedPointIds.empty()) {
+        return;
+    }
+
+    activeGroupDragPoints_.reserve(selectedPointIds.size());
+    groupDragStartPose_.reserve(selectedPointIds.size());
+    for (const auto& pointId : selectedPointIds) {
+        const auto* point = getEntityAs<SketchPoint>(pointId);
+        if (!point) {
+            continue;
+        }
+        activeGroupDragPoints_.insert(pointId);
+        groupDragStartPose_[pointId] = Vec2d{point->position().X(), point->position().Y()};
+    }
+
+    isDraggingGroup_ = !activeGroupDragPoints_.empty();
+}
+
+void Sketch::restoreGroupDragStartPose() {
+    for (const auto& [pointId, startPos] : groupDragStartPose_) {
+        auto* point = getEntityAs<SketchPoint>(pointId);
+        if (!point) {
+            continue;
+        }
+        point->setPosition(startPos.x, startPos.y);
+    }
+    invalidateSolver();
+}
+
+SolveResult Sketch::solveWithGroupDrag(
+    const std::unordered_map<EntityID, Vec2d>& targetPositions) {
+    SolveResult result;
+    constexpr double rigidTargetTolerance = 1e-6;
+    auto enforceAtomicReject = [&](const std::string& fallbackMessage) {
+        restoreGroupDragStartPose();
+        result.success = false;
+        if (result.errorMessage.empty()) {
+            result.errorMessage = fallbackMessage;
+        }
+    };
+
+    if (!isDraggingGroup_) {
+        result.success = false;
+        result.errorMessage = "Group drag session not active";
+        return result;
+    }
+
+    if (activeGroupDragPoints_.empty()) {
+        result.success = false;
+        result.errorMessage = "No selected points in group drag";
+        return result;
+    }
+
+    std::optional<EntityID> anchorPointId;
+    for (const auto& [pointId, _] : targetPositions) {
+        if (activeGroupDragPoints_.find(pointId) != activeGroupDragPoints_.end() &&
+            groupDragStartPose_.find(pointId) != groupDragStartPose_.end()) {
+            anchorPointId = pointId;
+            break;
+        }
+    }
+
+    if (!anchorPointId.has_value()) {
+        result.success = false;
+        result.errorMessage = "No valid group drag anchor target";
+        return result;
+    }
+
+    const auto anchorTargetIt = targetPositions.find(*anchorPointId);
+    const auto anchorStartIt = groupDragStartPose_.find(*anchorPointId);
+    if (anchorTargetIt == targetPositions.end() || anchorStartIt == groupDragStartPose_.end()) {
+        result.success = false;
+        result.errorMessage = "Invalid group drag anchor";
+        return result;
+    }
+
+    const Vec2d delta{
+        .x = anchorTargetIt->second.x - anchorStartIt->second.x,
+        .y = anchorTargetIt->second.y - anchorStartIt->second.y,
+    };
+
+    std::unordered_map<EntityID, Vec2d> rigidTargets;
+    rigidTargets.reserve(activeGroupDragPoints_.size());
+    for (const auto& pointId : activeGroupDragPoints_) {
+        const auto startIt = groupDragStartPose_.find(pointId);
+        if (startIt == groupDragStartPose_.end()) {
+            result.success = false;
+            result.errorMessage = "Group drag start pose incomplete";
+            return result;
+        }
+        rigidTargets[pointId] = Vec2d{.x = startIt->second.x + delta.x, .y = startIt->second.y + delta.y};
+    }
+
+    if (constraints_.empty()) {
+        for (const auto& [pointId, rigidTarget] : rigidTargets) {
+            auto* point = getEntityAs<SketchPoint>(pointId);
+            if (!point) {
+                result.errorMessage = "Group drag point not found";
+                enforceAtomicReject("Group drag rejected");
+                return result;
+            }
+            point->setPosition(rigidTarget.x, rigidTarget.y);
+        }
+        result.success = true;
+        return result;
+    }
+
+    if (!solver_ || solverDirty_) {
+        rebuildSolver();
+    }
+
+    if (!solver_) {
+        result.success = false;
+        result.errorMessage = "Solver not available";
+        return result;
+    }
+
+    SolverResult solverResult = solver_->solveWithGroupDrag(rigidTargets);
+    result.success = solverResult.success;
+    result.iterations = solverResult.iterations;
+    result.residual = solverResult.residual;
+    result.conflictingConstraints = solverResult.conflictingConstraints;
+    result.errorMessage = solverResult.errorMessage;
+
+    if (result.success) {
+        for (const auto& [pointId, rigidTarget] : rigidTargets) {
+            const auto* point = getEntityAs<SketchPoint>(pointId);
+            if (!point) {
+                result.errorMessage = "Group drag point not found after solve";
+                enforceAtomicReject("Group drag rejected");
+                return result;
+            }
+
+            const Vec2d solvedPos{point->position().X(), point->position().Y()};
+            const double dx = std::abs(solvedPos.x - rigidTarget.x);
+            const double dy = std::abs(solvedPos.y - rigidTarget.y);
+            if (dx > rigidTargetTolerance || dy > rigidTargetTolerance) {
+                result.errorMessage = "Group drag rejected: rigid translation not achievable";
+                enforceAtomicReject("Group drag rejected");
+                return result;
+            }
+        }
+    } else {
+        enforceAtomicReject("Group drag rejected by constraints");
+    }
+
+    return result;
+}
+
+void Sketch::endGroupDrag() {
+    activeGroupDragPoints_.clear();
+    groupDragStartPose_.clear();
+    isDraggingGroup_ = false;
+}
+
 SolveResult Sketch::solveWithDrag(EntityID draggedPoint, const Vec2d& targetPos) {
     SolveResult result;
 
@@ -1027,28 +1187,6 @@ SolveResult Sketch::solveWithDrag(EntityID draggedPoint, const Vec2d& targetPos)
     result.residual = solverResult.residual;
     result.conflictingConstraints = solverResult.conflictingConstraints;
     result.errorMessage = solverResult.errorMessage;
-
-    // Treat drag as failed if solver converged but cannot place dragged point
-    // near the requested target due to competing constraints.
-    if (result.success) {
-        constexpr double kDragTargetTolerance = 1e-4;
-        const auto* dragged = getEntityAs<SketchPoint>(draggedPoint);
-        if (!dragged) {
-            result.success = false;
-            result.errorMessage = "Dragged point not found after solve";
-        } else {
-            const double dx = dragged->position().X() - targetPos.x;
-            const double dy = dragged->position().Y() - targetPos.y;
-            const double err = std::sqrt(dx * dx + dy * dy);
-            if (err > kDragTargetTolerance) {
-                solver_->revertSolution();
-                result.success = false;
-                if (result.errorMessage.empty()) {
-                    result.errorMessage = "Dragged point cannot reach target";
-                }
-            }
-        }
-    }
 
     if (isDraggingPoint_ && !result.success) {
         dragSessionHadFailure_ = true;

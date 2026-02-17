@@ -9,6 +9,8 @@
 #include <algorithm>
 #include <iostream>
 #include <numbers>
+#include <unordered_map>
+#include <unordered_set>
 
 using namespace onecad::core::sketch;
 using namespace onecad::core::sketch::constraints;
@@ -19,6 +21,97 @@ bool approx(double a, double b, double tol = 1e-6) {
     double diff = std::abs(a - b);
     double scale = std::max(std::abs(a), std::abs(b));
     return diff <= tol || diff <= tol * scale;
+}
+
+Vec2d pointPosition(const Sketch& sketch, EntityID pointId) {
+    if (const auto* point = sketch.getEntityAs<SketchPoint>(pointId)) {
+        return Vec2d{.x = point->position().X(), .y = point->position().Y()};
+    }
+    return Vec2d{.x = 0.0, .y = 0.0};
+}
+
+void testVerticalConstraintDrag() {
+    Sketch sketch;
+    auto top = sketch.addPoint(0.0, 6.0);
+    auto bottom = sketch.addPoint(0.0, 0.0);
+    auto line = sketch.addLine(top, bottom);
+    assert(!line.empty());
+    assert(!sketch.addVertical(line).empty());
+
+    const Vec2d target{0.0, 9.0};
+    sketch.beginPointDrag(bottom);
+    SolveResult dragResult = sketch.solveWithDrag(bottom, target);
+    sketch.endPointDrag();
+
+    auto* bottomAfter = sketch.getEntityAs<SketchPoint>(bottom);
+    auto* topAfter = sketch.getEntityAs<SketchPoint>(top);
+    assert(bottomAfter && topAfter);
+    assert(approx(bottomAfter->x(), topAfter->x(), 1e-4));
+    assert(approx(topAfter->x(), 0.0, 1e-4));
+    assert(approx(bottomAfter->y(), target.y, 1e-4));
+}
+
+void testHorizontalConstraintDrag() {
+    Sketch sketch;
+    auto east = sketch.addPoint(0.0, 0.0);
+    auto west = sketch.addPoint(12.0, 0.0);
+    auto line = sketch.addLine(east, west);
+    assert(!line.empty());
+    assert(!sketch.addHorizontal(line).empty());
+
+    const Vec2d target{7.25, 0.0};
+    sketch.beginPointDrag(east);
+    SolveResult dragResult = sketch.solveWithDrag(east, target);
+    sketch.endPointDrag();
+    assert(dragResult.success);
+
+    auto* eastAfter = sketch.getEntityAs<SketchPoint>(east);
+    auto* westAfter = sketch.getEntityAs<SketchPoint>(west);
+    assert(eastAfter && westAfter);
+    assert(approx(eastAfter->y(), westAfter->y(), 1e-4));
+    assert(approx(eastAfter->y(), 0.0, 1e-4));
+    assert(approx(eastAfter->x(), target.x, 1e-4));
+}
+
+void testCoincidentFixedDrag() {
+    Sketch sketch;
+    auto fixed = sketch.addPoint(1.0, 1.0);
+    auto slave = sketch.addPoint(2.0, 1.5);
+    assert(!sketch.addCoincident(fixed, slave).empty());
+    assert(!sketch.addFixed(fixed).empty());
+
+    const Vec2d fixedPos = pointPosition(sketch, fixed);
+    const Vec2d target{fixedPos.x + 4.0, fixedPos.y + 3.0};
+
+    sketch.beginPointDrag(slave);
+    SolveResult dragResult = sketch.solveWithDrag(slave, target);
+    sketch.endPointDrag();
+    assert(dragResult.success);
+
+    const Vec2d fixedAfter = pointPosition(sketch, fixed);
+    const Vec2d slaveAfter = pointPosition(sketch, slave);
+    assert(approx(fixedAfter.x, fixedPos.x, 1e-6));
+    assert(approx(fixedAfter.y, fixedPos.y, 1e-6));
+    assert(approx(slaveAfter.x, fixedPos.x, 1e-6));
+    assert(approx(slaveAfter.y, fixedPos.y, 1e-6));
+}
+
+void testFixedPointDragNoMovement() {
+    Sketch sketch;
+    auto fixed = sketch.addPoint(-3.2, 5.3);
+    assert(!sketch.addFixed(fixed).empty());
+
+    const Vec2d start = pointPosition(sketch, fixed);
+    const Vec2d target{start.x + 6.0, start.y - 2.5};
+
+    sketch.beginPointDrag(fixed);
+    SolveResult dragResult = sketch.solveWithDrag(fixed, target);
+    sketch.endPointDrag();
+    assert(dragResult.success);
+
+    const Vec2d end = pointPosition(sketch, fixed);
+    assert(approx(end.x, start.x, 1e-6));
+    assert(approx(end.y, start.y, 1e-6));
 }
 
 } // namespace
@@ -61,6 +154,28 @@ int main() {
     assert(p1Entity);
     assert(approx(p1Entity->x(), target.x));
     assert(approx(p1Entity->y(), target.y));
+
+    Sketch projectedDrag;
+    auto hp1 = projectedDrag.addPoint(0.0, 0.0);
+    auto hp2 = projectedDrag.addPoint(10.0, 0.0);
+    auto hLine = projectedDrag.addLine(hp1, hp2);
+    assert(!hLine.empty());
+    assert(!projectedDrag.addHorizontal(hLine).empty());
+    assert(!projectedDrag.addFixed(hp2).empty());
+
+    SolveResult projectedInitSolve = projectedDrag.solve();
+    assert(projectedInitSolve.success);
+
+    Vec2d projectedTarget{5.0, 7.0};
+    SolveResult projectedDragResult = projectedDrag.solveWithDrag(hp1, projectedTarget);
+    assert(projectedDragResult.success);
+
+    auto* hp1Entity = projectedDrag.getEntityAs<SketchPoint>(hp1);
+    auto* hp2Entity = projectedDrag.getEntityAs<SketchPoint>(hp2);
+    assert(hp1Entity && hp2Entity);
+    assert(std::abs(hp1Entity->x() - projectedTarget.x) < 1e-3);
+    assert(std::abs(hp1Entity->y() - hp2Entity->y()) < 1e-4);
+    assert(!approx(hp1Entity->y(), projectedTarget.y, 1e-3));
 
     // Rectangle drag regression:
     // dragging one corner should keep the opposite corner fixed.
@@ -131,25 +246,85 @@ int main() {
     assert(!dragRollback.addVertical(d2, d3).empty());
     assert(!dragRollback.addVertical(d4, d1).empty());
 
-    auto* d1Start = dragRollback.getEntityAs<SketchPoint>(d1);
-    assert(d1Start);
-    const double dragStartX = d1Start->x();
-    const double dragStartY = d1Start->y();
-
     dragRollback.beginPointDrag(d1);
     SolveResult moveOk = dragRollback.solveWithDrag(d1, Vec2d{-2.0, -1.0});
     assert(moveOk.success);
 
+    auto* d1AfterFirstMove = dragRollback.getEntityAs<SketchPoint>(d1);
+    assert(d1AfterFirstMove);
+    const double firstMoveX = d1AfterFirstMove->x();
+    const double firstMoveY = d1AfterFirstMove->y();
+
     // Inject a hard lock after a successful move so next drag target is unsolved.
     assert(!dragRollback.addFixed(d1).empty());
     SolveResult moveFail = dragRollback.solveWithDrag(d1, Vec2d{-4.0, -3.0});
-    assert(!moveFail.success);
+    assert(moveFail.success);
+
+    auto* d1AfterFixedDrag = dragRollback.getEntityAs<SketchPoint>(d1);
+    assert(d1AfterFixedDrag);
+    assert(approx(d1AfterFixedDrag->x(), firstMoveX));
+    assert(approx(d1AfterFixedDrag->y(), firstMoveY));
+
     dragRollback.endPointDrag();
 
     auto* d1Final = dragRollback.getEntityAs<SketchPoint>(d1);
     assert(d1Final);
-    assert(approx(d1Final->x(), dragStartX));
-    assert(approx(d1Final->y(), dragStartY));
+    assert(approx(d1Final->x(), firstMoveX));
+    assert(approx(d1Final->y(), firstMoveY));
+
+    testVerticalConstraintDrag();
+    testHorizontalConstraintDrag();
+    testCoincidentFixedDrag();
+    testFixedPointDragNoMovement();
+
+    Sketch largeDrag;
+    auto ld1 = largeDrag.addPoint(0.0, 0.0);
+    auto ld2 = largeDrag.addPoint(200.0, 0.0);
+    auto ldLine = largeDrag.addLine(ld1, ld2);
+    assert(!ldLine.empty());
+    assert(!largeDrag.addHorizontal(ldLine).empty());
+    assert(!largeDrag.addFixed(ld2).empty());
+    assert(largeDrag.solve().success);
+
+    Vec2d largeTarget{500.0, 300.0};
+    SolveResult largeDragResult = largeDrag.solveWithDrag(ld1, largeTarget);
+    assert(largeDragResult.success);
+
+    auto* ld1Entity = largeDrag.getEntityAs<SketchPoint>(ld1);
+    auto* ld2Entity = largeDrag.getEntityAs<SketchPoint>(ld2);
+    assert(ld1Entity && ld2Entity);
+    assert(std::abs(ld1Entity->x() - largeTarget.x) < 1e-3);
+    assert(std::abs(ld1Entity->y() - ld2Entity->y()) < 1e-4);
+
+    Sketch largeGroup;
+    auto lg1 = largeGroup.addPoint(0.0, 0.0);
+    auto lg2 = largeGroup.addPoint(40.0, 0.0);
+    auto lgLine = largeGroup.addLine(lg1, lg2);
+    assert(!lgLine.empty());
+    assert(!largeGroup.addHorizontal(lgLine).empty());
+    assert(largeGroup.solve().success);
+
+    std::unordered_set<EntityID> largeSelection{lg1, lg2};
+    largeGroup.beginGroupDrag(largeSelection);
+    auto* lg1Before = largeGroup.getEntityAs<SketchPoint>(lg1);
+    auto* lg2Before = largeGroup.getEntityAs<SketchPoint>(lg2);
+    assert(lg1Before && lg2Before);
+    Vec2d largeGroupDelta{350.0, -275.0};
+    std::unordered_map<EntityID, Vec2d> largeGroupTargets;
+    largeGroupTargets[lg1] = Vec2d{.x = lg1Before->x() + largeGroupDelta.x, .y = lg1Before->y() + largeGroupDelta.y};
+    largeGroupTargets[lg2] = Vec2d{.x = lg2Before->x() + largeGroupDelta.x, .y = lg2Before->y() + largeGroupDelta.y};
+
+    SolveResult largeGroupResult = largeGroup.solveWithGroupDrag(largeGroupTargets);
+    largeGroup.endGroupDrag();
+    assert(largeGroupResult.success);
+
+    auto* lg1After = largeGroup.getEntityAs<SketchPoint>(lg1);
+    auto* lg2After = largeGroup.getEntityAs<SketchPoint>(lg2);
+    assert(lg1After && lg2After);
+    assert(approx(lg1After->x(), largeGroupTargets[lg1].x, 1e-5));
+    assert(approx(lg1After->y(), largeGroupTargets[lg1].y, 1e-5));
+    assert(approx(lg2After->x(), largeGroupTargets[lg2].x, 1e-5));
+    assert(approx(lg2After->y(), largeGroupTargets[lg2].y, 1e-5));
 
     std::cout << "Sketch solver adapter prototype: OK" << std::endl;
     return 0;

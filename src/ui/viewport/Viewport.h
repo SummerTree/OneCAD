@@ -23,6 +23,7 @@
 #include <memory>
 #include <string>
 #include <optional>
+#include <unordered_map>
 #include <unordered_set>
 #include <vector>
 
@@ -31,6 +32,7 @@ namespace app {
     class Document;
     namespace commands {
         class CommandProcessor;
+        class SketchDragGestureCommand;
     }
     namespace selection {
         class SelectionManager;
@@ -268,9 +270,12 @@ private:
     QSize viewportSize() const;
     void syncModelMeshes();
     std::string resolveActiveSketchId() const;
+    std::unordered_set<core::sketch::EntityID> selectedSketchPointIds() const;
     void updateSketchSelectionFromManager();
     void updateSketchHoverFromManager();
     void syncSuppressedConstraintMarkers();
+    void beginSketchDragGestureCapture();
+    void endSketchDragGestureCapture(bool commit);
     app::selection::PickResult buildSketchPickResult(const QPoint& screenPos) const;
     QStringList buildDeepSelectLabels(const std::vector<app::selection::SelectionItem>& candidates) const;
     void applyPointDragSnapPreview(const core::sketch::tools::SnapInputResolution& snapResolution);
@@ -343,21 +348,33 @@ private:
     // Sketch interaction state (point drag / move sketch / region move)
     enum class SketchInteractionState {
         Idle,
-        PendingPointDrag,
-        PointDragging,
-        PendingSketchMove,
-        SketchMoving,
-        PendingRegionMove,
-        RegionMoving
+        PendingPointSingleDrag,
+        PointSingleDragging,
+        PendingPointGroupDrag,
+        PointGroupDragging,
+        SketchMoving
     };
+    enum class SketchDragIntent {
+        None,
+        PointSingle,
+        PointGroup,
+        SelectionBox
+    };
+    void setSketchInteractionState(SketchInteractionState newState, const char* reason);
+    void setSketchDragIntent(SketchDragIntent newIntent, const char* reason);
     static constexpr int kPointDragThresholdPixels = 4;
     SketchInteractionState m_sketchInteractionState = SketchInteractionState::Idle;
+    SketchDragIntent m_sketchDragIntent = SketchDragIntent::None;
     QPoint m_sketchPressPos;
     std::string m_pointDragCandidateId;
     std::string m_selectedRegionId;
-    std::string m_regionMoveCandidateId;
+    std::unique_ptr<app::commands::SketchDragGestureCommand> m_sketchDragGestureCommand;
+    bool m_sketchDragGestureCaptureEnabled = true;
     bool m_moveSketchModeActive = false;
     core::sketch::Vec2d m_moveSketchLastSketchPos{0.0, 0.0};
+    std::unordered_set<core::sketch::EntityID> m_groupDragPointIds;
+    std::unordered_map<core::sketch::EntityID, core::sketch::Vec2d> m_groupDragStartPositions;
+    bool m_groupDragFailureFeedbackShown = false;
     bool m_pointDragFailureFeedbackShown = false;
     std::function<void(bool)> m_moveSketchModeChangedCallback;
 

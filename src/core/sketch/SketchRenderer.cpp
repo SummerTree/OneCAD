@@ -642,7 +642,8 @@ public:
                    const Vec2d& snapGuideOrigin,
                    bool snapHasGuide,
                    const std::vector<Vec2d>& anchorIndicators,
-                   const std::vector<SketchRenderer::GuideLineInfo>& activeGuides);
+                   const std::vector<SketchRenderer::GuideLineInfo>& activeGuides,
+                   const std::vector<SketchRenderer::GuideLineInfo>& dragGuides);
     void render(const QMatrix4x4& mvp, const SketchRenderStyle& style);
     void renderPoints(const QMatrix4x4& mvp);
     void renderPreview(const QMatrix4x4& mvp, const std::vector<Vec2d>& vertices,
@@ -856,7 +857,8 @@ void SketchRendererImpl::buildVBOs(
     const Vec2d& snapGuideOrigin,
     bool snapHasGuide,
     const std::vector<Vec2d>& anchorIndicators,
-    const std::vector<SketchRenderer::GuideLineInfo>& activeGuides) {
+    const std::vector<SketchRenderer::GuideLineInfo>& activeGuides,
+    const std::vector<SketchRenderer::GuideLineInfo>& dragGuides) {
 
     // Region data: pos(2) + color(4) = 6 floats per vertex
     std::vector<float> regionData;
@@ -1005,13 +1007,85 @@ void SketchRendererImpl::buildVBOs(
         pointData.push_back(style.constraintIconSize);
     }
 
+    const double guideDash = 8.0 * std::max(pixelScale, 1e-9);
+    const double guideGap = 6.0 * std::max(pixelScale, 1e-9);
+    const Vec2d vpMin = viewport.getMin();
+    const Vec2d vpMax = viewport.getMax();
+    const double viewportDiag = std::hypot(vpMax.x - vpMin.x, vpMax.y - vpMin.y);
+    const double pointGuideMaxLength = 0.35 * viewportDiag;
+
+    auto clipGuideRayToViewport = [&](const Vec2d& origin, const Vec2d& target,
+                                      Vec2d& farStart, Vec2d& farEnd) {
+        const double dx = target.x - origin.x;
+        const double dy = target.y - origin.y;
+        const double len = std::sqrt(dx * dx + dy * dy);
+        if (len < 1e-6) {
+            return false;
+        }
+
+        const double ndx = dx / len;
+        const double ndy = dy / len;
+        double tMin = -std::numeric_limits<double>::infinity();
+        double tMax = std::numeric_limits<double>::infinity();
+
+        if (std::abs(ndx) > 1e-12) {
+            double t1 = (vpMin.x - origin.x) / ndx;
+            double t2 = (vpMax.x - origin.x) / ndx;
+            if (t1 > t2) std::swap(t1, t2);
+            tMin = std::max(tMin, t1);
+            tMax = std::min(tMax, t2);
+        } else if (origin.x < vpMin.x || origin.x > vpMax.x) {
+            return false;
+        }
+
+        if (std::abs(ndy) > 1e-12) {
+            double t1 = (vpMin.y - origin.y) / ndy;
+            double t2 = (vpMax.y - origin.y) / ndy;
+            if (t1 > t2) std::swap(t1, t2);
+            tMin = std::max(tMin, t1);
+            tMax = std::min(tMax, t2);
+        } else if (origin.y < vpMin.y || origin.y > vpMax.y) {
+            return false;
+        }
+
+        const double rayStartT = std::max(0.0, tMin);
+        if (rayStartT >= tMax) {
+            return false;
+        }
+
+        farStart = {origin.x + rayStartT * ndx, origin.y + rayStartT * ndy};
+        farEnd = {origin.x + tMax * ndx, origin.y + tMax * ndy};
+        return true;
+    };
+
+    auto clampGuideLength = [&](Vec2d& start, Vec2d& end, bool clampForPointSnap) {
+        if (!clampForPointSnap || pointGuideMaxLength <= 1e-9) {
+            return;
+        }
+        const double dx = end.x - start.x;
+        const double dy = end.y - start.y;
+        const double len = std::sqrt((dx * dx) + (dy * dy));
+        if (len <= pointGuideMaxLength || len <= 1e-9) {
+            return;
+        }
+        const double scale = pointGuideMaxLength / len;
+        end = {start.x + dx * scale, start.y + dy * scale};
+    };
+
+    if (!dragGuides.empty()) {
+        constexpr Vec3d kDragGuideColor{0.24, 0.29, 0.36};
+        for (const auto& guide : dragGuides) {
+            Vec2d farStart;
+            Vec2d farEnd;
+            if (!clipGuideRayToViewport(guide.origin, guide.target, farStart, farEnd)) {
+                continue;
+            }
+            appendDashedPolyline(guideLineData, {farStart, farEnd}, kDragGuideColor,
+                                 guideDash, guideGap);
+        }
+    }
+
     if (snapActive) {
-        const double guideDash = 8.0 * std::max(pixelScale, 1e-9);
-        const double guideGap = 6.0 * std::max(pixelScale, 1e-9);
-        const Vec2d vpMin = viewport.getMin();
-        const Vec2d vpMax = viewport.getMax();
-        const double viewportDiag = std::hypot(vpMax.x - vpMin.x, vpMax.y - vpMin.y);
-        const double pointGuideMaxLength = 0.35 * viewportDiag;
 
         constexpr Vec3d kGuideColor{0.58, 0.45, 0.78};
         constexpr Vec3d kGuideColorFaint{0.17, 0.14, 0.23};
@@ -1026,64 +1100,6 @@ void SketchRendererImpl::buildVBOs(
                     kGuideColorFaint.z * pointGuideZoomFade}
             : kGuideColor;
 
-        auto clipGuideRayToViewport = [&](const Vec2d& origin, const Vec2d& target,
-                                          Vec2d& farStart, Vec2d& farEnd) {
-            const double dx = target.x - origin.x;
-            const double dy = target.y - origin.y;
-            const double len = std::sqrt(dx * dx + dy * dy);
-            if (len < 1e-6) {
-                return false;
-            }
-
-            const double ndx = dx / len;
-            const double ndy = dy / len;
-            double tMin = -std::numeric_limits<double>::infinity();
-            double tMax = std::numeric_limits<double>::infinity();
-
-            if (std::abs(ndx) > 1e-12) {
-                double t1 = (vpMin.x - origin.x) / ndx;
-                double t2 = (vpMax.x - origin.x) / ndx;
-                if (t1 > t2) std::swap(t1, t2);
-                tMin = std::max(tMin, t1);
-                tMax = std::min(tMax, t2);
-            } else if (origin.x < vpMin.x || origin.x > vpMax.x) {
-                return false;
-            }
-
-            if (std::abs(ndy) > 1e-12) {
-                double t1 = (vpMin.y - origin.y) / ndy;
-                double t2 = (vpMax.y - origin.y) / ndy;
-                if (t1 > t2) std::swap(t1, t2);
-                tMin = std::max(tMin, t1);
-                tMax = std::min(tMax, t2);
-            } else if (origin.y < vpMin.y || origin.y > vpMax.y) {
-                return false;
-            }
-
-            const double rayStartT = std::max(0.0, tMin);
-            if (rayStartT >= tMax) {
-                return false;
-            }
-
-            farStart = {origin.x + rayStartT * ndx, origin.y + rayStartT * ndy};
-            farEnd = {origin.x + tMax * ndx, origin.y + tMax * ndy};
-            return true;
-        };
-
-        auto clampGuideLength = [&](Vec2d& start, Vec2d& end) {
-            if (!pointSnap || pointGuideMaxLength <= 1e-9) {
-                return;
-            }
-            const double dx = end.x - start.x;
-            const double dy = end.y - start.y;
-            const double len = std::sqrt((dx * dx) + (dy * dy));
-            if (len <= pointGuideMaxLength || len <= 1e-9) {
-                return;
-            }
-            const double scale = pointGuideMaxLength / len;
-            end = {start.x + dx * scale, start.y + dy * scale};
-        };
-
         // Guide cardinality (0/1/2) is resolved by SnapPreviewResolver policy.
         if (!activeGuides.empty()) {
             int count = 0;
@@ -1092,7 +1108,7 @@ void SketchRendererImpl::buildVBOs(
                 Vec2d farStart;
                 Vec2d farEnd;
                 if (!clipGuideRayToViewport(guide.origin, guide.target, farStart, farEnd)) continue;
-                clampGuideLength(farStart, farEnd);
+                clampGuideLength(farStart, farEnd, pointSnap);
                 appendDashedPolyline(guideLineData, {farStart, farEnd}, guideColor,
                                      guideDash, guideGap);
                 count++;
@@ -1101,7 +1117,7 @@ void SketchRendererImpl::buildVBOs(
             Vec2d farStart;
             Vec2d farEnd;
             if (clipGuideRayToViewport(snapGuideOrigin, snapPos, farStart, farEnd)) {
-                clampGuideLength(farStart, farEnd);
+                clampGuideLength(farStart, farEnd, pointSnap);
                 appendDashedPolyline(guideLineData, {farStart, farEnd}, guideColor, guideDash,
                                      guideGap);
             }
@@ -1897,6 +1913,19 @@ void SketchRenderer::setActiveGuides(const std::vector<GuideLineInfo>& guides) {
     vboDirty_ = true;
 }
 
+void SketchRenderer::setDragGuides(const std::vector<GuideLineInfo>& guides) {
+    dragGuides_ = guides;
+    vboDirty_ = true;
+}
+
+void SketchRenderer::clearDragGuides() {
+    if (dragGuides_.empty()) {
+        return;
+    }
+    dragGuides_.clear();
+    vboDirty_ = true;
+}
+
 void SketchRenderer::showSnapIndicator(const Vec2d& pos, SnapType type,
                                        const Vec2d& guideOrigin,
                                        bool hasGuide,
@@ -2190,7 +2219,8 @@ void SketchRenderer::buildVBOs() {
                      selectedRegions_, hoverRegion_, hoverEntity_,
                      viewport_, pixelScale_, visibleConstraints,
                      ghostConstraints_, snapActive, snapType, snapPos, snapSize, snapColor,
-                     snapGuideOrigin, snapHasGuide, anchorIndicators_, activeGuides_);
+                     snapGuideOrigin, snapHasGuide, anchorIndicators_, activeGuides_,
+                     dragGuides_);
     vboDirty_ = false;
 }
 

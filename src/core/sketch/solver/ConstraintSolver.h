@@ -254,6 +254,8 @@ public:
     SolverResult solveWithDrag(EntityID pointId, const Vec2d& targetPos,
                                const std::unordered_set<EntityID>& pointIdsToFix = {});
 
+    SolverResult solveWithGroupDrag(const std::unordered_map<EntityID, Vec2d>& targetPositions);
+
     /**
      * @brief Apply solution from last successful solve
      *
@@ -328,6 +330,17 @@ public:
     void cancelSolve();
 
 private:
+    struct DragSolveSnapshot {
+        std::unordered_map<EntityID, Vec2d> pointPositions;
+        struct ArcState {
+            double radius = 0.0;
+            double startAngle = 0.0;
+            double endAngle = 0.0;
+        };
+        std::unordered_map<EntityID, ArcState> arcStates;
+        std::unordered_map<EntityID, double> circleRadii;
+    };
+
     SolverConfig config_;
 
     /// PlaneGCS system instance
@@ -386,6 +399,12 @@ private:
     bool translateConstraint(SketchConstraint* constraint, int tagId);
 
     void configureSystem();
+
+    DragSolveSnapshot captureDragSolveSnapshot() const;
+    void restoreDragSolveSnapshot(const DragSolveSnapshot& snapshot);
+    SolverResult solveWithDragSingleStep(EntityID pointId, const Vec2d& targetPos,
+                                         const std::unordered_set<EntityID>& pointIdsToFix);
+    SolverResult solveWithGroupDragSingleStep(const std::unordered_map<EntityID, Vec2d>& targetPositions);
 };
 
 // ========== DOF Calculation Table ==========

@@ -411,6 +411,22 @@ public:
     void endPointDrag();
 
     /**
+     * @brief Start a group-drag session for a selected point set.
+     */
+    void beginGroupDrag(const std::unordered_set<EntityID>& selectedPointIds);
+
+    /**
+     * @brief Solve constraints for an active group-drag session.
+     * @param targetPositions Target positions keyed by dragged point IDs.
+     */
+    SolveResult solveWithGroupDrag(const std::unordered_map<EntityID, Vec2d>& targetPositions);
+
+    /**
+     * @brief End active group-drag session.
+     */
+    void endGroupDrag();
+
+    /**
      * @brief Get free direction(s) for a point for constrained drag (e.g. Shift-drag).
      * @param pointId Point entity ID (must be a SketchPoint).
      * @return Unit vectors along which the point can move; empty = fixed, 1 = line, 2 = plane.
@@ -573,6 +589,13 @@ private:
     bool isDraggingPoint_ = false;
     std::unordered_map<EntityID, Vec2d> dragStartPositions_;
     bool dragSessionHadFailure_ = false;
+
+    // Active group-drag session scaffold state
+    std::unordered_set<EntityID> activeGroupDragPoints_;
+    std::unordered_map<EntityID, Vec2d> groupDragStartPose_;
+    bool isDraggingGroup_ = false;
+
+    void restoreGroupDragStartPose();
 
     /**
      * @brief Mark solver as needing rebuild
