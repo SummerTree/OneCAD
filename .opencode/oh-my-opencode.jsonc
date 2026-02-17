@@ -44,7 +44,7 @@
     // Geometry/kernel work
     "geometry-kernel": {
       "model": "openai/gpt-5.3-codex",
-      "variant": "high",
+      "variant": "xhigh",
       "temperature": 0.1,
       "prompt_append": "Geometry/kernel specialist:\n- OCCT BRep (TopoDS_*, BRepBuilderAPI_*, BRepAlgoAPI_*)\n- ElementMap topological naming (src/kernel/elementmap/)\n- Shape evolution (Modified/Generated/Deleted)\n- Boolean operations correctness\n- Always null-check Handle<> objects"
     },
@@ -52,7 +52,7 @@
     // Sketch engine work
     "sketching": {
       "model": "openai/gpt-5.3-codex",
-      "variant": "high",
+      "variant": "xhigh",
       "temperature": 0.1,
       "prompt_append": "Sketching specialist:\n- PlaneGCS solver (src/core/sketch/solver/ConstraintSolver.cpp 1014 LOC)\n- 15 constraint types (src/core/sketch/constraints/Constraints.h)\n- SnapManager (2mm radius, priority: Vertex>Endpoint>Midpoint>Center>Quadrant>Intersection>Grid)\n- AutoConstrainer (±5° for H/V, 2mm for coincident)\n- CRITICAL: Non-standard SketchPlane::XY() mapping"
     },
@@ -60,6 +60,7 @@
     // Rendering/viewport work
     "rendering": {
       "model": "openai/gpt-5.3-codex",
+      "variant": "high",
       "temperature": 0.2,
       "prompt_append": "Rendering specialist:\n- OpenGL 4.1 Core Profile\n- Camera3D orbit/pan/zoom (missing inertia = known)\n- Grid3D (fixed 10mm, shader-based)\n- SketchRenderer (1903 LOC) + BodyRenderer (727 LOC)\n- Viewport picking and selection\n- Ensure GL state bind/unbind pairs"
     },

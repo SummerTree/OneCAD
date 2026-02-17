@@ -18,6 +18,9 @@ CTestTestfile.cmake
 .ninja_deps
 .ninja_log
 compile_commands.json
+.cache/
+*.cmake
+
 
 # IDE
 .vscode/
