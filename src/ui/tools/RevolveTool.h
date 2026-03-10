@@ -12,9 +12,11 @@
 #include "../../app/document/OperationRecord.h" // For BooleanMode
 
 #include <TopoDS_Face.hxx>
+#include <TopoDS_Shape.hxx>
 #include <gp_Ax1.hxx>
 #include <gp_Pnt.hxx>
 #include <string>
+#include <vector>
 
 namespace onecad::app {
 class Document;
@@ -79,6 +81,10 @@ private:
     std::string targetBodyId_; // For boolean ops
     
     TopoDS_Face baseFace_;
+    TopoDS_Shape baseProfileShape_;
+    std::vector<TopoDS_Face> basePatchFaces_;
+    std::vector<std::string> basePatchFaceIds_;
+    std::string basePatchLeaderFaceId_;
     gp_Ax1 axis_; // Revolution axis
     gp_Pnt baseCenter_; // For indicator origin
     bool axisValid_ = false;

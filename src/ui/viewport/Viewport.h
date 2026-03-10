@@ -152,6 +152,7 @@ signals:
     void statusMessageRequested(const QString& message);
     void constraintDeleteRequested(const QString& constraintId);
     void constraintSuppressRequested(const QString& constraintId);
+    void fileDropped(const QString& filePath);
 
 public slots:
     void beginPlaneSelection();
@@ -225,6 +226,11 @@ protected:
     void keyPressEvent(QKeyEvent* event) override;
     void leaveEvent(QEvent* event) override;
 
+    // Drag-and-drop
+    void dragEnterEvent(QDragEnterEvent* event) override;
+    void dragMoveEvent(QDragMoveEvent* event) override;
+    void dropEvent(QDropEvent* event) override;
+
     // Touch/gesture events (for trackpad)
     bool event(QEvent* event) override;
 
@@ -241,10 +247,18 @@ private:
 
     void updateModelSelectionFilter();
     void handleModelSelectionChanged();
+    bool buildScreenRay(const QPointF& screenPos,
+                        QVector3D* outOrigin,
+                        QVector3D* outDirection) const;
     core::sketch::Vec2d screenToSketchPlane(const QPoint& screenPos,
                                             const core::sketch::SketchPlane& plane) const;
-    app::selection::PickResult buildReferenceSketchPickResult(const QPoint& screenPos);
+    app::selection::PickResult buildModelSketchPickResult(const QPoint& screenPos,
+                                                          const std::string& sketchId,
+                                                          core::sketch::Sketch* sketch);
     app::selection::PickResult buildModelPickResult(const QPoint& screenPos);
+    std::vector<std::string> visibleModelSketchIds() const;
+    bool hasVisibleModelSketches() const;
+    void applySketchOverlayStateForSketch(const std::string& sketchId);
     void updateSketchRenderingState();
     void handlePan(float dx, float dy);
     void handleOrbit(float dx, float dy);
@@ -377,6 +391,11 @@ private:
     bool m_groupDragFailureFeedbackShown = false;
     bool m_pointDragFailureFeedbackShown = false;
     std::function<void(bool)> m_moveSketchModeChangedCallback;
+
+    // Box selection
+    bool m_boxSelectionActive = false;
+    QPoint m_boxSelectionStart;
+    QPoint m_boxSelectionEnd;
 
     // Document for rendering all sketches
     app::Document* m_document = nullptr;

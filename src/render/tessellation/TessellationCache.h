@@ -9,7 +9,9 @@
 #include <TopoDS_Edge.hxx>
 #include <TopTools_ShapeMapHasher.hxx>
 
+#include <array>
 #include <string>
+#include <unordered_map>
 #include <unordered_set>
 
 namespace onecad::render {
@@ -30,7 +32,8 @@ public:
 
     SceneMeshStore::Mesh buildMesh(const std::string& bodyId,
                                    const TopoDS_Shape& shape,
-                                   kernel::elementmap::ElementMap& elementMap) const;
+                                   kernel::elementmap::ElementMap& elementMap,
+                                   const std::unordered_map<std::string, std::array<float, 4>>* faceColors = nullptr) const;
 
 private:
     using VisibleEdgeSet = std::unordered_set<TopoDS_Edge, TopTools_ShapeMapHasher, TopTools_ShapeMapHasher>;

@@ -62,7 +62,7 @@ int main() {
     op.opId = QUuid::createUuid().toString(QUuid::WithoutBraces).toStdString();
     op.type = onecad::app::OperationType::Extrude;
     op.input = onecad::app::SketchRegionRef{sketchId, regionId};
-    op.params = onecad::app::ExtrudeParams{12.0, 0.0, onecad::app::BooleanMode::NewBody};
+    op.params = onecad::app::ExtrudeParams{12.0, 0.0, onecad::app::ExtrudeMode::Blind, onecad::app::BooleanMode::NewBody};
     const std::string bodyId = QUuid::createUuid().toString(QUuid::WithoutBraces).toStdString();
     op.resultBodyIds.push_back(bodyId);
     source.addOperation(op);

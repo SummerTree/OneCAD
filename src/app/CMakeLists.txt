@@ -1,6 +1,8 @@
 add_library(onecad_app STATIC
     Application.cpp
+    AutosaveManager.cpp
     Logging.cpp
+    PlatformPaths.cpp
     commands/AddBodyCommand.cpp
     commands/AddOperationCommand.cpp
     commands/DeleteBodyCommand.cpp
@@ -13,6 +15,7 @@ add_library(onecad_app STATIC
     commands/SketchDragGestureCommand.cpp
     commands/ToggleVisibilityCommand.cpp
     commands/UpdateOperationParamsCommand.cpp
+    commands/ImportStepCommand.cpp
     commands/CommandProcessor.cpp
     commands/RollbackCommand.cpp
     document/Document.cpp

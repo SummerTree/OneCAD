@@ -20,6 +20,9 @@ set(IO_SOURCES
     SketchIO.cpp
     ElementMapIO.cpp
     HistoryIO.cpp
+    MigrationRegistry.cpp
+    mesh/StlExporter.cpp
+    mesh/ObjExporter.cpp
     step/StepExporter.cpp
     step/StepImporter.cpp
 )
@@ -35,6 +38,9 @@ set(IO_HEADERS
     SketchIO.h
     ElementMapIO.h
     HistoryIO.h
+    MigrationRegistry.h
+    mesh/StlExporter.h
+    mesh/ObjExporter.h
     step/StepExporter.h
     step/StepImporter.h
 )

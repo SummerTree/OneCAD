@@ -164,6 +164,7 @@ void Document::clear() {
     bodyNames_.clear();
     bodyVisibilityCache_.clear();
     baseBodyIds_.clear();
+    bodyFaceColors_.clear();
     operations_.clear();
     suppressedOperations_.clear();
     operationFailures_.clear();
@@ -492,6 +493,7 @@ bool Document::removeBody(const std::string& id) {
 
     bodyVisibilityCache_.erase(id);
     baseBodyIds_.erase(id);
+    bodyFaceColors_.erase(id);
     bodies_.erase(it);
     bodyNames_.erase(id);
     if (sceneMeshStore_) {
@@ -914,13 +916,34 @@ void Document::registerBodyElements(const std::string& bodyId, const TopoDS_Shap
     }
 }
 
+void Document::setBodyFaceColors(const std::string& bodyId, const FaceColorMap& colors) {
+    bodyFaceColors_[bodyId] = colors;
+}
+
+const Document::FaceColorMap* Document::getBodyFaceColors(const std::string& bodyId) const {
+    auto it = bodyFaceColors_.find(bodyId);
+    if (it == bodyFaceColors_.end()) {
+        return nullptr;
+    }
+    return &it->second;
+}
+
+void Document::clearBodyFaceColors(const std::string& bodyId) {
+    bodyFaceColors_.erase(bodyId);
+}
+
+bool Document::hasBodyFaceColors(const std::string& bodyId) const {
+    return bodyFaceColors_.find(bodyId) != bodyFaceColors_.end();
+}
+
 void Document::updateBodyMesh(const std::string& bodyId,
                               const TopoDS_Shape& shape,
                               bool emitSignal) {
     if (!sceneMeshStore_ || !tessellationCache_) {
         return;
     }
-    render::SceneMeshStore::Mesh mesh = tessellationCache_->buildMesh(bodyId, shape, elementMap_);
+    const FaceColorMap* colors = getBodyFaceColors(bodyId);
+    render::SceneMeshStore::Mesh mesh = tessellationCache_->buildMesh(bodyId, shape, elementMap_, colors);
     sceneMeshStore_->setBodyMesh(bodyId, std::move(mesh));
     if (emitSignal) {
         emit bodyUpdated(QString::fromStdString(bodyId));

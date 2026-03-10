@@ -11,6 +11,7 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <array>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
@@ -36,6 +37,8 @@ class Document : public QObject {
     Q_OBJECT
 
 public:
+    using FaceColorMap = std::unordered_map<std::string, std::array<float, 4>>;
+
     explicit Document(QObject* parent = nullptr);
     ~Document() override;
 
@@ -120,6 +123,12 @@ public:
     bool isBaseBody(const std::string& id) const;
     const std::unordered_set<std::string>& baseBodyIds() const { return baseBodyIds_; }
 
+    // Per-face color storage (for imported STEP bodies)
+    void setBodyFaceColors(const std::string& bodyId, const FaceColorMap& colors);
+    const FaceColorMap* getBodyFaceColors(const std::string& bodyId) const;
+    void clearBodyFaceColors(const std::string& bodyId);
+    bool hasBodyFaceColors(const std::string& bodyId) const;
+
     void addOperation(const OperationRecord& record);
     bool insertOperation(std::size_t index, const OperationRecord& record);
     bool updateOperationParams(const std::string& opId, const OperationParams& params);
@@ -202,6 +211,7 @@ private:
     std::unordered_map<std::string, std::string> bodyNames_;  // id -> display name
     std::unordered_map<std::string, bool> bodyVisibilityCache_;
     std::unordered_set<std::string> baseBodyIds_;
+    std::unordered_map<std::string, FaceColorMap> bodyFaceColors_;
 
     // Isolation state (not persisted)
     std::string isolatedItemId_;

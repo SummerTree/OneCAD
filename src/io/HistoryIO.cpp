@@ -30,6 +30,11 @@ QString operationTypeToString(OperationType type) {
         case OperationType::Chamfer: return "Chamfer";
         case OperationType::Shell: return "Shell";
         case OperationType::Boolean: return "Boolean";
+        case OperationType::LinearPattern: return "LinearPattern";
+        case OperationType::CircularPattern: return "CircularPattern";
+        case OperationType::Loft: return "Loft";
+        case OperationType::Sweep: return "Sweep";
+        case OperationType::MirrorBody: return "MirrorBody";
         default: return "Unknown";
     }
 }
@@ -41,6 +46,11 @@ OperationType stringToOperationType(const QString& str) {
     if (str == "Chamfer") return OperationType::Chamfer;
     if (str == "Shell") return OperationType::Shell;
     if (str == "Boolean") return OperationType::Boolean;
+    if (str == "LinearPattern") return OperationType::LinearPattern;
+    if (str == "CircularPattern") return OperationType::CircularPattern;
+    if (str == "Loft") return OperationType::Loft;
+    if (str == "Sweep") return OperationType::Sweep;
+    if (str == "MirrorBody") return OperationType::MirrorBody;
     return OperationType::Extrude;  // Default
 }
 
@@ -344,6 +354,13 @@ QJsonObject HistoryIO::serializeOperation(const OperationRecord& op,
         QJsonObject face;
         face["bodyId"] = QString::fromStdString(ref.bodyId);
         face["faceId"] = QString::fromStdString(ref.faceId);
+        if (!ref.patchFaceIds.empty()) {
+            QJsonArray patchFaceIds;
+            for (const auto& faceId : ref.patchFaceIds) {
+                patchFaceIds.append(QString::fromStdString(faceId));
+            }
+            face["patchFaceIds"] = patchFaceIds;
+        }
         inputs["face"] = face;
     }
     else if (std::holds_alternative<BodyRef>(op.input)) {
@@ -360,9 +377,15 @@ QJsonObject HistoryIO::serializeOperation(const OperationRecord& op,
         const auto& p = std::get<ExtrudeParams>(op.params);
         params["distance"] = p.distance;
         params["draftAngleDeg"] = p.draftAngleDeg;
+        if (p.extrudeMode != ExtrudeMode::Blind) {
+            params["extrudeMode"] = QString::fromLatin1(extrudeModeName(p.extrudeMode));
+        }
         params["booleanMode"] = booleanModeToString(p.booleanMode);
         if (!p.targetBodyId.empty()) {
             params["targetBodyId"] = QString::fromStdString(p.targetBodyId);
+        }
+        if (!p.targetFaceId.empty()) {
+            params["targetFaceId"] = QString::fromStdString(p.targetFaceId);
         }
     }
     else if (std::holds_alternative<RevolveParams>(op.params)) {
@@ -417,6 +440,68 @@ QJsonObject HistoryIO::serializeOperation(const OperationRecord& op,
         params["targetBodyId"] = QString::fromStdString(p.targetBodyId);
         params["toolBodyId"] = QString::fromStdString(p.toolBodyId);
     }
+    else if (std::holds_alternative<LinearPatternParams>(op.params)) {
+        const auto& p = std::get<LinearPatternParams>(op.params);
+        params["sourceBodyId"] = QString::fromStdString(p.sourceBodyId);
+        params["dirX"] = p.dirX;
+        params["dirY"] = p.dirY;
+        params["dirZ"] = p.dirZ;
+        params["spacing"] = p.spacing;
+        params["count"] = p.count;
+        params["fuseResult"] = p.fuseResult;
+    }
+    else if (std::holds_alternative<CircularPatternParams>(op.params)) {
+        const auto& p = std::get<CircularPatternParams>(op.params);
+        params["sourceBodyId"] = QString::fromStdString(p.sourceBodyId);
+        params["axisX"] = p.axisX;
+        params["axisY"] = p.axisY;
+        params["axisZ"] = p.axisZ;
+        params["axisDirX"] = p.axisDirX;
+        params["axisDirY"] = p.axisDirY;
+        params["axisDirZ"] = p.axisDirZ;
+        params["angleDeg"] = p.angleDeg;
+        params["count"] = p.count;
+        params["fuseResult"] = p.fuseResult;
+    }
+    else if (std::holds_alternative<LoftParams>(op.params)) {
+        const auto& p = std::get<LoftParams>(op.params);
+        QJsonArray sketchIds;
+        for (const auto& id : p.profileSketchIds) {
+            sketchIds.append(QString::fromStdString(id));
+        }
+        params["profileSketchIds"] = sketchIds;
+        QJsonArray regionIds;
+        for (const auto& id : p.profileRegionIds) {
+            regionIds.append(QString::fromStdString(id));
+        }
+        params["profileRegionIds"] = regionIds;
+        params["isSolid"] = p.isSolid;
+        params["isRuled"] = p.isRuled;
+        params["booleanMode"] = booleanModeToString(p.booleanMode);
+    }
+    else if (std::holds_alternative<SweepParams>(op.params)) {
+        const auto& p = std::get<SweepParams>(op.params);
+        params["profileSketchId"] = QString::fromStdString(p.profileSketchId);
+        params["profileRegionId"] = QString::fromStdString(p.profileRegionId);
+        if (!p.pathSketchId.empty()) {
+            params["pathSketchId"] = QString::fromStdString(p.pathSketchId);
+        }
+        if (!p.pathEdgeId.empty()) {
+            params["pathEdgeId"] = QString::fromStdString(p.pathEdgeId);
+        }
+        params["booleanMode"] = booleanModeToString(p.booleanMode);
+    }
+    else if (std::holds_alternative<MirrorBodyParams>(op.params)) {
+        const auto& p = std::get<MirrorBodyParams>(op.params);
+        params["sourceBodyId"] = QString::fromStdString(p.sourceBodyId);
+        params["planePointX"] = p.planePointX;
+        params["planePointY"] = p.planePointY;
+        params["planePointZ"] = p.planePointZ;
+        params["planeNormalX"] = p.planeNormalX;
+        params["planeNormalY"] = p.planeNormalY;
+        params["planeNormalZ"] = p.planeNormalZ;
+        params["fuseWithOriginal"] = p.fuseWithOriginal;
+    }
     json["params"] = params;
     
     // Serialize outputs
@@ -453,6 +538,10 @@ OperationRecord HistoryIO::deserializeOperation(const QJsonObject& json) {
         FaceRef ref;
         ref.bodyId = face["bodyId"].toString().toStdString();
         ref.faceId = face["faceId"].toString().toStdString();
+        const QJsonArray patchFaceIds = face["patchFaceIds"].toArray();
+        for (const auto& faceValue : patchFaceIds) {
+            ref.patchFaceIds.push_back(faceValue.toString().toStdString());
+        }
         op.input = ref;
     }
     else if (inputs.contains("body")) {
@@ -469,9 +558,19 @@ OperationRecord HistoryIO::deserializeOperation(const QJsonObject& json) {
         ExtrudeParams p;
         p.distance = params["distance"].toDouble();
         p.draftAngleDeg = params["draftAngleDeg"].toDouble();
+        if (params.contains("extrudeMode")) {
+            QString mode = params["extrudeMode"].toString();
+            if (mode == "ThroughAll") p.extrudeMode = ExtrudeMode::ThroughAll;
+            else if (mode == "Symmetric") p.extrudeMode = ExtrudeMode::Symmetric;
+            else if (mode == "ToNext") p.extrudeMode = ExtrudeMode::ToNext;
+            else if (mode == "ToFace") p.extrudeMode = ExtrudeMode::ToFace;
+        }
         p.booleanMode = stringToBooleanMode(params["booleanMode"].toString());
         if (params.contains("targetBodyId")) {
             p.targetBodyId = params["targetBodyId"].toString().toStdString();
+        }
+        if (params.contains("targetFaceId")) {
+            p.targetFaceId = params["targetFaceId"].toString().toStdString();
         }
         op.params = p;
     }
@@ -536,6 +635,65 @@ OperationRecord HistoryIO::deserializeOperation(const QJsonObject& json) {
         p.targetBodyId = params["targetBodyId"].toString().toStdString();
         p.toolBodyId = params["toolBodyId"].toString().toStdString();
 
+        op.params = p;
+    }
+    else if (op.type == OperationType::LinearPattern) {
+        LinearPatternParams p;
+        p.sourceBodyId = params["sourceBodyId"].toString().toStdString();
+        p.dirX = params["dirX"].toDouble(1.0);
+        p.dirY = params["dirY"].toDouble(0.0);
+        p.dirZ = params["dirZ"].toDouble(0.0);
+        p.spacing = params["spacing"].toDouble(10.0);
+        p.count = params["count"].toInt(2);
+        p.fuseResult = params["fuseResult"].toBool(true);
+        op.params = p;
+    }
+    else if (op.type == OperationType::CircularPattern) {
+        CircularPatternParams p;
+        p.sourceBodyId = params["sourceBodyId"].toString().toStdString();
+        p.axisX = params["axisX"].toDouble(0.0);
+        p.axisY = params["axisY"].toDouble(0.0);
+        p.axisZ = params["axisZ"].toDouble(0.0);
+        p.axisDirX = params["axisDirX"].toDouble(0.0);
+        p.axisDirY = params["axisDirY"].toDouble(0.0);
+        p.axisDirZ = params["axisDirZ"].toDouble(1.0);
+        p.angleDeg = params["angleDeg"].toDouble(360.0);
+        p.count = params["count"].toInt(4);
+        p.fuseResult = params["fuseResult"].toBool(true);
+        op.params = p;
+    }
+    else if (op.type == OperationType::Loft) {
+        LoftParams p;
+        for (const auto& val : params["profileSketchIds"].toArray()) {
+            p.profileSketchIds.push_back(val.toString().toStdString());
+        }
+        for (const auto& val : params["profileRegionIds"].toArray()) {
+            p.profileRegionIds.push_back(val.toString().toStdString());
+        }
+        p.isSolid = params["isSolid"].toBool(true);
+        p.isRuled = params["isRuled"].toBool(false);
+        p.booleanMode = stringToBooleanMode(params["booleanMode"].toString());
+        op.params = p;
+    }
+    else if (op.type == OperationType::Sweep) {
+        SweepParams p;
+        p.profileSketchId = params["profileSketchId"].toString().toStdString();
+        p.profileRegionId = params["profileRegionId"].toString().toStdString();
+        p.pathSketchId = params["pathSketchId"].toString().toStdString();
+        p.pathEdgeId = params["pathEdgeId"].toString().toStdString();
+        p.booleanMode = stringToBooleanMode(params["booleanMode"].toString());
+        op.params = p;
+    }
+    else if (op.type == OperationType::MirrorBody) {
+        MirrorBodyParams p;
+        p.sourceBodyId = params["sourceBodyId"].toString().toStdString();
+        p.planePointX = params["planePointX"].toDouble(0.0);
+        p.planePointY = params["planePointY"].toDouble(0.0);
+        p.planePointZ = params["planePointZ"].toDouble(0.0);
+        p.planeNormalX = params["planeNormalX"].toDouble(1.0);
+        p.planeNormalY = params["planeNormalY"].toDouble(0.0);
+        p.planeNormalZ = params["planeNormalZ"].toDouble(0.0);
+        p.fuseWithOriginal = params["fuseWithOriginal"].toBool(false);
         op.params = p;
     }
 

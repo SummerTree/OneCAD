@@ -23,10 +23,13 @@ find_package(Eigen3 3.3 REQUIRED NO_MODULE)
 # 2. OpenCASCADE (OCCT)
 find_package(OpenCASCADE)
 if(NOT OpenCASCADE_FOUND)
-    set(POSSIBLE_OCCT_DIRS 
+    set(POSSIBLE_OCCT_DIRS
         "/opt/homebrew/lib/cmake/opencascade"
         "/usr/local/lib/cmake/opencascade"
         "/opt/homebrew/opt/opencascade/lib/cmake/opencascade"
+        "/usr/lib/cmake/opencascade"
+        "/usr/lib/x86_64-linux-gnu/cmake/opencascade"
+        "/usr/lib/aarch64-linux-gnu/cmake/opencascade"
     )
     foreach(DIR ${POSSIBLE_OCCT_DIRS})
         if(EXISTS ${DIR})
@@ -45,6 +48,9 @@ endif()
 message(STATUS "Qt6 Version: ${Qt6_VERSION}")
 message(STATUS "Eigen3 Version: ${Eigen3_VERSION}")
 message(STATUS "OpenCASCADE Version: ${OpenCASCADE_VERSION}")
+
+# --- Testing ---
+enable_testing()
 
 # --- Subdirectories ---
 add_subdirectory(third_party/planegcs)
@@ -103,12 +109,20 @@ target_include_directories(OneCAD
 )
 
 # --- macOS Bundle Configuration ---
-set_target_properties(OneCAD PROPERTIES
-    MACOSX_BUNDLE ON
-    MACOSX_BUNDLE_GUI_IDENTIFIER "com.onecad.app"
-    MACOSX_BUNDLE_BUNDLE_NAME "OneCAD"
-    MACOSX_BUNDLE_BUNDLE_VERSION "${PROJECT_VERSION}"
-    MACOSX_BUNDLE_SHORT_VERSION_STRING "${PROJECT_VERSION}"
-    MACOSX_BUNDLE_ICON_FILE "${MACOSX_BUNDLE_ICON_FILE}"
-    MACOSX_BUNDLE_INFO_PLIST "${CMAKE_SOURCE_DIR}/src/app/Info.plist.in"
-)
+if(APPLE)
+    set_target_properties(OneCAD PROPERTIES
+        MACOSX_BUNDLE ON
+        MACOSX_BUNDLE_GUI_IDENTIFIER "com.onecad.app"
+        MACOSX_BUNDLE_BUNDLE_NAME "OneCAD"
+        MACOSX_BUNDLE_BUNDLE_VERSION "${PROJECT_VERSION}"
+        MACOSX_BUNDLE_SHORT_VERSION_STRING "${PROJECT_VERSION}"
+        MACOSX_BUNDLE_ICON_FILE "${MACOSX_BUNDLE_ICON_FILE}"
+        MACOSX_BUNDLE_INFO_PLIST "${CMAKE_SOURCE_DIR}/src/app/Info.plist.in"
+    )
+endif()
+
+# --- Linux Install Rules ---
+if(UNIX AND NOT APPLE)
+    install(TARGETS OneCAD RUNTIME DESTINATION bin)
+    install(FILES resources/onecad.desktop DESTINATION share/applications)
+endif()

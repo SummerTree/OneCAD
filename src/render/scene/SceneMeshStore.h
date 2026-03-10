@@ -3,6 +3,7 @@
 
 #include <QMatrix4x4>
 #include <QVector3D>
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <string>
@@ -45,6 +46,7 @@ public:
         std::vector<Triangle> triangles;
         std::unordered_map<std::string, FaceTopology> topologyByFace;
         std::unordered_map<std::string, std::string> faceGroupByFaceId;
+        std::unordered_map<std::string, std::array<float, 4>> faceColors;  // faceId → RGBA
     };
 
     void setBodyMesh(const std::string& bodyId, Mesh mesh);

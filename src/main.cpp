@@ -5,6 +5,7 @@
 #include <QLoggingCategory>
 #include <QMouseEvent>
 #include <QObject>
+#include <QOpenGLContext>
 #include <QSurfaceFormat>
 #include <QTimer>
 #include <QWheelEvent>
@@ -204,6 +205,19 @@ int main(int argc, char* argv[]) {
     MainWindow window;
     qCDebug(logMain) << "MainWindow created";
     window.show();
+
+    // OpenGL runtime version check
+    if (auto* ctx = QOpenGLContext::currentContext()) {
+        auto actualFormat = ctx->format();
+        int major = actualFormat.majorVersion();
+        int minor = actualFormat.minorVersion();
+        qCInfo(logMain) << "OpenGL runtime:" << major << "." << minor;
+        if (major < 4 || (major == 4 && minor < 1)) {
+            qCWarning(logMain) << "OpenGL 4.1 requested but got" << major << "." << minor
+                               << "- some features may not work correctly";
+        }
+    }
+
     qCInfo(logMain) << "MainWindow shown; entering event loop";
 
     const QByteArray headlessSmoke = qgetenv("ONECAD_HEADLESS_SMOKE");

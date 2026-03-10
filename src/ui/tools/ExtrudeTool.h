@@ -15,7 +15,9 @@
 #include <gp_Dir.hxx>
 #include <gp_Pnt.hxx>
 #include <gp_Pln.hxx>
+#include <cstddef>
 #include <string>
+#include <vector>
 
 namespace onecad::app {
 class Document;
@@ -67,6 +69,10 @@ private:
     std::string targetBodyId_; // ID of the body owning the selected face (if any)
     TopoDS_Shape targetShape_; // The original shape of the body being modified (for boolean ops)
     TopoDS_Face baseFace_;
+    TopoDS_Shape baseProfileShape_;
+    std::vector<TopoDS_Face> basePatchFaces_;
+    std::vector<std::string> basePatchFaceIds_;
+    std::string basePatchLeaderFaceId_;
     gp_Pnt baseCenter_;
     gp_Dir direction_;
     gp_Pln neutralPlane_;
@@ -76,6 +82,7 @@ private:
     QPoint dragStart_;
     double currentDistance_ = 0.0;
     double draftAngleDeg_ = 0.0;
+    std::size_t basePatchFaceCount_ = 0;
     app::BooleanMode booleanMode_ = app::BooleanMode::NewBody;
 
     render::TessellationCache previewTessellator_;

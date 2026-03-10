@@ -21,7 +21,12 @@ enum class OperationType {
     Fillet,
     Chamfer,
     Shell,
-    Boolean
+    Boolean,
+    LinearPattern,
+    CircularPattern,
+    Loft,
+    Sweep,
+    MirrorBody
 };
 
 enum class BooleanMode {
@@ -43,6 +48,7 @@ struct SketchRegionRef {
 struct FaceRef {
     std::string bodyId;
     std::string faceId;
+    std::vector<std::string> patchFaceIds;    // Optional explicit patch members; empty for legacy ops
 };
 
 struct SketchLineRef {
@@ -74,11 +80,21 @@ using OperationInput = std::variant<
 // Parameter Structs (operation-specific configuration)
 // ─────────────────────────────────────────────────────────────────────────────
 
+enum class ExtrudeMode {
+    Blind,       // Fixed distance (default)
+    ThroughAll,  // Through entire model
+    Symmetric,   // Half-distance both directions
+    ToNext,      // To next face intersection
+    ToFace       // To a specific target face
+};
+
 struct ExtrudeParams {
     double distance = 0.0;
     double draftAngleDeg = 0.0;
+    ExtrudeMode extrudeMode = ExtrudeMode::Blind;
     BooleanMode booleanMode = BooleanMode::NewBody;
     std::string targetBodyId;               // Optional explicit boolean target body
+    std::string targetFaceId;               // For ToFace mode
 };
 
 struct RevolveParams {
@@ -109,6 +125,56 @@ struct BooleanParams {
     std::string toolBodyId;                 // Body to boolean with
 };
 
+struct LinearPatternParams {
+    std::string sourceBodyId;               // Body to pattern
+    double dirX = 1.0;                      // Direction vector
+    double dirY = 0.0;
+    double dirZ = 0.0;
+    double spacing = 10.0;                  // Distance between instances
+    int count = 2;                          // Total instances (including original)
+    bool fuseResult = true;                 // Fuse all instances into one body
+};
+
+struct LoftParams {
+    std::vector<std::string> profileSketchIds;  // Sketch IDs for each profile section
+    std::vector<std::string> profileRegionIds;  // Region IDs for each section
+    bool isSolid = true;                        // Solid vs surface result
+    bool isRuled = false;                       // Ruled vs smooth interpolation
+    BooleanMode booleanMode = BooleanMode::NewBody;
+};
+
+struct SweepParams {
+    std::string profileSketchId;                // Profile sketch
+    std::string profileRegionId;                // Profile region
+    std::string pathSketchId;                   // Path sketch (must contain a single wire)
+    std::string pathEdgeId;                     // Or a body edge as path
+    BooleanMode booleanMode = BooleanMode::NewBody;
+};
+
+struct MirrorBodyParams {
+    std::string sourceBodyId;
+    double planePointX = 0.0;     // Point on mirror plane
+    double planePointY = 0.0;
+    double planePointZ = 0.0;
+    double planeNormalX = 1.0;    // Mirror plane normal
+    double planeNormalY = 0.0;
+    double planeNormalZ = 0.0;
+    bool fuseWithOriginal = false;
+};
+
+struct CircularPatternParams {
+    std::string sourceBodyId;               // Body to pattern
+    double axisX = 0.0;                     // Axis point
+    double axisY = 0.0;
+    double axisZ = 0.0;
+    double axisDirX = 0.0;                  // Axis direction
+    double axisDirY = 0.0;
+    double axisDirZ = 1.0;
+    double angleDeg = 360.0;               // Total angle
+    int count = 4;                          // Total instances (including original)
+    bool fuseResult = true;
+};
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Operation Params Variant
 // ─────────────────────────────────────────────────────────────────────────────
@@ -118,7 +184,12 @@ using OperationParams = std::variant<
     RevolveParams,
     FilletChamferParams,
     ShellParams,
-    BooleanParams
+    BooleanParams,
+    LinearPatternParams,
+    CircularPatternParams,
+    LoftParams,
+    SweepParams,
+    MirrorBodyParams
 >;
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -145,6 +216,22 @@ inline const char* operationTypeName(OperationType type) {
         case OperationType::Chamfer: return "Chamfer";
         case OperationType::Shell: return "Shell";
         case OperationType::Boolean: return "Boolean";
+        case OperationType::LinearPattern: return "LinearPattern";
+        case OperationType::CircularPattern: return "CircularPattern";
+        case OperationType::Loft: return "Loft";
+        case OperationType::Sweep: return "Sweep";
+        case OperationType::MirrorBody: return "MirrorBody";
+        default: return "Unknown";
+    }
+}
+
+inline const char* extrudeModeName(ExtrudeMode mode) {
+    switch (mode) {
+        case ExtrudeMode::Blind: return "Blind";
+        case ExtrudeMode::ThroughAll: return "ThroughAll";
+        case ExtrudeMode::Symmetric: return "Symmetric";
+        case ExtrudeMode::ToNext: return "ToNext";
+        case ExtrudeMode::ToFace: return "ToFace";
         default: return "Unknown";
     }
 }

@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=OneCAD
+Comment=Parametric 3D CAD Application
+Exec=OneCAD %F
+Icon=onecad
+Categories=Graphics;3DGraphics;Engineering;
+MimeType=application/x-onecad;
+Terminal=false
+StartupNotify=true

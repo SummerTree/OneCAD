@@ -226,6 +226,25 @@ target_link_libraries(proto_pick_topology_promotion
 )
 target_include_directories(proto_pick_topology_promotion PRIVATE ${CMAKE_SOURCE_DIR}/src)
 
+# Selection Topology Resolver Prototype
+add_executable(proto_selection_topology_resolver prototypes/proto_selection_topology_resolver.cpp)
+target_link_libraries(proto_selection_topology_resolver
+    PRIVATE
+    onecad_app
+    onecad_core
+    Qt6::Core
+)
+target_include_directories(proto_selection_topology_resolver PRIVATE ${CMAKE_SOURCE_DIR}/src)
+
+# Model selection resolution prototype
+add_executable(proto_model_selection_resolution prototypes/proto_model_selection_resolution.cpp)
+target_link_libraries(proto_model_selection_resolution
+    PRIVATE
+    onecad_app
+    Qt6::Core
+)
+target_include_directories(proto_model_selection_resolution PRIVATE ${CMAKE_SOURCE_DIR}/src)
+
 # Regeneration Engine Prototype
 add_executable(proto_regeneration prototypes/proto_regeneration.cpp)
 target_link_libraries(proto_regeneration
@@ -267,3 +286,41 @@ target_link_libraries(proto_timeline_rollback_dirty
     Qt6::Core
 )
 target_include_directories(proto_timeline_rollback_dirty PRIVATE ${CMAKE_SOURCE_DIR}/src)
+
+# Integration test: document workflow (create sketch, extrude, save, reload, verify)
+add_executable(test_document_workflow integration/test_document_workflow.cpp)
+target_link_libraries(test_document_workflow
+    PRIVATE
+    onecad_io
+    onecad_app
+    onecad_core
+    Qt6::Core
+)
+target_include_directories(test_document_workflow PRIVATE ${CMAKE_SOURCE_DIR}/src)
+
+# --- CTest registration ---
+add_test(NAME proto_custom_map COMMAND proto_custom_map)
+add_test(NAME proto_tnaming COMMAND proto_tnaming)
+add_test(NAME proto_elementmap_rigorous COMMAND proto_elementmap_rigorous)
+add_test(NAME proto_sketch_geometry COMMAND proto_sketch_geometry)
+add_test(NAME proto_sketch_constraints COMMAND proto_sketch_constraints)
+add_test(NAME proto_sketch_snap COMMAND proto_sketch_snap)
+add_test(NAME proto_sketch_solver COMMAND proto_sketch_solver)
+add_test(NAME proto_sketch_group_drag COMMAND proto_sketch_group_drag)
+add_test(NAME proto_sketch_drag_undo COMMAND proto_sketch_drag_undo)
+add_test(NAME proto_planegcs_integration COMMAND proto_planegcs_integration)
+add_test(NAME proto_loop_detector COMMAND proto_loop_detector)
+add_test(NAME proto_face_builder COMMAND proto_face_builder)
+add_test(NAME proto_sketch_fixed_and_move COMMAND proto_sketch_fixed_and_move)
+add_test(NAME proto_sketch_tool_dimensions COMMAND proto_sketch_tool_dimensions)
+add_test(NAME proto_model_picker COMMAND proto_model_picker)
+add_test(NAME proto_tessellation_cache COMMAND proto_tessellation_cache)
+add_test(NAME proto_pickmesh_integration COMMAND proto_pickmesh_integration)
+add_test(NAME proto_pick_topology_promotion COMMAND proto_pick_topology_promotion)
+add_test(NAME proto_selection_topology_resolver COMMAND proto_selection_topology_resolver)
+add_test(NAME proto_model_selection_resolution COMMAND proto_model_selection_resolution)
+add_test(NAME proto_regeneration COMMAND proto_regeneration)
+add_test(NAME proto_history_io_compat COMMAND proto_history_io_compat)
+add_test(NAME proto_document_roundtrip_compat COMMAND proto_document_roundtrip_compat)
+add_test(NAME proto_timeline_rollback_dirty COMMAND proto_timeline_rollback_dirty)
+add_test(NAME test_document_workflow COMMAND test_document_workflow)

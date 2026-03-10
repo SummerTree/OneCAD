@@ -23,16 +23,20 @@ bool AddOperationCommand::execute() {
         return false;
     }
 
-    const std::size_t insertIndex = std::min(document_->appliedOpCount(),
+    const std::size_t previousAppliedCount = document_->appliedOpCount();
+    const std::size_t insertIndex = std::min(previousAppliedCount,
                                              document_->operations().size());
     if (!document_->insertOperation(insertIndex, record_)) {
         return false;
     }
     document_->setAppliedOpCount(insertIndex + 1);
 
-    if (!regenerateDocument(document_)) {
+    if (!regenerateDocumentStrict(document_)) {
         document_->removeOperation(record_.opId);
-        regenerateDocument(document_);
+        document_->setAppliedOpCount(previousAppliedCount);
+        if (!regenerateDocumentStrict(document_)) {
+            regenerateDocument(document_);
+        }
         return false;
     }
 

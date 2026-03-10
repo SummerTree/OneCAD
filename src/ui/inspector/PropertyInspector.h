@@ -2,43 +2,49 @@
 #define ONECAD_UI_INSPECTOR_PROPERTYINSPECTOR_H
 
 #include <QDockWidget>
+#include <string>
 
 class QLabel;
-class QVBoxLayout;
 class QStackedWidget;
+
+namespace onecad::app {
+class Document;
+}
 
 namespace onecad {
 namespace ui {
 
-/**
- * @brief Property inspector showing selected entity properties.
- * 
- * Context-dependent panel:
- * - No selection: tips and hints
- * - Entity selected: coordinates, dimensions
- * - Operation active: parameters with Apply/Cancel
- */
+class MassPropertiesPanel;
+
 class PropertyInspector : public QDockWidget {
     Q_OBJECT
 
 public:
     explicit PropertyInspector(QWidget* parent = nullptr);
-    ~PropertyInspector() override = default;
+
+    void setDocument(app::Document* document);
 
 public slots:
     void showEmptyState();
-    void showEntityProperties(const QString& entityType, const QString& entityId);
+    void showBodyProperties(const QString& bodyId);
+    void showOperationProperties(const QString& opId);
+    void onSelectionChanged();
 
 private:
     void setupUi();
     void createEmptyStateWidget();
-    void createPropertiesWidget();
+    void createBodyWidget();
+    void createOperationWidget();
 
+    app::Document* m_document = nullptr;
     QStackedWidget* m_stackedWidget = nullptr;
     QWidget* m_emptyWidget = nullptr;
-    QWidget* m_propertiesWidget = nullptr;
-    QLabel* m_entityTypeLabel = nullptr;
-    QLabel* m_entityIdLabel = nullptr;
+    QWidget* m_bodyWidget = nullptr;
+    QWidget* m_operationWidget = nullptr;
+    MassPropertiesPanel* m_massProps = nullptr;
+    QLabel* m_opTypeLabel = nullptr;
+    QLabel* m_opIdLabel = nullptr;
+    QLabel* m_opParamsLabel = nullptr;
 };
 
 } // namespace ui

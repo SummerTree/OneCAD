@@ -21,6 +21,16 @@ init:
 		brew list qt >/dev/null 2>&1 || brew install qt; \
 		brew list opencascade >/dev/null 2>&1 || brew install opencascade; \
 		brew list eigen >/dev/null 2>&1 || brew install eigen; \
+	elif [ "$(UNAME_S)" = "Linux" ]; then \
+		echo "Installing Linux dependencies via apt..."; \
+		sudo apt-get update && sudo apt-get install -y \
+			qt6-base-dev libqt6opengl6-dev qt6-base-dev-tools libqt6svg6-dev \
+			libocct-modeling-algorithms-dev libocct-modeling-data-dev \
+			libocct-data-exchange-dev libocct-visualization-dev \
+			libocct-foundation-dev libocct-ocaf-dev \
+			libeigen3-dev \
+			cmake ninja-build g++ \
+			libgl1-mesa-dev libglu1-mesa-dev; \
 	else \
 		echo "Please install Qt6, OpenCASCADE, and Eigen3 for your platform."; \
 	fi

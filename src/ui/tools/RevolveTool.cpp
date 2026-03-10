@@ -10,10 +10,13 @@
 #include "../../core/loop/FaceBuilder.h"
 #include "../../core/loop/RegionUtils.h"
 #include "../../core/modeling/BooleanOperation.h"
+#include "../../core/modeling/CoplanarFacePatch.h"
+#include "../../core/modeling/FacePatchResolver.h"
 #include "../../core/sketch/Sketch.h"
 #include "../../core/sketch/SketchLine.h"
 #include "../../core/sketch/SketchPoint.h"
 
+#include <BRepAlgoAPI_Fuse.hxx>
 #include <BRepAdaptor_Surface.hxx>
 #include <BRepPrimAPI_MakeRevol.hxx>
 #include <BRepGProp.hxx>
@@ -74,6 +77,11 @@ void RevolveTool::begin(const app::selection::SelectionItem& selection) {
     booleanMode_ = app::BooleanMode::NewBody;
     axisSelection_ = {};
     profileSelection_ = {};
+    baseFace_.Nullify();
+    baseProfileShape_.Nullify();
+    basePatchFaces_.clear();
+    basePatchFaceIds_.clear();
+    basePatchLeaderFaceId_.clear();
 
     if (prepareProfile(selection)) {
         active_ = true;
@@ -92,6 +100,10 @@ void RevolveTool::cancel() {
     state_ = State::WaitingForProfile;
     dragging_ = false;
     baseFace_.Nullify();
+    baseProfileShape_.Nullify();
+    basePatchFaces_.clear();
+    basePatchFaceIds_.clear();
+    basePatchLeaderFaceId_.clear();
     sketch_ = nullptr;
     targetBodyId_.clear();
     axisSelection_ = {};
@@ -188,7 +200,13 @@ bool RevolveTool::handleMouseRelease(const QPoint& screenPos, Qt::MouseButton bu
             if (sketch_) {
                 record.input = app::SketchRegionRef{profileSelection_.id.ownerId, profileSelection_.id.elementId};
             } else {
-                record.input = app::FaceRef{profileSelection_.id.ownerId, profileSelection_.id.elementId};
+                app::FaceRef faceRef;
+                faceRef.bodyId = profileSelection_.id.ownerId;
+                faceRef.faceId = basePatchLeaderFaceId_.empty()
+                    ? profileSelection_.id.elementId
+                    : basePatchLeaderFaceId_;
+                faceRef.patchFaceIds = basePatchFaceIds_;
+                record.input = faceRef;
             }
 
             app::RevolveParams params;
@@ -248,6 +266,10 @@ bool RevolveTool::prepareProfile(const app::selection::SelectionItem& selection)
     sketch_ = nullptr;
     targetBodyId_.clear();
     baseFace_.Nullify();
+    baseProfileShape_.Nullify();
+    basePatchFaces_.clear();
+    basePatchFaceIds_.clear();
+    basePatchLeaderFaceId_.clear();
 
     if (selection.kind == app::selection::SelectionKind::SketchRegion) {
         sketch_ = document_->getSketch(selection.id.ownerId);
@@ -273,6 +295,10 @@ bool RevolveTool::prepareProfile(const app::selection::SelectionItem& selection)
         }
         
         baseFace_ = res.face;
+        baseProfileShape_ = baseFace_;
+        basePatchFaces_ = {baseFace_};
+        basePatchFaceIds_.clear();
+        basePatchLeaderFaceId_.clear();
 
         const auto& hostFace = sketch_->hostFaceAttachment();
         if (hostFace && hostFace->isValid()) {
@@ -284,6 +310,12 @@ bool RevolveTool::prepareProfile(const app::selection::SelectionItem& selection)
         
     } else if (selection.kind == app::selection::SelectionKind::Face) {
         targetBodyId_ = selection.id.ownerId;
+        const TopoDS_Shape* bodyShape = document_->getBodyShape(targetBodyId_);
+        if (!bodyShape || bodyShape->IsNull()) {
+            qCWarning(logRevolveTool) << "prepareProfile:target-body-missing-or-null"
+                                      << QString::fromStdString(targetBodyId_);
+            return false;
+        }
         // Retrieve face from ElementMap
         const auto* entry = document_->elementMap().find(kernel::elementmap::ElementId{selection.id.elementId});
         if (!entry || entry->kind != kernel::elementmap::ElementKind::Face || entry->shape.IsNull()) {
@@ -291,12 +323,33 @@ bool RevolveTool::prepareProfile(const app::selection::SelectionItem& selection)
                                       << QString::fromStdString(selection.id.elementId);
             return false;
         }
-        baseFace_ = TopoDS::Face(entry->shape);
-        BRepAdaptor_Surface surface(baseFace_, true);
+        const TopoDS_Face seedFace = TopoDS::Face(entry->shape);
+        baseFace_ = seedFace;
+        BRepAdaptor_Surface surface(seedFace, true);
         if (surface.GetType() != GeomAbs_Plane) {
             qCWarning(logRevolveTool) << "prepareProfile:non-planar-face";
             return false;
         }
+
+        auto patch = core::modeling::FacePatchResolver::resolveFromSeedFaceId(
+            *bodyShape, document_->elementMap(), selection.id.elementId);
+        if (!patch) {
+            qCWarning(logRevolveTool) << "prepareProfile:coplanar-patch-resolve-failed"
+                                      << QString::fromStdString(selection.id.elementId);
+            return false;
+        }
+        basePatchFaces_ = patch->memberFaces;
+        basePatchFaceIds_ = patch->memberFaceIds;
+        basePatchLeaderFaceId_ = patch->leaderFaceId;
+        baseProfileShape_ = core::modeling::CoplanarFacePatch::makeFaceCompound(basePatchFaces_);
+        if (baseProfileShape_.IsNull()) {
+            qCWarning(logRevolveTool) << "prepareProfile:coplanar-patch-empty";
+            return false;
+        }
+        qCDebug(logRevolveTool) << "prepareProfile:face-patch"
+                                << "seedFaceId=" << QString::fromStdString(selection.id.elementId)
+                                << "leaderFaceId=" << QString::fromStdString(basePatchLeaderFaceId_)
+                                << "patchFaceCount=" << basePatchFaces_.size();
     } else {
         qCWarning(logRevolveTool) << "prepareProfile:unsupported-selection-kind"
                                   << static_cast<int>(selection.kind);
@@ -306,7 +359,8 @@ bool RevolveTool::prepareProfile(const app::selection::SelectionItem& selection)
     // Compute center for indicator
     baseCenter_ = gp_Pnt(0.0, 0.0, 0.0);
     GProp_GProps props;
-    BRepGProp::SurfaceProperties(baseFace_, props);
+    const TopoDS_Shape centerShape = baseProfileShape_.IsNull() ? TopoDS_Shape(baseFace_) : baseProfileShape_;
+    BRepGProp::SurfaceProperties(centerShape, props);
     if (props.Mass() > 0.0) {
         baseCenter_ = props.CentreOfMass();
     }
@@ -387,13 +441,35 @@ void RevolveTool::clearPreview() {
 }
 
 TopoDS_Shape RevolveTool::buildRevolveShape(double angle) const {
-    if (baseFace_.IsNull() || !axisValid_) return TopoDS_Shape();
+    if (basePatchFaces_.empty() || !axisValid_) return TopoDS_Shape();
     if (std::abs(angle) < kMinRevolveAngle) return TopoDS_Shape();
     
     try {
         double rad = qDegreesToRadians(angle);
-        BRepPrimAPI_MakeRevol revol(baseFace_, axis_, rad);
-        return revol.Shape();
+        TopoDS_Shape result;
+        for (const TopoDS_Face& profileFace : basePatchFaces_) {
+            if (profileFace.IsNull()) {
+                continue;
+            }
+            BRepPrimAPI_MakeRevol revol(profileFace, axis_, rad);
+            if (!revol.IsDone()) {
+                return TopoDS_Shape();
+            }
+            TopoDS_Shape revolShape = revol.Shape();
+            if (revolShape.IsNull()) {
+                continue;
+            }
+            if (result.IsNull()) {
+                result = revolShape;
+                continue;
+            }
+            BRepAlgoAPI_Fuse fuse(result, revolShape);
+            if (!fuse.IsDone()) {
+                return TopoDS_Shape();
+            }
+            result = fuse.Shape();
+        }
+        return result;
     } catch (...) {
         return TopoDS_Shape();
     }

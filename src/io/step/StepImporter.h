@@ -1,11 +1,12 @@
 /**
  * @file StepImporter.h
- * @brief STEP file import using OpenCASCADE
+ * @brief STEP file import using OpenCASCADE XDE path
  */
 
 #pragma once
 
 #include <QString>
+#include <array>
 #include <vector>
 
 #include <TopoDS_Shape.hxx>
@@ -16,18 +17,18 @@ class Document;
 
 namespace onecad::io {
 
-/**
- * @brief Information about an imported body
- */
+struct FaceColorEntry {
+    int faceIndex = 0;
+    std::array<float, 4> rgba{0, 0, 0, 0};  // linear RGBA; alpha=0 = use default
+};
+
 struct ImportedBody {
     TopoDS_Shape shape;
     QString name;
-    QString originalEntityName;  // From STEP file if available
+    QString originalEntityName;
+    std::vector<FaceColorEntry> faceColors;
 };
 
-/**
- * @brief Result of STEP import
- */
 struct StepImportResult {
     bool success = false;
     QString errorMessage;
@@ -35,26 +36,18 @@ struct StepImportResult {
 };
 
 /**
- * @brief STEP file import using OCCT's STEPControl_Reader
- * 
- * Per user decision: Imported shapes become new, separate bodies
- * (no parametric history from import operation).
+ * @brief STEP file import using OCCT's STEPCAFControl_Reader (XDE path)
+ *
+ * Imported shapes become new, separate bodies (no parametric history).
+ * Extracts names, per-face colors, and flattens assemblies.
  */
 class StepImporter {
 public:
-    /**
-     * @brief Import STEP file and return shapes
-     */
     static StepImportResult import(const QString& filepath);
-    
-    /**
-     * @brief Import STEP file directly into document
-     * @param document Document to add bodies to
-     * @return Import result with body info
-     */
+
     static StepImportResult importIntoDocument(const QString& filepath,
                                                 app::Document* document);
-    
+
 private:
     StepImporter() = delete;
 };

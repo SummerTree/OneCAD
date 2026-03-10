@@ -31,7 +31,11 @@ add_library(onecad_core STATIC
     loop/FaceBuilder.cpp
     loop/RegionUtils.cpp
     modeling/BooleanOperation.cpp
+    modeling/CoplanarFacePatch.cpp
+    modeling/FaceExtrudeProfileBuilder.cpp
+    modeling/FacePatchResolver.cpp
     modeling/EdgeChainer.cpp
+    modeling/SelectionTopologyResolver.cpp
 )
 
 target_include_directories(onecad_core
@@ -90,10 +94,21 @@ set(LOOP_HEADERS
     loop/RegionUtils.h
 )
 
+set(MODELING_HEADERS
+    modeling/BooleanOperation.h
+    modeling/CoplanarFacePatch.h
+    modeling/FaceExtrudeProfileBuilder.h
+    modeling/FacePatchResolver.h
+    modeling/EdgeChainer.h
+    modeling/SelectionTopologyResolver.h
+    modeling/TopologyVisibility.h
+)
+
 # Create a custom target to show headers in IDE
 add_custom_target(onecad_core_headers SOURCES
     ${SKETCH_HEADERS}
     ${LOOP_HEADERS}
+    ${MODELING_HEADERS}
 )
 
 # When PlaneGCS types appear in onecad_core public headers,

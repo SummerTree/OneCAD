@@ -100,12 +100,12 @@ int main() {
             }
         }
     }
-    if (faceCount < 2) {
-        std::cerr << "Expected multiple face hits for overlap.\n";
+    if (faceCount != 1) {
+        std::cerr << "Expected only the front-most visible face for overlap.\n";
         return 1;
     }
-    if (!hasFace0 || !hasFace1) {
-        std::cerr << "Expected overlap to include face0 and face1.\n";
+    if (!hasFace0 || hasFace1) {
+        std::cerr << "Expected overlap to resolve to face0 only.\n";
         return 1;
     }
 

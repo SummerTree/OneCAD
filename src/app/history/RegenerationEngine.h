@@ -182,6 +182,31 @@ private:
      */
     TopoDS_Shape buildBoolean(const OperationRecord& op, std::string& errorOut);
 
+    /**
+     * @brief Build linear pattern geometry.
+     */
+    TopoDS_Shape buildLinearPattern(const OperationRecord& op, std::string& errorOut);
+
+    /**
+     * @brief Build circular pattern geometry.
+     */
+    TopoDS_Shape buildCircularPattern(const OperationRecord& op, std::string& errorOut);
+
+    /**
+     * @brief Build loft geometry.
+     */
+    TopoDS_Shape buildLoft(const OperationRecord& op, std::string& errorOut);
+
+    /**
+     * @brief Build sweep geometry.
+     */
+    TopoDS_Shape buildSweep(const OperationRecord& op, std::string& errorOut);
+
+    /**
+     * @brief Build mirror body geometry.
+     */
+    TopoDS_Shape buildMirrorBody(const OperationRecord& op, std::string& errorOut);
+
     // ─────────────────────────────────────────────────────────────────────────
     // Input Resolution
     // ─────────────────────────────────────────────────────────────────────────

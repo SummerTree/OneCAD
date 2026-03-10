@@ -16,6 +16,7 @@
 #include "../../app/commands/SetOperationSuppressionCommand.h"
 #include "../../app/commands/ToggleVisibilityCommand.h"
 #include "../../app/document/Document.h"
+#include "../../app/AutosaveManager.h"
 #include "../../app/history/KernelScheduler.h"
 #include "../../app/history/RegenerationEngine.h"
 #include "../navigator/ModelNavigator.h"
@@ -26,6 +27,10 @@
 #include "../../core/sketch/SketchRenderer.h"
 #include "../../core/sketch/SketchTypes.h"
 #include "../../app/selection/SelectionTypes.h"
+#include "../dialogs/CrashRecoveryDialog.h"
+#include "../dialogs/MeshExportDialog.h"
+#include "../../io/mesh/StlExporter.h"
+#include "../../io/mesh/ObjExporter.h"
 #include <QMenuBar>
 #include <QStatusBar>
 #include <QLabel>
@@ -55,11 +60,17 @@
 #include "../../io/OneCADFileIO.h"
 #include "../../io/step/StepImporter.h"
 #include "../../io/step/StepExporter.h"
+#include "../../app/commands/ImportStepCommand.h"
+#include "../dialogs/StepExportDialog.h"
+#include <QProgressDialog>
 
 #include "../components/SidebarToolButton.h"
 #include "../start/StartOverlay.h"
 #include "../history/HistoryPanel.h"
 #include "../history/RegenFailureDialog.h"
+#include "../inspector/PropertyInspector.h"
+#include "../palette/CommandPalette.h"
+#include "../palette/ActionRegistry.h"
 
 namespace onecad {
 namespace ui {
@@ -177,6 +188,37 @@ QString formatOperationDisplayName(const app::OperationRecord& op) {
                 }
             }
             break;
+        case app::OperationType::LinearPattern:
+            typeName = "Linear Pattern";
+            if (std::holds_alternative<app::LinearPatternParams>(op.params)) {
+                const auto& p = std::get<app::LinearPatternParams>(op.params);
+                params = QString(" (%1x, %2mm)").arg(p.count).arg(p.spacing, 0, 'f', 1);
+            }
+            break;
+        case app::OperationType::CircularPattern:
+            typeName = "Circular Pattern";
+            if (std::holds_alternative<app::CircularPatternParams>(op.params)) {
+                const auto& p = std::get<app::CircularPatternParams>(op.params);
+                params = QString(" (%1x, %2°)").arg(p.count).arg(p.angleDeg, 0, 'f', 0);
+            }
+            break;
+        case app::OperationType::Loft:
+            typeName = "Loft";
+            if (std::holds_alternative<app::LoftParams>(op.params)) {
+                const auto& p = std::get<app::LoftParams>(op.params);
+                params = QString(" (%1 sections)").arg(p.profileSketchIds.size());
+            }
+            break;
+        case app::OperationType::Sweep:
+            typeName = "Sweep";
+            break;
+        case app::OperationType::MirrorBody:
+            typeName = "Mirror Body";
+            if (std::holds_alternative<app::MirrorBodyParams>(op.params)) {
+                const auto& p = std::get<app::MirrorBodyParams>(op.params);
+                params = p.fuseWithOriginal ? " (Fused)" : "";
+            }
+            break;
     }
 
     return typeName + params;
@@ -193,6 +235,17 @@ MainWindow::MainWindow(QWidget* parent)
     // Create document model (no Qt parent - unique_ptr manages lifetime)
     m_document = std::make_unique<app::Document>();
     m_commandProcessor = std::make_unique<app::commands::CommandProcessor>();
+
+    // Autosave manager (parent = this for automatic cleanup)
+    m_autosaveManager = new app::AutosaveManager(this);
+    m_autosaveManager->setSaveFunction([](const QString& path, const app::Document* doc) {
+        return io::OneCADFileIO::save(path, doc, QImage()).success;
+    });
+    m_autosaveManager->setVersionCheckFunction([](const QString& path) {
+        return io::OneCADFileIO::getFileVersion(path);
+    });
+    m_autosaveManager->setDocument(m_document.get());
+    app::AutosaveManager::cleanupOldAutosaves();
 
     applyTheme();
     setupMenuBar();
@@ -228,7 +281,20 @@ MainWindow::MainWindow(QWidget* parent)
     connect(m_navigator, &ModelNavigator::isolateRequested,
             this, &MainWindow::onIsolateItem);
 
+    // Property inspector dock
+    m_propertyInspector = new PropertyInspector(this);
+    m_propertyInspector->setDocument(m_document.get());
+    addDockWidget(Qt::RightDockWidgetArea, m_propertyInspector);
+
+    // Command palette (Cmd+K)
+    m_commandPalette = new CommandPalette(this);
+    auto* paletteShortcut = new QShortcut(QKeySequence(Qt::CTRL | Qt::Key_K), this);
+    connect(paletteShortcut, &QShortcut::activated,
+            m_commandPalette, &CommandPalette::activate);
+
     loadSettings();
+
+    registerMenuActions();
 
     QTimer::singleShot(0, this, &MainWindow::showStartDialog);
 }
@@ -339,6 +405,7 @@ void MainWindow::setupMenuBar() {
     fileMenu->addSeparator();
     fileMenu->addAction(tr("&Import STEP..."), this, &MainWindow::onImport);
     fileMenu->addAction(tr("&Export STEP..."), this, &MainWindow::onExportStep);
+    fileMenu->addAction(tr("Export &Mesh (STL/OBJ)..."), this, &MainWindow::onExportMesh);
     fileMenu->addSeparator();
     fileMenu->addAction(tr("&Quit"), QKeySequence::Quit, qApp, &QApplication::quit);
     
@@ -539,6 +606,29 @@ void MainWindow::setupMenuBar() {
         }
     });
     addAction(escAction);
+}
+
+void MainWindow::registerMenuActions() {
+    auto& reg = ActionRegistry::instance();
+
+    // Collect all actions from menus
+    for (QMenu* menu : menuBar()->findChildren<QMenu*>()) {
+        const QString category = menu->title().remove(QLatin1Char('&'));
+        for (QAction* action : menu->actions()) {
+            if (action->isSeparator() || action->menu()) continue;
+            const QString name = action->text().remove(QLatin1Char('&'));
+            const QString id = QStringLiteral("%1/%2").arg(category, name);
+            reg.registerAction(id, name, category, action);
+        }
+    }
+
+    // Register shortcut-only actions (sketch tools etc.)
+    for (QAction* action : actions()) {
+        const QString name = action->text().remove(QLatin1Char('&'));
+        if (name.isEmpty()) continue;
+        const QString id = QStringLiteral("Action/%1").arg(name);
+        reg.registerAction(id, name, tr("Tools"), action);
+    }
 }
 
 void MainWindow::setupToolBar() {
@@ -1038,6 +1128,7 @@ void MainWindow::setupViewport() {
             this, &MainWindow::onConstraintPanelDeleteRequested);
     connect(m_viewport, &Viewport::constraintSuppressRequested,
             this, &MainWindow::onConstraintPanelSuppressRequested);
+    connect(m_viewport, &Viewport::fileDropped, this, &MainWindow::importStepFile);
 
     connect(m_navigator, &ModelNavigator::sketchSelected, this, [this](const QString& id) {
         if (m_viewport) {
@@ -1358,29 +1449,43 @@ void MainWindow::onImport() {
     QString fileName = QFileDialog::getOpenFileName(this,
         tr("Import STEP File"), QString(),
         tr("STEP Files (*.step *.stp);;All Files (*)"));
-    
-    if (fileName.isEmpty()) return;
-    
-    m_toolStatus->setText(tr("Importing: %1").arg(QFileInfo(fileName).fileName()));
-    auto result = io::StepImporter::import(fileName);
-    
+
+    if (fileName.isEmpty()) {
+        return;
+    }
+
+    importStepFile(fileName);
+}
+
+void MainWindow::importStepFile(const QString& path) {
+    m_toolStatus->setText(tr("Importing: %1").arg(QFileInfo(path).fileName()));
+
+    QProgressDialog progress(tr("Importing STEP..."), QString(), 0, 0, this);
+    progress.setWindowModality(Qt::WindowModal);
+    progress.setMinimumDuration(500);
+    progress.show();
+    QApplication::processEvents();
+
+    auto result = io::StepImporter::import(path);
+    progress.close();
+
     if (!result.success) {
         QMessageBox::critical(this, tr("Import Failed"), result.errorMessage);
         m_toolStatus->setText(tr("Import failed"));
         return;
     }
-    
-    for (auto& body : result.bodies) {
-        std::string bodyId = m_document->addBody(body.shape);
-        if (!bodyId.empty()) {
-            m_document->addBaseBodyId(bodyId);
-        }
-    }
-    
+
+    if (!m_commandProcessor) return;
+
+    const int importedCount = static_cast<int>(result.bodies.size());
+    auto cmd = std::make_unique<app::commands::ImportStepCommand>(
+        m_document.get(), std::move(result.bodies));
+    m_commandProcessor->execute(std::move(cmd));
+
     if (m_viewport) {
         m_viewport->update();
     }
-    m_toolStatus->setText(tr("Imported %1 body(ies)").arg(result.bodies.size()));
+    m_toolStatus->setText(tr("Imported %1 body(ies)").arg(importedCount));
 }
 
 void MainWindow::onExportStep() {
@@ -1389,32 +1494,93 @@ void MainWindow::onExportStep() {
         QMessageBox::warning(this, tr("Export"), tr("No bodies to export."));
         return;
     }
-    
+
+    StepExportDialog exportDialog(this);
+    if (exportDialog.exec() != QDialog::Accepted) {
+        return;
+    }
+    auto opts = exportDialog.options();
+
     QString fileName = QFileDialog::getSaveFileName(this,
         tr("Export STEP File"), QString(),
         tr("STEP Files (*.step)"));
-    
-    if (fileName.isEmpty()) return;
-    
-    // Ensure .step extension
+
+    if (fileName.isEmpty()) {
+        return;
+    }
+
     if (!fileName.endsWith(".step", Qt::CaseInsensitive)) {
         fileName += ".step";
     }
-    
-    std::vector<TopoDS_Shape> shapes;
-    for (const auto& id : bodyIds) {
-        if (auto* s = m_document->getBodyShape(id)) {
-            shapes.push_back(*s);
-        }
-    }
-    
-    auto result = io::StepExporter::exportShapes(fileName, shapes);
+
+    QProgressDialog progress(tr("Exporting STEP..."), QString(), 0, 0, this);
+    progress.setWindowModality(Qt::WindowModal);
+    progress.setMinimumDuration(500);
+    progress.show();
+    QApplication::processEvents();
+
+    io::ExportOptions exportOpts;
+    exportOpts.schema = opts.schema;
+    exportOpts.visibleOnly = opts.visibleOnly;
+
+    auto result = io::StepExporter::exportDocument(fileName, m_document.get(), exportOpts);
+    progress.close();
+
     if (!result.success) {
         QMessageBox::critical(this, tr("Export Failed"), result.errorMessage);
         return;
     }
-    
-    m_toolStatus->setText(tr("Exported %1 body(ies) to STEP").arg(shapes.size()));
+
+    m_toolStatus->setText(tr("Exported %1 body(ies) to STEP").arg(result.bodyCount));
+}
+
+void MainWindow::onExportMesh() {
+    auto bodyIds = m_document->getBodyIds();
+    if (bodyIds.empty()) {
+        QMessageBox::warning(this, tr("Export"), tr("No bodies to export."));
+        return;
+    }
+
+    MeshExportDialog exportDialog(this);
+    if (exportDialog.exec() != QDialog::Accepted) {
+        return;
+    }
+
+    QString fileName = QFileDialog::getSaveFileName(this,
+        tr("Export Mesh"), QString(), exportDialog.fileFilter());
+    if (fileName.isEmpty()) {
+        return;
+    }
+
+    QString ext = exportDialog.defaultExtension();
+    if (!fileName.endsWith(ext, Qt::CaseInsensitive)) {
+        fileName += ext;
+    }
+
+    auto format = exportDialog.selectedFormat();
+    bool visibleOnly = exportDialog.visibleOnly();
+
+    io::MeshExportResult result;
+    if (format == MeshExportDialog::OBJ) {
+        io::ObjExportOptions opts;
+        opts.visibleOnly = visibleOnly;
+        result = io::ObjExporter::exportDocument(fileName, m_document.get(), opts);
+    } else {
+        io::StlExportOptions opts;
+        opts.binary = (format == MeshExportDialog::STL_Binary);
+        opts.visibleOnly = visibleOnly;
+        result = io::StlExporter::exportDocument(fileName, m_document.get(), opts);
+    }
+
+    if (!result.success) {
+        QMessageBox::critical(this, tr("Export Failed"), result.errorMessage);
+        return;
+    }
+
+    m_toolStatus->setText(
+        tr("Exported %1 body(ies), %2 triangles")
+            .arg(result.bodyCount)
+            .arg(result.triangleCount));
 }
 
 bool MainWindow::maybeSave() {
@@ -1494,8 +1660,17 @@ bool MainWindow::loadDocumentFromPath(const QString& fileName) {
     // Reconnect document signals to navigator
     connectDocumentSignals();
 
+    if (m_autosaveManager) {
+        m_autosaveManager->setDocument(m_document.get());
+        m_autosaveManager->setCurrentFilePath(m_currentFilePath);
+    }
+
     if (m_historyPanel) {
         m_historyPanel->setDocument(m_document.get());
+    }
+
+    if (m_propertyInspector) {
+        m_propertyInspector->setDocument(m_document.get());
     }
 
     // Populate navigator with loaded data
@@ -1621,6 +1796,9 @@ bool MainWindow::saveDocumentToPath(const QString& filePath) {
     }
 
     m_document->setModified(false);
+    if (m_autosaveManager) {
+        m_autosaveManager->setCurrentFilePath(filePath);
+    }
     if (m_toolStatus) {
         m_toolStatus->setText(tr("Saved"));
     }
@@ -1661,6 +1839,11 @@ void MainWindow::resetDocumentState() {
     setWindowTitle(tr("OneCAD - Untitled"));
     if (m_toolStatus) {
         m_toolStatus->setText(tr("Ready"));
+    }
+
+    if (m_propertyInspector) {
+        m_propertyInspector->setDocument(m_document.get());
+        m_propertyInspector->showEmptyState();
     }
 
     if (m_viewport) {
@@ -1738,6 +1921,26 @@ void MainWindow::onSaveDocumentAs() {
 }
 
 void MainWindow::showStartDialog() {
+    // Check for crash recovery files
+    auto recoveryFiles = m_autosaveManager->scanRecoveryFiles();
+    if (!recoveryFiles.empty()) {
+        CrashRecoveryDialog dialog(recoveryFiles, this);
+        if (dialog.exec() == QDialog::Accepted) {
+            if (dialog.selectedAction() == CrashRecoveryDialog::Recover) {
+                QString path = dialog.selectedFilePath();
+                if (!path.isEmpty() && loadDocumentFromPath(path)) {
+                    m_currentFilePath.clear(); // Treat as untitled
+                    setWindowTitle(tr("OneCAD - Recovered"));
+                    return;
+                }
+            } else if (dialog.selectedAction() == CrashRecoveryDialog::Discard) {
+                for (const auto& info : recoveryFiles) {
+                    app::AutosaveManager::removeRecoveryFile(info.autosavePath);
+                }
+            }
+        }
+    }
+
     if (!m_startOverlay) {
         return;
     }

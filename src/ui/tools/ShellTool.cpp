@@ -8,6 +8,7 @@
 #include "../../app/commands/CommandProcessor.h"
 #include "../../app/document/Document.h"
 #include "../../app/document/OperationRecord.h"
+#include "../../core/modeling/SelectionTopologyResolver.h"
 #include "../../render/Camera3D.h"
 
 #include <QUuid>
@@ -19,11 +20,16 @@
 #include <TopoDS.hxx>
 
 #include <QVector3D>
+#include <QLoggingCategory>
+#include <QString>
 
 #include <algorithm>
 #include <cmath>
+#include <unordered_set>
 
 namespace onecad::ui::tools {
+
+Q_LOGGING_CATEGORY(logShellTool, "onecad.ui.tools.shell")
 
 namespace {
 constexpr double kMinThickness = 1e-3;
@@ -183,24 +189,60 @@ bool ShellTool::addOpenFace(const app::selection::SelectionItem& selection) {
         return false;
     }
 
-    // Find the face from elementMap
-    const auto* entry = document_->elementMap().find(
-        kernel::elementmap::ElementId{selection.id.elementId});
-    if (!entry || entry->kind != kernel::elementmap::ElementKind::Face || entry->shape.IsNull()) {
+    auto patch = core::modeling::SelectionTopologyResolver::resolvePromotedFaceSelection(
+        targetShape_, document_->elementMap(), selection.id.elementId);
+    if (!patch || patch->memberFaceIds.empty() || patch->memberFaces.empty()) {
+        qCWarning(logShellTool) << "addOpenFace:patch-resolve-failed"
+                                << QString::fromStdString(selection.id.elementId);
         return false;
     }
 
-    TopoDS_Face face = TopoDS::Face(entry->shape);
+    std::unordered_set<std::string> currentIds;
+    currentIds.reserve(openFaces_.size());
+    for (const auto& [faceId, face] : openFaces_) {
+        (void)face;
+        currentIds.insert(faceId);
+    }
 
-    // Check if already in list (toggle)
-    for (auto it = openFaces_.begin(); it != openFaces_.end(); ++it) {
-        if (it->IsSame(face)) {
-            openFaces_.erase(it);
-            return true;
+    bool allSelected = true;
+    for (const auto& faceId : patch->memberFaceIds) {
+        if (currentIds.find(faceId) == currentIds.end()) {
+            allSelected = false;
+            break;
         }
     }
 
-    openFaces_.push_back(face);
+    if (allSelected) {
+        std::unordered_set<std::string> patchIds(
+            patch->memberFaceIds.begin(), patch->memberFaceIds.end());
+        openFaces_.erase(
+            std::remove_if(openFaces_.begin(),
+                           openFaces_.end(),
+                           [&](const auto& item) {
+                               return patchIds.find(item.first) != patchIds.end();
+                           }),
+            openFaces_.end());
+        qCDebug(logShellTool) << "addOpenFace:toggle-off"
+                              << "seedFaceId=" << QString::fromStdString(selection.id.elementId)
+                              << "patchFaceCount=" << patch->memberFaceIds.size()
+                              << "remainingOpenFaces=" << openFaces_.size();
+        return true;
+    }
+
+    for (size_t i = 0; i < patch->memberFaceIds.size() && i < patch->memberFaces.size(); ++i) {
+        const std::string& faceId = patch->memberFaceIds[i];
+        if (currentIds.find(faceId) != currentIds.end()) {
+            continue;
+        }
+        openFaces_.emplace_back(faceId, patch->memberFaces[i]);
+        currentIds.insert(faceId);
+    }
+    std::sort(openFaces_.begin(), openFaces_.end(),
+              [](const auto& a, const auto& b) { return a.first < b.first; });
+    qCDebug(logShellTool) << "addOpenFace:toggle-on"
+                          << "seedFaceId=" << QString::fromStdString(selection.id.elementId)
+                          << "patchFaceCount=" << patch->memberFaceIds.size()
+                          << "openFaces=" << openFaces_.size();
     return true;
 }
 
@@ -244,12 +286,10 @@ void ShellTool::commitOperation(double thickness) {
         app::ShellParams params;
         params.thickness = thickness;
 
-        // Collect open face IDs from ElementMap
-        for (const auto& face : openFaces_) {
-            auto ids = document_->elementMap().findIdsByShape(face);
-            if (!ids.empty()) {
-                params.openFaceIds.push_back(ids.front().value);
-            }
+        // Persist exact selected patch members for deterministic replay.
+        for (const auto& [faceId, face] : openFaces_) {
+            (void)face;
+            params.openFaceIds.push_back(faceId);
         }
 
         record.params = params;
@@ -300,7 +340,8 @@ TopoDS_Shape ShellTool::buildShellShape(double thickness) const {
 
     try {
         TopTools_ListOfShape facesToRemove;
-        for (const auto& face : openFaces_) {
+        for (const auto& [faceId, face] : openFaces_) {
+            (void)faceId;
             facesToRemove.Append(face);
         }
 

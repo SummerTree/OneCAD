@@ -10,9 +10,14 @@
 #include "../../core/loop/FaceBuilder.h"
 #include "../../core/loop/RegionUtils.h"
 #include "../../core/modeling/BooleanOperation.h"
+#include "../../core/modeling/FaceExtrudeProfileBuilder.h"
+#include "../../core/modeling/FacePatchResolver.h"
 #include "../../render/Camera3D.h"
 
 #include <BRepGProp.hxx>
+#include <BRepAlgoAPI_Common.hxx>
+#include <BRepAlgoAPI_Cut.hxx>
+#include <BRepAlgoAPI_Fuse.hxx>
 #include <BRepAdaptor_Surface.hxx>
 #include <BRepPrimAPI_MakePrism.hxx>
 #include <BRepOffsetAPI_DraftAngle.hxx>
@@ -40,6 +45,26 @@ constexpr double kSideFaceDotThreshold = 0.9;
 
 app::BooleanMode signedBooleanMode(double distance) {
     return distance >= 0.0 ? app::BooleanMode::Add : app::BooleanMode::Cut;
+}
+
+bool planarFacePlaneAndNormal(const TopoDS_Face& face, gp_Pln& planeOut, gp_Dir& normalOut) {
+    try {
+        if (face.IsNull()) {
+            return false;
+        }
+        BRepAdaptor_Surface surface(face, true);
+        if (surface.GetType() != GeomAbs_Plane) {
+            return false;
+        }
+        planeOut = surface.Plane();
+        normalOut = planeOut.Axis().Direction();
+        if (face.Orientation() == TopAbs_REVERSED) {
+            normalOut.Reverse();
+        }
+        return true;
+    } catch (...) {
+        return false;
+    }
 }
 } // namespace
 
@@ -246,7 +271,13 @@ bool ExtrudeTool::handleMouseRelease(const QPoint& screenPos, Qt::MouseButton bu
             if (sketch_) {
                 record.input = app::SketchRegionRef{selection_.id.ownerId, selection_.id.elementId};
             } else {
-                record.input = app::FaceRef{selection_.id.ownerId, selection_.id.elementId};
+                app::FaceRef faceRef;
+                faceRef.bodyId = selection_.id.ownerId;
+                faceRef.faceId = basePatchLeaderFaceId_.empty()
+                    ? selection_.id.elementId
+                    : basePatchLeaderFaceId_;
+                faceRef.patchFaceIds = basePatchFaceIds_;
+                record.input = faceRef;
             }
 
             app::ExtrudeParams params;
@@ -298,6 +329,11 @@ bool ExtrudeTool::prepareInput(const app::selection::SelectionItem& selection) {
     
     // Reset state
     baseFace_.Nullify();
+    baseProfileShape_.Nullify();
+    basePatchFaces_.clear();
+    basePatchFaceIds_.clear();
+    basePatchLeaderFaceId_.clear();
+    basePatchFaceCount_ = 0;
     sketch_ = nullptr;
     targetBodyId_.clear();
     targetShape_.Nullify();
@@ -326,6 +362,11 @@ bool ExtrudeTool::prepareInput(const app::selection::SelectionItem& selection) {
         }
 
         baseFace_ = faceResult.face;
+        baseProfileShape_ = baseFace_;
+        basePatchFaces_ = {baseFace_};
+        basePatchFaceIds_.clear();
+        basePatchLeaderFaceId_.clear();
+        basePatchFaceCount_ = 1;
         const auto& plane = sketch_->getPlane();
         direction_ = gp_Dir(plane.normal.x, plane.normal.y, plane.normal.z);
         neutralPlane_ = gp_Pln(gp_Pnt(plane.origin.x, plane.origin.y, plane.origin.z), direction_);
@@ -358,21 +399,70 @@ bool ExtrudeTool::prepareInput(const app::selection::SelectionItem& selection) {
                                       << QString::fromStdString(selection.id.elementId);
             return false;
         }
-        baseFace_ = TopoDS::Face(entry->shape);
+        const TopoDS_Face seedFace = TopoDS::Face(entry->shape);
+        baseFace_ = seedFace;
         
-        if (!isPlanarFace(baseFace_)) {
+        if (!isPlanarFace(seedFace)) {
             // Only planar faces supported for now
             qCWarning(logExtrudeTool) << "prepareInput:non-planar-face";
             return false;
         }
 
-        BRepAdaptor_Surface surface(baseFace_, true);
-        gp_Pln plane = surface.Plane();
-        direction_ = plane.Axis().Direction();
-        if (baseFace_.Orientation() == TopAbs_REVERSED) {
-            direction_.Reverse();
+        auto patch = core::modeling::FacePatchResolver::resolveFromSeedFaceId(
+            targetShape_, document_->elementMap(), selection.id.elementId);
+        if (!patch) {
+            qCWarning(logExtrudeTool) << "prepareInput:coplanar-patch-resolve-failed"
+                                      << QString::fromStdString(selection.id.elementId);
+            return false;
         }
+
+        basePatchFaces_ = patch->memberFaces;
+        basePatchFaceIds_ = patch->memberFaceIds;
+        basePatchLeaderFaceId_ = patch->leaderFaceId;
+        std::size_t mergedProfileFaceCount = 1;
+        if (basePatchFaces_.size() > 1) {
+            std::string mergeError;
+            auto mergedProfile = core::modeling::FaceExtrudeProfileBuilder::build(
+                seedFace, basePatchFaces_, mergeError);
+            if (!mergedProfile || mergedProfile->profileShape.IsNull()) {
+                qCWarning(logExtrudeTool) << "prepareInput:merged-profile-failed"
+                                          << QString::fromStdString(selection.id.elementId);
+                if (!mergeError.empty()) {
+                    qCWarning(logExtrudeTool) << "prepareInput:merged-profile-reason"
+                                              << QString::fromStdString(mergeError);
+                }
+                return false;
+            }
+            baseProfileShape_ = mergedProfile->profileShape;
+            mergedProfileFaceCount = mergedProfile->mergedFaceCount;
+        } else {
+            baseProfileShape_ = seedFace;
+        }
+        basePatchFaceCount_ = basePatchFaces_.size();
+
+        gp_Pln plane;
+        gp_Dir faceNormal(0.0, 0.0, 1.0);
+        if (!planarFacePlaneAndNormal(seedFace, plane, faceNormal)) {
+            bool resolvedPlane = false;
+            for (const TopoDS_Face& patchFace : basePatchFaces_) {
+                if (planarFacePlaneAndNormal(patchFace, plane, faceNormal)) {
+                    resolvedPlane = true;
+                    break;
+                }
+            }
+            if (!resolvedPlane) {
+                qCWarning(logExtrudeTool) << "prepareInput:face-plane-normal-unresolved"
+                                          << QString::fromStdString(selection.id.elementId);
+                return false;
+            }
+        }
+        direction_ = faceNormal;
         neutralPlane_ = plane;
+        qCDebug(logExtrudeTool) << "prepareInput:face-patch"
+                                << "seedFaceId=" << QString::fromStdString(selection.id.elementId)
+                                << "leaderFaceId=" << QString::fromStdString(basePatchLeaderFaceId_)
+                                << "patchFaceCount=" << basePatchFaceCount_
+                                << "mergedProfileFaces=" << mergedProfileFaceCount;
     } else {
         qCWarning(logExtrudeTool) << "prepareInput:unsupported-selection-kind"
                                   << static_cast<int>(selection.kind);
@@ -381,22 +471,22 @@ bool ExtrudeTool::prepareInput(const app::selection::SelectionItem& selection) {
 
     baseCenter_ = gp_Pnt(0,0,0);
     GProp_GProps props;
-    BRepGProp::SurfaceProperties(baseFace_, props);
+    const TopoDS_Shape centerShape = baseProfileShape_.IsNull() ? TopoDS_Shape(baseFace_) : baseProfileShape_;
+    BRepGProp::SurfaceProperties(centerShape, props);
     if (props.Mass() > 0.0) {
         baseCenter_ = props.CentreOfMass();
     }
     qCDebug(logExtrudeTool) << "prepareInput:done"
                             << "hasTargetBody=" << !targetBodyId_.empty()
-                            << "hasTargetShape=" << !targetShape_.IsNull();
+                            << "hasTargetShape=" << !targetShape_.IsNull()
+                            << "patchFaces=" << basePatchFaceCount_;
     return true;
 }
 
 bool ExtrudeTool::isPlanarFace(const TopoDS_Face& face) const {
-    if (face.IsNull()) {
-        return false;
-    }
-    BRepAdaptor_Surface surface(face, true);
-    return surface.GetType() == GeomAbs_Plane;
+    gp_Pln plane;
+    gp_Dir normal(0.0, 0.0, 1.0);
+    return planarFacePlaneAndNormal(face, plane, normal);
 }
 
 void ExtrudeTool::detectBooleanMode(double distance) {
@@ -456,8 +546,56 @@ void ExtrudeTool::updatePreview(double distance) {
         clearPreview();
         return;
     }
-    
-    render::SceneMeshStore::Mesh mesh = previewTessellator_.buildMesh("preview", tool, previewElementMap_);
+
+    TopoDS_Shape previewShape = tool;
+    const bool facePushPullBooleanPreview =
+        selection_.kind == app::selection::SelectionKind::Face &&
+        !targetBodyId_.empty() &&
+        !targetShape_.IsNull() &&
+        booleanMode_ != app::BooleanMode::NewBody;
+
+    if (facePushPullBooleanPreview) {
+        qCDebug(logExtrudeTool) << "updatePreview:boolean-preview"
+                                << "mode=" << static_cast<int>(booleanMode_)
+                                << "targetBodyId=" << QString::fromStdString(targetBodyId_)
+                                << "patchFaces=" << basePatchFaceCount_;
+        bool booleanDone = false;
+        if (booleanMode_ == app::BooleanMode::Add) {
+            BRepAlgoAPI_Fuse fuse(targetShape_, tool);
+            fuse.Build();
+            if (fuse.IsDone()) {
+                previewShape = fuse.Shape();
+                booleanDone = !previewShape.IsNull();
+            }
+        } else if (booleanMode_ == app::BooleanMode::Cut) {
+            BRepAlgoAPI_Cut cut(targetShape_, tool);
+            cut.Build();
+            if (cut.IsDone()) {
+                previewShape = cut.Shape();
+                booleanDone = !previewShape.IsNull();
+            }
+        } else if (booleanMode_ == app::BooleanMode::Intersect) {
+            BRepAlgoAPI_Common common(targetShape_, tool);
+            common.Build();
+            if (common.IsDone()) {
+                previewShape = common.Shape();
+                booleanDone = !previewShape.IsNull();
+            }
+        }
+
+        if (!booleanDone) {
+            qCWarning(logExtrudeTool) << "updatePreview:boolean-preview-failed"
+                                      << "mode=" << static_cast<int>(booleanMode_)
+                                      << "targetBodyId=" << QString::fromStdString(targetBodyId_);
+            clearPreview();
+            return;
+        }
+        viewport_->setPreviewHiddenBody(targetBodyId_);
+    } else {
+        viewport_->clearPreviewHiddenBody();
+    }
+
+    render::SceneMeshStore::Mesh mesh = previewTessellator_.buildMesh("preview", previewShape, previewElementMap_);
     viewport_->setModelPreviewMeshes({std::move(mesh)});
 }
 
@@ -468,61 +606,68 @@ void ExtrudeTool::clearPreview() {
 }
 
 TopoDS_Shape ExtrudeTool::buildExtrudeShape(double distance) const {
-    if (baseFace_.IsNull()) {
-        return TopoDS_Shape();
-    }
+    try {
+        if (baseProfileShape_.IsNull()) {
+            return TopoDS_Shape();
+        }
 
-    gp_Vec prismVec(direction_.X() * distance,
-                    direction_.Y() * distance,
-                    direction_.Z() * distance);
-    BRepPrimAPI_MakePrism prism(baseFace_, prismVec, true);
-    TopoDS_Shape result = prism.Shape();
+        gp_Vec prismVec(direction_.X() * distance,
+                        direction_.Y() * distance,
+                        direction_.Z() * distance);
+        BRepPrimAPI_MakePrism prism(baseProfileShape_, prismVec, true);
+        TopoDS_Shape result = prism.Shape();
+        if (result.IsNull()) {
+            return {};
+        }
 
-    if (std::abs(draftAngleDeg_) <= kDraftAngleEpsilon) {
+        if (std::abs(draftAngleDeg_) <= kDraftAngleEpsilon) {
+            return result;
+        }
+
+        const double angleRad = qDegreesToRadians(draftAngleDeg_);
+        gp_Dir draftDir = direction_;
+        if (distance < 0.0) {
+            draftDir.Reverse();
+        }
+
+        BRepOffsetAPI_DraftAngle draft(result);
+        bool anyAdded = false;
+
+        for (TopExp_Explorer exp(result, TopAbs_FACE); exp.More(); exp.Next()) {
+            TopoDS_Face face = TopoDS::Face(exp.Current());
+            BRepAdaptor_Surface surface(face, true);
+            if (surface.GetType() != GeomAbs_Plane) {
+                continue;
+            }
+            gp_Pln plane = surface.Plane();
+            gp_Dir normal = plane.Axis().Direction();
+            if (face.Orientation() == TopAbs_REVERSED) {
+                normal.Reverse();
+            }
+            const double dot = std::abs(normal.Dot(draftDir));
+            if (dot > kSideFaceDotThreshold) {
+                continue;
+            }
+
+            draft.Add(face, draftDir, angleRad, neutralPlane_, true);
+            if (draft.AddDone()) {
+                anyAdded = true;
+            } else {
+                draft.Remove(face);
+            }
+        }
+
+        if (anyAdded) {
+            draft.Build();
+            if (draft.IsDone()) {
+                result = draft.Shape();
+            }
+        }
+
         return result;
+    } catch (...) {
+        return {};
     }
-
-    const double angleRad = qDegreesToRadians(draftAngleDeg_);
-    gp_Dir draftDir = direction_;
-    if (distance < 0.0) {
-        draftDir.Reverse();
-    }
-
-    BRepOffsetAPI_DraftAngle draft(result);
-    bool anyAdded = false;
-
-    for (TopExp_Explorer exp(result, TopAbs_FACE); exp.More(); exp.Next()) {
-        TopoDS_Face face = TopoDS::Face(exp.Current());
-        BRepAdaptor_Surface surface(face, true);
-        if (surface.GetType() != GeomAbs_Plane) {
-            continue;
-        }
-        gp_Pln plane = surface.Plane();
-        gp_Dir normal = plane.Axis().Direction();
-        if (face.Orientation() == TopAbs_REVERSED) {
-            normal.Reverse();
-        }
-        const double dot = std::abs(normal.Dot(draftDir));
-        if (dot > kSideFaceDotThreshold) {
-            continue;
-        }
-
-        draft.Add(face, draftDir, angleRad, neutralPlane_, true);
-        if (draft.AddDone()) {
-            anyAdded = true;
-        } else {
-            draft.Remove(face);
-        }
-    }
-
-    if (anyAdded) {
-        draft.Build();
-        if (draft.IsDone()) {
-            result = draft.Shape();
-        }
-    }
-
-    return result;
 }
 
 std::optional<ModelingTool::Indicator> ExtrudeTool::indicator() const {

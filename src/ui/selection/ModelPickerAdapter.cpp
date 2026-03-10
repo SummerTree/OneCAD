@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cmath>
 #include <limits>
+#include <optional>
 
 namespace onecad::ui::selection {
 
@@ -11,6 +12,64 @@ constexpr int kVertexPriority = 0;
 constexpr int kEdgePriority = 1;
 constexpr int kFacePriority = 2;
 constexpr int kBodyPriority = 3;
+constexpr double kRayParallelEpsilon = 1e-10;
+constexpr double kBarycentricSlack = 1e-8;
+constexpr double kFaceDepthEpsilon = 1e-4;
+constexpr double kOcclusionDepthEpsilon = 1e-2;
+
+struct DVec3 {
+    double x = 0.0;
+    double y = 0.0;
+    double z = 0.0;
+};
+
+DVec3 toDVec3(const QVector3D& value) {
+    return {static_cast<double>(value.x()),
+            static_cast<double>(value.y()),
+            static_cast<double>(value.z())};
+}
+
+QVector3D toQVector3D(const DVec3& value) {
+    return QVector3D(static_cast<float>(value.x),
+                     static_cast<float>(value.y),
+                     static_cast<float>(value.z));
+}
+
+DVec3 operator-(const DVec3& a, const DVec3& b) {
+    return {a.x - b.x, a.y - b.y, a.z - b.z};
+}
+
+DVec3 operator+(const DVec3& a, const DVec3& b) {
+    return {a.x + b.x, a.y + b.y, a.z + b.z};
+}
+
+DVec3 operator*(const DVec3& value, double scalar) {
+    return {value.x * scalar, value.y * scalar, value.z * scalar};
+}
+
+double dot(const DVec3& a, const DVec3& b) {
+    return a.x * b.x + a.y * b.y + a.z * b.z;
+}
+
+DVec3 cross(const DVec3& a, const DVec3& b) {
+    return {
+        a.y * b.z - a.z * b.y,
+        a.z * b.x - a.x * b.z,
+        a.x * b.y - a.y * b.x
+    };
+}
+
+double length(const DVec3& value) {
+    return std::sqrt(dot(value, value));
+}
+
+DVec3 normalize(const DVec3& value) {
+    const double len = length(value);
+    if (len <= 1e-20) {
+        return {};
+    }
+    return value * (1.0 / len);
+}
 
 std::string vertexIdForIndex(std::uint32_t index) {
     return "v" + std::to_string(index);
@@ -28,35 +87,41 @@ bool rayTriangleIntersect(const QVector3D& origin,
                           const QVector3D& v0,
                           const QVector3D& v1,
                           const QVector3D& v2,
-                          float* outT,
+                          double* outT,
                           QVector3D* outNormal) {
-    QVector3D edge1 = v1 - v0;
-    QVector3D edge2 = v2 - v0;
-    QVector3D pvec = QVector3D::crossProduct(direction, edge2);
-    float det = QVector3D::dotProduct(edge1, pvec);
-    if (std::abs(det) < 1e-8f) {
+    const DVec3 originD = toDVec3(origin);
+    const DVec3 directionD = toDVec3(direction);
+    const DVec3 v0D = toDVec3(v0);
+    const DVec3 v1D = toDVec3(v1);
+    const DVec3 v2D = toDVec3(v2);
+
+    const DVec3 edge1 = v1D - v0D;
+    const DVec3 edge2 = v2D - v0D;
+    const DVec3 pvec = cross(directionD, edge2);
+    const double det = dot(edge1, pvec);
+    if (std::abs(det) < kRayParallelEpsilon) {
         return false;
     }
-    float invDet = 1.0f / det;
-    QVector3D tvec = origin - v0;
-    float u = QVector3D::dotProduct(tvec, pvec) * invDet;
-    if (u < 0.0f || u > 1.0f) {
+    const double invDet = 1.0 / det;
+    const DVec3 tvec = originD - v0D;
+    const double u = dot(tvec, pvec) * invDet;
+    if (u < -kBarycentricSlack || u > 1.0 + kBarycentricSlack) {
         return false;
     }
-    QVector3D qvec = QVector3D::crossProduct(tvec, edge1);
-    float v = QVector3D::dotProduct(direction, qvec) * invDet;
-    if (v < 0.0f || u + v > 1.0f) {
+    const DVec3 qvec = cross(tvec, edge1);
+    const double v = dot(directionD, qvec) * invDet;
+    if (v < -kBarycentricSlack || (u + v) > 1.0 + kBarycentricSlack) {
         return false;
     }
-    float t = QVector3D::dotProduct(edge2, qvec) * invDet;
-    if (t <= 0.0f) {
+    const double t = dot(edge2, qvec) * invDet;
+    if (t <= 0.0) {
         return false;
     }
     if (outT) {
         *outT = t;
     }
     if (outNormal) {
-        *outNormal = QVector3D::crossProduct(edge1, edge2).normalized();
+        *outNormal = toQVector3D(normalize(cross(edge1, edge2)));
     }
     return true;
 }
@@ -75,7 +140,50 @@ double distancePointToSegment(const QPointF& p, const QPointF& a, const QPointF&
     return std::sqrt(diff.x() * diff.x() + diff.y() * diff.y());
 }
 
+double depthAlongRay(const ModelPickerAdapter::Ray& ray, const QVector3D& worldPos) {
+    if (!ray.valid) {
+        return std::numeric_limits<double>::infinity();
+    }
+    const QVector3D delta = worldPos - ray.origin;
+    return std::max(0.0, static_cast<double>(QVector3D::dotProduct(delta, ray.direction)));
+}
+
+double interpolationFactor(const QPointF& p, const QPointF& a, const QPointF& b) {
+    const QPointF ab = b - a;
+    const double lenSq = ab.x() * ab.x() + ab.y() * ab.y();
+    if (lenSq < 1e-6) {
+        return 0.0;
+    }
+    double t = ((p.x() - a.x()) * ab.x() + (p.y() - a.y()) * ab.y()) / lenSq;
+    return std::clamp(t, 0.0, 1.0);
+}
+
+bool isCandidateOccluded(double candidateDepth, const std::optional<double>& frontDepth) {
+    if (!frontDepth.has_value()) {
+        return false;
+    }
+    return candidateDepth > *frontDepth + std::max(kOcclusionDepthEpsilon, *frontDepth * 1e-3);
+}
+
 } // namespace
+
+std::string ModelPickerAdapter::promotedFaceId(const MeshCache& mesh, const std::string& faceId) {
+    auto groupIt = mesh.faceGroupLeaderByFaceId.find(faceId);
+    return groupIt != mesh.faceGroupLeaderByFaceId.end() ? groupIt->second : faceId;
+}
+
+std::string ModelPickerAdapter::promotedEdgeId(const MeshCache& mesh, const std::string& edgeId) {
+    auto groupIt = mesh.edgeGroupLeaderByEdgeId.find(edgeId);
+    return groupIt != mesh.edgeGroupLeaderByEdgeId.end() ? groupIt->second : edgeId;
+}
+
+ModelPickerAdapter::MeshCache::QuantizedPosition
+ModelPickerAdapter::quantizePosition(const QVector3D& position) {
+    auto quantize = [](float value) -> std::int64_t {
+        return static_cast<std::int64_t>(std::llround(static_cast<double>(value) * 1e5));
+    };
+    return {quantize(position.x()), quantize(position.y()), quantize(position.z())};
+}
 
 void ModelPickerAdapter::setMeshes(std::vector<Mesh>&& meshes) {
     meshes_.clear();
@@ -203,6 +311,42 @@ void ModelPickerAdapter::setMeshes(std::vector<Mesh>&& meshes) {
         for (const auto& [faceId, leaderId] : cache.faceGroupLeaderByFaceId) {
             cache.faceGroupMembers[leaderId].push_back(faceId);
         }
+        for (auto& [leaderId, members] : cache.faceGroupMembers) {
+            std::sort(members.begin(), members.end());
+            members.erase(std::unique(members.begin(), members.end()), members.end());
+            (void)leaderId;
+        }
+
+        cache.edgeGroupLeaderByEdgeId = std::move(mesh.edgeGroupByEdgeId);
+        if (cache.edgeGroupLeaderByEdgeId.empty()) {
+            for (const auto& [edgeId, polyline] : cache.edgePolylines) {
+                (void)polyline;
+                cache.edgeGroupLeaderByEdgeId[edgeId] = edgeId;
+            }
+        } else {
+            for (const auto& [edgeId, polyline] : cache.edgePolylines) {
+                (void)polyline;
+                if (cache.edgeGroupLeaderByEdgeId.find(edgeId) == cache.edgeGroupLeaderByEdgeId.end()) {
+                    cache.edgeGroupLeaderByEdgeId[edgeId] = edgeId;
+                }
+            }
+        }
+        for (const auto& [edgeId, leaderId] : cache.edgeGroupLeaderByEdgeId) {
+            cache.edgeGroupMembers[leaderId].push_back(edgeId);
+        }
+        for (auto& [leaderId, members] : cache.edgeGroupMembers) {
+            std::sort(members.begin(), members.end());
+            members.erase(std::unique(members.begin(), members.end()), members.end());
+            (void)leaderId;
+        }
+
+        for (const auto& suppressedVertexId : mesh.suppressedVertexIds) {
+            cache.pickableVertices.erase(suppressedVertexId);
+            auto vertexIt = cache.vertexMap.find(suppressedVertexId);
+            if (vertexIt != cache.vertexMap.end()) {
+                cache.suppressedVertexPositions.insert(quantizePosition(vertexIt->second));
+            }
+        }
 
         meshes_.push_back(std::move(cache));
     }
@@ -223,10 +367,10 @@ app::selection::PickResult ModelPickerAdapter::pick(const QPoint& screenPos,
     }
     struct FaceHit {
         const MeshCache* mesh = nullptr;
-        Triangle triangle;
+        std::string faceId;
         QVector3D normal;
         QVector3D point;
-        float t = 0.0f;
+        double t = 0.0;
     };
 
     std::vector<FaceHit> faceHits;
@@ -243,228 +387,190 @@ app::selection::PickResult ModelPickerAdapter::pick(const QPoint& screenPos,
             const QVector3D& v0 = mesh.vertices[tri.i0];
             const QVector3D& v1 = mesh.vertices[tri.i1];
             const QVector3D& v2 = mesh.vertices[tri.i2];
-            float t = 0.0f;
+            double t = 0.0;
             QVector3D normal;
             if (!rayTriangleIntersect(ray.origin, ray.direction, v0, v1, v2, &t, &normal)) {
                 continue;
             }
-            std::string key = mesh.bodyId + ":" + tri.faceId;
+            const std::string faceId = promotedFaceId(mesh, tri.faceId);
+            const std::string key = mesh.bodyId + ":" + faceId;
             auto it = faceIndex.find(key);
             if (it == faceIndex.end()) {
                 FaceHit hit;
                 hit.mesh = &mesh;
-                hit.triangle = tri;
+                hit.faceId = faceId;
                 hit.normal = normal;
-                hit.point = ray.origin + ray.direction * t;
+                hit.point = ray.origin + (ray.direction * static_cast<float>(t));
                 hit.t = t;
                 faceIndex[key] = faceHits.size();
                 faceHits.push_back(hit);
             } else {
                 FaceHit& hit = faceHits[it->second];
                 if (t < hit.t) {
-                    hit.triangle = tri;
+                    hit.faceId = faceId;
                     hit.normal = normal;
-                    hit.point = ray.origin + ray.direction * t;
+                    hit.point = ray.origin + (ray.direction * static_cast<float>(t));
                     hit.t = t;
                 }
             }
         }
     }
 
-    if (faceHits.empty()) {
-        return result;
-    }
-
     std::sort(faceHits.begin(), faceHits.end(), [](const FaceHit& a, const FaceHit& b) {
         return a.t < b.t;
     });
 
-    const FaceHit& frontHit = faceHits.front();
-    const MeshCache* hitMesh = frontHit.mesh;
-    const Triangle& hitTriangle = frontHit.triangle;
-
-    // Filter occluded faces from candidates
-    // We only consider faces that are very close to the front-most hit (e.g. coincident faces)
-    // Adjust epsilon based on scene scale if needed.
-    constexpr float kDepthEpsilon = 1e-4f;
-    float minT = frontHit.t;
+    std::optional<double> frontDepth;
+    if (!faceHits.empty()) {
+        frontDepth = faceHits.front().t;
+    }
 
     std::vector<FaceHit> visibleHits;
     visibleHits.reserve(faceHits.size());
-    for (const auto& hit : faceHits) {
-        if (hit.t <= minT + kDepthEpsilon) {
-            visibleHits.push_back(hit);
-        }
-    }
-
-    QPointF clickPoint(screenPos);
-    double bestVertexDistance = std::numeric_limits<double>::max();
-    std::string bestVertexId;
-    QVector3D bestVertexPos;
-    double bestEdgeDistance = std::numeric_limits<double>::max();
-    std::string bestEdgeId;
-    QVector3D bestEdgeMid;
-    bool usedTopology = false;
-    auto topoIt = hitMesh->faceTopology.find(hitTriangle.faceId);
-    if (topoIt != hitMesh->faceTopology.end()) {
-        const auto& topo = topoIt->second;
-        if (!topo.vertexIds.empty() || !topo.edgeIds.empty()) {
-            usedTopology = true;
-
-            for (const auto& vertexId : topo.vertexIds) {
-                auto it = hitMesh->vertexMap.find(vertexId);
-                if (it == hitMesh->vertexMap.end()) {
-                    continue;
-                }
-                QPointF projectedPos;
-                if (!projectToScreen(viewProjection, it->second, viewportSize, &projectedPos)) {
-                    continue;
-                }
-                double dist = std::hypot(clickPoint.x() - projectedPos.x(), clickPoint.y() - projectedPos.y());
-                if (dist < bestVertexDistance) {
-                    bestVertexDistance = dist;
-                    bestVertexId = vertexId;
-                    bestVertexPos = it->second;
-                }
-            }
-
-            for (const auto& edgeId : topo.edgeIds) {
-                auto polyIt = hitMesh->edgePolylines.find(edgeId);
-                if (polyIt == hitMesh->edgePolylines.end() || polyIt->second.size() < 2) {
-                    continue;
-                }
-                const auto& points = polyIt->second;
-                for (size_t i = 0; i + 1 < points.size(); ++i) {
-                    QPointF a;
-                    QPointF b;
-                    if (!projectToScreen(viewProjection, points[i], viewportSize, &a)) {
-                        continue;
-                    }
-                    if (!projectToScreen(viewProjection, points[i + 1], viewportSize, &b)) {
-                        continue;
-                    }
-                    double dist = distancePointToSegment(clickPoint, a, b);
-                    if (dist < bestEdgeDistance) {
-                        bestEdgeDistance = dist;
-                        bestEdgeId = edgeId;
-                        bestEdgeMid = (points[i] + points[i + 1]) * 0.5f;
-                    }
-                }
+    if (frontDepth.has_value()) {
+        for (const auto& hit : faceHits) {
+            if (hit.t <= *frontDepth + std::max(kFaceDepthEpsilon, *frontDepth * 1e-5)) {
+                visibleHits.push_back(hit);
             }
         }
     }
 
-    if (!usedTopology) {
-        auto vertexA = hitMesh->vertices[hitTriangle.i0];
-        auto vertexB = hitMesh->vertices[hitTriangle.i1];
-        auto vertexC = hitMesh->vertices[hitTriangle.i2];
+    const QPointF clickPoint(screenPos);
+    const double vertexTolerancePixels = std::max(4.0, tolerancePixels * 0.75);
+    const double edgeTolerancePixels = std::max(6.0, tolerancePixels);
 
-        QPointF screenA, screenB, screenC;
-        bool projA = projectToScreen(viewProjection, vertexA, viewportSize, &screenA);
-        bool projB = projectToScreen(viewProjection, vertexB, viewportSize, &screenB);
-        bool projC = projectToScreen(viewProjection, vertexC, viewportSize, &screenC);
+    struct VertexCandidate {
+        const MeshCache* mesh = nullptr;
+        std::string vertexId;
+        QVector3D position;
+        double distance = std::numeric_limits<double>::max();
+        double depth = std::numeric_limits<double>::infinity();
+    };
 
-        bool restrictVertices = !hitMesh->pickableVertices.empty();
-        auto canPickVertex = [&](const std::string& id) {
-            return !restrictVertices || hitMesh->pickableVertices.find(id) != hitMesh->pickableVertices.end();
-        };
+    struct EdgeCandidate {
+        const MeshCache* mesh = nullptr;
+        std::string edgeId;
+        QVector3D point;
+        double distance = std::numeric_limits<double>::max();
+        double depth = std::numeric_limits<double>::infinity();
+    };
 
-        if (projA) {
-            double dist = std::hypot(clickPoint.x() - screenA.x(), clickPoint.y() - screenA.y());
-            if (dist < bestVertexDistance && canPickVertex(vertexIdForIndex(hitTriangle.i0))) {
-                bestVertexDistance = dist;
-                bestVertexId = vertexIdForIndex(hitTriangle.i0);
-                bestVertexPos = vertexA;
+    VertexCandidate bestVertex;
+    EdgeCandidate bestEdge;
+
+    auto shouldReplaceCandidate = [](double distance,
+                                     double depth,
+                                     double bestDistance,
+                                     double bestDepth) {
+        if (distance + 1e-6 < bestDistance) {
+            return true;
+        }
+        if (std::abs(distance - bestDistance) > 1e-6) {
+            return false;
+        }
+        return depth < bestDepth;
+    };
+
+    for (const auto& mesh : meshes_) {
+        for (const auto& [vertexId, vertexPos] : mesh.vertexMap) {
+            if (!mesh.pickableVertices.empty() &&
+                mesh.pickableVertices.find(vertexId) == mesh.pickableVertices.end()) {
+                continue;
+            }
+            if (mesh.suppressedVertexPositions.find(quantizePosition(vertexPos)) !=
+                mesh.suppressedVertexPositions.end()) {
+                continue;
+            }
+            QPointF projectedPos;
+            if (!projectToScreen(viewProjection, vertexPos, viewportSize, &projectedPos)) {
+                continue;
+            }
+            const double distance = std::hypot(clickPoint.x() - projectedPos.x(),
+                                               clickPoint.y() - projectedPos.y());
+            if (distance > vertexTolerancePixels) {
+                continue;
+            }
+            const double depth = depthAlongRay(ray, vertexPos);
+            if (isCandidateOccluded(depth, frontDepth)) {
+                continue;
+            }
+            if (!bestVertex.mesh ||
+                shouldReplaceCandidate(distance, depth, bestVertex.distance, bestVertex.depth)) {
+                bestVertex.mesh = &mesh;
+                bestVertex.vertexId = vertexId;
+                bestVertex.position = vertexPos;
+                bestVertex.distance = distance;
+                bestVertex.depth = depth;
             }
         }
-        if (projB) {
-            double dist = std::hypot(clickPoint.x() - screenB.x(), clickPoint.y() - screenB.y());
-            if (dist < bestVertexDistance && canPickVertex(vertexIdForIndex(hitTriangle.i1))) {
-                bestVertexDistance = dist;
-                bestVertexId = vertexIdForIndex(hitTriangle.i1);
-                bestVertexPos = vertexB;
-            }
-        }
-        if (projC) {
-            double dist = std::hypot(clickPoint.x() - screenC.x(), clickPoint.y() - screenC.y());
-            if (dist < bestVertexDistance && canPickVertex(vertexIdForIndex(hitTriangle.i2))) {
-                bestVertexDistance = dist;
-                bestVertexId = vertexIdForIndex(hitTriangle.i2);
-                bestVertexPos = vertexC;
-            }
-        }
 
-        if (projA && projB) {
-            double dist = distancePointToSegment(clickPoint, screenA, screenB);
-            if (dist < bestEdgeDistance) {
-                std::string edgeId = edgeIdForIndices(hitTriangle.i0, hitTriangle.i1);
-                if (hitMesh->edgePolylines.find(edgeId) != hitMesh->edgePolylines.end()) {
-                    bestEdgeDistance = dist;
-                    bestEdgeId = edgeId;
-                    bestEdgeMid = (vertexA + vertexB) * 0.5f;
+        for (const auto& [edgeId, polyline] : mesh.edgePolylines) {
+            if (polyline.size() < 2) {
+                continue;
+            }
+            const std::string promotedId = promotedEdgeId(mesh, edgeId);
+            for (size_t i = 0; i + 1 < polyline.size(); ++i) {
+                QPointF a;
+                QPointF b;
+                if (!projectToScreen(viewProjection, polyline[i], viewportSize, &a) ||
+                    !projectToScreen(viewProjection, polyline[i + 1], viewportSize, &b)) {
+                    continue;
                 }
-            }
-        }
-        if (projB && projC) {
-            double dist = distancePointToSegment(clickPoint, screenB, screenC);
-            if (dist < bestEdgeDistance) {
-                std::string edgeId = edgeIdForIndices(hitTriangle.i1, hitTriangle.i2);
-                if (hitMesh->edgePolylines.find(edgeId) != hitMesh->edgePolylines.end()) {
-                    bestEdgeDistance = dist;
-                    bestEdgeId = edgeId;
-                    bestEdgeMid = (vertexB + vertexC) * 0.5f;
+                const double distance = distancePointToSegment(clickPoint, a, b);
+                if (distance > edgeTolerancePixels) {
+                    continue;
                 }
-            }
-        }
-        if (projC && projA) {
-            double dist = distancePointToSegment(clickPoint, screenC, screenA);
-            if (dist < bestEdgeDistance) {
-                std::string edgeId = edgeIdForIndices(hitTriangle.i2, hitTriangle.i0);
-                if (hitMesh->edgePolylines.find(edgeId) != hitMesh->edgePolylines.end()) {
-                    bestEdgeDistance = dist;
-                    bestEdgeId = edgeId;
-                    bestEdgeMid = (vertexC + vertexA) * 0.5f;
+                const double t = interpolationFactor(clickPoint, a, b);
+                const QVector3D worldPoint = polyline[i] + ((polyline[i + 1] - polyline[i]) * static_cast<float>(t));
+                const double depth = depthAlongRay(ray, worldPoint);
+                if (isCandidateOccluded(depth, frontDepth)) {
+                    continue;
+                }
+                if (!bestEdge.mesh ||
+                    shouldReplaceCandidate(distance, depth, bestEdge.distance, bestEdge.depth)) {
+                    bestEdge.mesh = &mesh;
+                    bestEdge.edgeId = promotedId;
+                    bestEdge.point = worldPoint;
+                    bestEdge.distance = distance;
+                    bestEdge.depth = depth;
                 }
             }
         }
     }
 
-    if (!bestVertexId.empty() && bestVertexDistance <= tolerancePixels) {
+    if (bestVertex.mesh) {
         app::selection::SelectionItem item;
         item.kind = app::selection::SelectionKind::Vertex;
-        item.id = {hitMesh->bodyId, bestVertexId};
+        item.id = {bestVertex.mesh->bodyId, bestVertex.vertexId};
         item.priority = kVertexPriority;
-        item.screenDistance = bestVertexDistance;
-        item.depth = static_cast<double>(frontHit.t);
-        item.worldPos = {bestVertexPos.x(), bestVertexPos.y(), bestVertexPos.z()};
-        result.hits.push_back(item);
-    } else if (!bestEdgeId.empty() && bestEdgeDistance <= tolerancePixels) {
-        app::selection::SelectionItem item;
-        item.kind = app::selection::SelectionKind::Edge;
-        item.id = {hitMesh->bodyId, bestEdgeId};
-        item.priority = kEdgePriority;
-        item.screenDistance = bestEdgeDistance;
-        item.depth = static_cast<double>(frontHit.t);
-        item.worldPos = {bestEdgeMid.x(), bestEdgeMid.y(), bestEdgeMid.z()};
+        item.screenDistance = bestVertex.distance;
+        item.depth = bestVertex.depth;
+        item.worldPos = {bestVertex.position.x(), bestVertex.position.y(), bestVertex.position.z()};
         result.hits.push_back(item);
     }
 
-    std::unordered_map<std::string, float> bodyDepths;
+    if (!bestEdge.edgeId.empty()) {
+        app::selection::SelectionItem item;
+        item.kind = app::selection::SelectionKind::Edge;
+        item.id = {bestEdge.mesh->bodyId, bestEdge.edgeId};
+        item.priority = kEdgePriority;
+        item.screenDistance = bestEdge.distance;
+        item.depth = bestEdge.depth;
+        item.worldPos = {bestEdge.point.x(), bestEdge.point.y(), bestEdge.point.z()};
+        result.hits.push_back(item);
+    }
+
+    std::unordered_map<std::string, double> bodyDepths;
     std::unordered_map<std::string, QVector3D> bodyPoints;
     std::unordered_map<std::string, QVector3D> bodyNormals;
 
     for (const auto& hit : visibleHits) {
         app::selection::SelectionItem faceItem;
         faceItem.kind = app::selection::SelectionKind::Face;
-        std::string faceId = hit.triangle.faceId;
-        auto groupIt = hit.mesh->faceGroupLeaderByFaceId.find(faceId);
-        if (groupIt != hit.mesh->faceGroupLeaderByFaceId.end()) {
-            faceId = groupIt->second;
-        }
-        faceItem.id = {hit.mesh->bodyId, faceId};
+        faceItem.id = {hit.mesh->bodyId, hit.faceId};
         faceItem.priority = kFacePriority;
         faceItem.screenDistance = 0.0;
-        faceItem.depth = static_cast<double>(hit.t);
+        faceItem.depth = hit.t;
         faceItem.worldPos = {hit.point.x(), hit.point.y(), hit.point.z()};
         faceItem.normal = {hit.normal.x(), hit.normal.y(), hit.normal.z()};
         result.hits.push_back(faceItem);
@@ -501,11 +607,7 @@ bool ModelPickerAdapter::getFaceTriangles(const std::string& bodyId,
         if (mesh.bodyId != bodyId) {
             continue;
         }
-        std::string groupId = faceId;
-        auto groupIt = mesh.faceGroupLeaderByFaceId.find(faceId);
-        if (groupIt != mesh.faceGroupLeaderByFaceId.end()) {
-            groupId = groupIt->second;
-        }
+        const std::string groupId = promotedFaceId(mesh, faceId);
         outTriangles.clear();
         auto membersIt = mesh.faceGroupMembers.find(groupId);
         if (membersIt != mesh.faceGroupMembers.end()) {
@@ -546,32 +648,38 @@ bool ModelPickerAdapter::getBodyTriangles(const std::string& bodyId,
 bool ModelPickerAdapter::getEdgeSegment(const std::string& bodyId,
                                         const std::string& edgeId,
                                         std::array<QVector3D, 2>& outSegment) const {
+    std::vector<std::vector<QVector3D>> polylines;
+    if (!getEdgePolylines(bodyId, edgeId, polylines) || polylines.empty() || polylines.front().size() < 2) {
+        return false;
+    }
+    outSegment = {polylines.front().front(), polylines.front().back()};
+    return true;
+}
+
+bool ModelPickerAdapter::getEdgePolylines(const std::string& bodyId,
+                                          const std::string& edgeId,
+                                          std::vector<std::vector<QVector3D>>& outPolylines) const {
     for (const auto& mesh : meshes_) {
         if (mesh.bodyId != bodyId) {
             continue;
+        }
+        const std::string groupId = promotedEdgeId(mesh, edgeId);
+        outPolylines.clear();
+        auto membersIt = mesh.edgeGroupMembers.find(groupId);
+        if (membersIt != mesh.edgeGroupMembers.end()) {
+            for (const auto& memberId : membersIt->second) {
+                auto it = mesh.edgePolylines.find(memberId);
+                if (it != mesh.edgePolylines.end() && it->second.size() >= 2) {
+                    outPolylines.push_back(it->second);
+                }
+            }
+            return !outPolylines.empty();
         }
         auto it = mesh.edgePolylines.find(edgeId);
         if (it == mesh.edgePolylines.end() || it->second.size() < 2) {
             return false;
         }
-        outSegment = {it->second.front(), it->second.back()};
-        return true;
-    }
-    return false;
-}
-
-bool ModelPickerAdapter::getEdgePolyline(const std::string& bodyId,
-                                         const std::string& edgeId,
-                                         std::vector<QVector3D>& outPolyline) const {
-    for (const auto& mesh : meshes_) {
-        if (mesh.bodyId != bodyId) {
-            continue;
-        }
-        auto it = mesh.edgePolylines.find(edgeId);
-        if (it == mesh.edgePolylines.end()) {
-            return false;
-        }
-        outPolyline = it->second;
+        outPolylines.push_back(it->second);
         return true;
     }
     return false;
@@ -601,13 +709,9 @@ bool ModelPickerAdapter::getFaceBoundaryEdges(const std::string& bodyId,
         if (mesh.bodyId != bodyId) {
             continue;
         }
-        std::string groupId = faceId;
-        auto groupIt = mesh.faceGroupLeaderByFaceId.find(faceId);
-        if (groupIt != mesh.faceGroupLeaderByFaceId.end()) {
-            groupId = groupIt->second;
-        }
+        const std::string groupId = promotedFaceId(mesh, faceId);
         outEdges.clear();
-        std::unordered_set<std::string> seenEdges;
+        std::unordered_set<std::string> seenEdgeGroups;
         auto membersIt = mesh.faceGroupMembers.find(groupId);
         if (membersIt != mesh.faceGroupMembers.end()) {
             for (const auto& memberId : membersIt->second) {
@@ -616,7 +720,18 @@ bool ModelPickerAdapter::getFaceBoundaryEdges(const std::string& bodyId,
                     continue;
                 }
                 for (const auto& edgeId : topoIt->second.edgeIds) {
-                    if (!seenEdges.insert(edgeId).second) {
+                    const std::string promotedEdge = promotedEdgeId(mesh, edgeId);
+                    if (!seenEdgeGroups.insert(promotedEdge).second) {
+                        continue;
+                    }
+                    auto edgeMembersIt = mesh.edgeGroupMembers.find(promotedEdge);
+                    if (edgeMembersIt != mesh.edgeGroupMembers.end()) {
+                        for (const auto& memberEdgeId : edgeMembersIt->second) {
+                            auto polyIt = mesh.edgePolylines.find(memberEdgeId);
+                            if (polyIt != mesh.edgePolylines.end() && polyIt->second.size() >= 2) {
+                                outEdges.push_back(polyIt->second);
+                            }
+                        }
                         continue;
                     }
                     auto polyIt = mesh.edgePolylines.find(edgeId);
@@ -631,7 +746,22 @@ bool ModelPickerAdapter::getFaceBoundaryEdges(const std::string& bodyId,
         if (topoIt == mesh.faceTopology.end()) {
             return false;
         }
+        seenEdgeGroups.clear();
         for (const auto& edgeId : topoIt->second.edgeIds) {
+            const std::string promotedEdge = promotedEdgeId(mesh, edgeId);
+            if (!seenEdgeGroups.insert(promotedEdge).second) {
+                continue;
+            }
+            auto edgeMembersIt = mesh.edgeGroupMembers.find(promotedEdge);
+            if (edgeMembersIt != mesh.edgeGroupMembers.end()) {
+                for (const auto& memberEdgeId : edgeMembersIt->second) {
+                    auto polyIt = mesh.edgePolylines.find(memberEdgeId);
+                    if (polyIt != mesh.edgePolylines.end() && polyIt->second.size() >= 2) {
+                        outEdges.push_back(polyIt->second);
+                    }
+                }
+                continue;
+            }
             auto polyIt = mesh.edgePolylines.find(edgeId);
             if (polyIt != mesh.edgePolylines.end() && polyIt->second.size() >= 2) {
                 outEdges.push_back(polyIt->second);

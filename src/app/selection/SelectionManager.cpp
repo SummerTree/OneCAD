@@ -56,33 +56,6 @@ ClickAction SelectionManager::handleClick(const PickResult& result,
         return action;
     }
 
-    if (!deepSelectEnabled_ && isAmbiguous(hits)) {
-        if (sameClickLocation(screenPos) && !lastClickCandidates_.empty()) {
-            const SelectionItem previousSelection = lastClickCandidates_[lastClickIndex_];
-            lastClickCandidates_ = hits;
-
-            SelectionKey prevKey{previousSelection.kind, previousSelection.id};
-            auto it = std::find_if(hits.begin(), hits.end(),
-                                   [&prevKey](const SelectionItem& item) {
-                                       return SelectionKey{item.kind, item.id} == prevKey;
-                                   });
-            if (it != hits.end()) {
-                lastClickIndex_ = (static_cast<size_t>(std::distance(hits.begin(), it)) + 1) %
-                                  hits.size();
-            } else {
-                lastClickIndex_ = 0;
-            }
-            lastClickPos_ = screenPos;
-        } else {
-            lastClickCandidates_ = hits;
-            lastClickIndex_ = 0;
-            lastClickPos_ = screenPos;
-        }
-        applySelectionInternal(lastClickCandidates_[lastClickIndex_], modifiers);
-        action.selectionChanged = true;
-        return action;
-    }
-
     applySelectionInternal(hits.front(), modifiers);
     action.selectionChanged = true;
     lastClickCandidates_ = hits;

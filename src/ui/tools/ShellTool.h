@@ -13,6 +13,7 @@
 #include <TopoDS_Face.hxx>
 #include <TopoDS_Shape.hxx>
 #include <gp_Pnt.hxx>
+#include <utility>
 #include <string>
 #include <vector>
 
@@ -75,7 +76,7 @@ private:
     State state_ = State::WaitingForBody;
     std::string targetBodyId_;
     TopoDS_Shape targetShape_;
-    std::vector<TopoDS_Face> openFaces_;
+    std::vector<std::pair<std::string, TopoDS_Face>> openFaces_;
     gp_Pnt indicatorOrigin_;
 
     bool active_ = false;

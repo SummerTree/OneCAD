@@ -21,6 +21,7 @@ class SidebarToolButton;
 namespace onecad {
 namespace app {
     class Document;
+    class AutosaveManager;
     namespace commands {
         class CommandProcessor;
     }
@@ -40,6 +41,8 @@ class RenderDebugPanel;
 class StartOverlay;
 class HistoryPanel;
 class SnapSettingsPanel;
+class PropertyInspector;
+class CommandPalette;
 
 /**
  * @brief Main application window for OneCAD.
@@ -64,6 +67,7 @@ private slots:
     void onSaveDocument();
     void onSaveDocumentAs();
     void onExportStep();
+    void onExportMesh();
     void onNewSketch();
     void onExitSketch();
     void onSketchModeChanged(bool inSketchMode);
@@ -71,6 +75,7 @@ private slots:
     void onPlaneSelectionCancelled();
     void openSketchForEdit(const QString& sketchId);
     void onImport();
+    void importStepFile(const QString& path);
     void onMousePositionChanged(double x, double y, double z);
     void onSketchUpdated();
     void onSketchSelectionChanged();
@@ -140,11 +145,14 @@ private:
     SidebarToolButton* m_historyOverlayButton = nullptr;
     SnapSettingsPanel* m_snapSettingsPanel = nullptr;
     SidebarToolButton* m_snapSettingsButton = nullptr;
+    PropertyInspector* m_propertyInspector = nullptr;
+    CommandPalette* m_commandPalette = nullptr;
     QHBoxLayout* m_centralLayout = nullptr;
 
     // Document model (owns all sketches)
     std::unique_ptr<app::Document> m_document;
     std::unique_ptr<app::commands::CommandProcessor> m_commandProcessor;
+    app::AutosaveManager* m_autosaveManager = nullptr;
 
     // Active editing state
     std::string m_activeSketchId;  // Currently editing sketch ID (empty if not in sketch mode)
@@ -167,6 +175,7 @@ private:
     QString m_currentFilePath;  // Empty = untitled document
     bool maybeSave();  // Returns true if safe to proceed
 
+    void registerMenuActions();
     void loadSettings();
     void saveSettings();
 };

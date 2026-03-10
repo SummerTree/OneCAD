@@ -1,24 +1,20 @@
 #include "TessellationCache.h"
 
+#include "../../core/modeling/TopologyVisibility.h"
+
 #include <BRepMesh_IncrementalMesh.hxx>
 #include <BRep_Tool.hxx>
-#include <BRepAdaptor_Surface.hxx>
-#include <BRepLProp_SLProps.hxx>
 #include <Poly_Triangulation.hxx>
 #include <BRepAdaptor_Curve.hxx>
 #include <BRepTools_WireExplorer.hxx>
 #include <BRepBndLib.hxx>
 #include <Bnd_Box.hxx>
-#include <Geom2d_Curve.hxx>
-#include <GeomAbs_Shape.hxx>
 #include <GCPnts_AbscissaPoint.hxx>
 #include <GCPnts_UniformAbscissa.hxx>
-#include <Precision.hxx>
 #include <Standard_Failure.hxx>
 #include <TopExp_Explorer.hxx>
 #include <TopExp.hxx>
 #include <TopLoc_Location.hxx>
-#include <TopAbs_Orientation.hxx>
 #include <TopoDS_Edge.hxx>
 #include <TopoDS_Wire.hxx>
 #include <TopoDS_Vertex.hxx>
@@ -26,6 +22,7 @@
 #include <TopTools_IndexedDataMapOfShapeListOfShape.hxx>
 #include <TopTools_ListIteratorOfListOfShape.hxx>
 
+#include <algorithm>
 #include <cmath>
 #include <functional>
 #include <limits>
@@ -34,82 +31,9 @@
 
 namespace {
 
-constexpr double kSmoothEdgeAngleDeg = 30.0;  // Threshold for visible edges (was 5°)
+constexpr double kSmoothEdgeAngleDeg = 15.0;  // Threshold for visible edges (balance sharp edge fidelity vs smooth shading)
 constexpr double kDegToRad = 3.14159265358979323846 / 180.0;
 const double kSmoothEdgeCos = std::cos(kSmoothEdgeAngleDeg * kDegToRad);
-
-bool sampleFaceNormal(const TopoDS_Edge& edge, const TopoDS_Face& face, gp_Dir* outNormal) {
-    if (!outNormal) {
-        return false;
-    }
-    Standard_Real first = 0.0;
-    Standard_Real last = 0.0;
-    Handle(Geom2d_Curve) curve2d = BRep_Tool::CurveOnSurface(edge, face, first, last);
-    if (curve2d.IsNull()) {
-        return false;
-    }
-    Standard_Real mid = 0.5 * (first + last);
-    gp_Pnt2d uv;
-    gp_Vec2d d1;
-    curve2d->D1(mid, uv, d1);
-
-    BRepAdaptor_Surface surface(face, true);
-    BRepLProp_SLProps props(surface, uv.X(), uv.Y(), 1, Precision::Confusion());
-    if (!props.IsNormalDefined()) {
-        return false;
-    }
-    gp_Dir normal = props.Normal();
-    if (face.Orientation() == TopAbs_REVERSED) {
-        normal.Reverse();
-    }
-    *outNormal = normal;
-    return true;
-}
-
-bool isSharpEdgeByAngle(const TopoDS_Edge& edge, const TopoDS_Face& f1, const TopoDS_Face& f2) {
-    gp_Dir n1;
-    gp_Dir n2;
-    if (!sampleFaceNormal(edge, f1, &n1) || !sampleFaceNormal(edge, f2, &n2)) {
-        return true;
-    }
-    double dot = n1.Dot(n2);
-    return dot < kSmoothEdgeCos;
-}
-
-bool isVisibleEdge(const TopoDS_Edge& edge, const TopTools_ListOfShape& faces) {
-    std::vector<TopoDS_Face> adjacentFaces;
-    adjacentFaces.reserve(static_cast<size_t>(faces.Extent()));
-    for (TopTools_ListIteratorOfListOfShape it(faces); it.More(); it.Next()) {
-        TopoDS_Face face = TopoDS::Face(it.Value());
-        if (!face.IsNull()) {
-            adjacentFaces.push_back(face);
-        }
-    }
-
-    if (adjacentFaces.empty()) {
-        return false;
-    }
-    if (adjacentFaces.size() == 1) {
-        if (BRep_Tool::IsClosed(edge, adjacentFaces[0])) {
-            return false;
-        }
-        return true;
-    }
-
-    for (size_t i = 0; i + 1 < adjacentFaces.size(); ++i) {
-        for (size_t j = i + 1; j < adjacentFaces.size(); ++j) {
-            GeomAbs_Shape continuity = BRep_Tool::Continuity(edge, adjacentFaces[i], adjacentFaces[j]);
-            if (continuity >= GeomAbs_G1) {
-                continue;
-            }
-            if (isSharpEdgeByAngle(edge, adjacentFaces[i], adjacentFaces[j])) {
-                return true;
-            }
-        }
-    }
-
-    return false;
-}
 
 struct FaceDisjointSet {
     std::unordered_map<std::string, std::string> parent;
@@ -183,6 +107,18 @@ void TessellationCache::computeSmoothNormals(SceneMeshStore::Mesh& mesh) {
         return;
     }
 
+    // Step 0: Remove degenerate (zero-area) triangles
+    mesh.triangles.erase(
+        std::remove_if(mesh.triangles.begin(), mesh.triangles.end(),
+                        [&mesh](const SceneMeshStore::Triangle& tri) {
+                            const QVector3D& v0 = mesh.vertices[tri.i0];
+                            const QVector3D& v1 = mesh.vertices[tri.i1];
+                            const QVector3D& v2 = mesh.vertices[tri.i2];
+                            QVector3D cross = QVector3D::crossProduct(v1 - v0, v2 - v0);
+                            return cross.lengthSquared() < 1e-16f;
+                        }),
+        mesh.triangles.end());
+
     // Step 1: Compute face normals for all triangles
     std::vector<QVector3D> faceNormals(mesh.triangles.size());
     std::vector<float> faceAreas(mesh.triangles.size());
@@ -197,14 +133,8 @@ void TessellationCache::computeSmoothNormals(SceneMeshStore::Mesh& mesh) {
         QVector3D edge2 = v2 - v0;
         QVector3D cross = QVector3D::crossProduct(edge1, edge2);
         float area = cross.length() * 0.5f;
-
-        if (area > 1e-8f) {
-            faceNormals[ti] = cross.normalized();
-            faceAreas[ti] = area;
-        } else {
-            faceNormals[ti] = QVector3D(0, 0, 1);
-            faceAreas[ti] = 0.0f;
-        }
+        faceNormals[ti] = cross.normalized();
+        faceAreas[ti] = area;
     }
 
     // Step 2: Build position -> list of (triangleIdx, vertexSlot) map
@@ -232,7 +162,7 @@ void TessellationCache::computeSmoothNormals(SceneMeshStore::Mesh& mesh) {
 
     for (const auto& entry : positionToTriVerts) {
         const auto& triVerts = entry.second;
-        // Group triangles by their smooth group
+        // Group triangles by their smooth group, splitting at color boundaries
         std::unordered_map<std::string, std::vector<TriVertex>> groupToTriVerts;
         for (const auto& tv : triVerts) {
             const auto& tri = mesh.triangles[tv.triIdx];
@@ -242,6 +172,15 @@ void TessellationCache::computeSmoothNormals(SceneMeshStore::Mesh& mesh) {
                 group = it->second;
             } else {
                 group = tri.faceId;  // Fallback: each face is its own group
+            }
+            // Different face colors must not share smoothed normals
+            auto colorIt = mesh.faceColors.find(tri.faceId);
+            if (colorIt != mesh.faceColors.end()) {
+                const auto& c = colorIt->second;
+                int r = static_cast<int>(c[0] * 255.0f);
+                int g = static_cast<int>(c[1] * 255.0f);
+                int b = static_cast<int>(c[2] * 255.0f);
+                group += "|" + std::to_string(r) + "," + std::to_string(g) + "," + std::to_string(b);
             }
             groupToTriVerts[group].push_back(tv);
         }
@@ -289,7 +228,8 @@ void TessellationCache::computeSmoothNormals(SceneMeshStore::Mesh& mesh) {
 
 SceneMeshStore::Mesh TessellationCache::buildMesh(const std::string& bodyId,
                                                   const TopoDS_Shape& shape,
-                                                  kernel::elementmap::ElementMap& elementMap) const {
+                                                  kernel::elementmap::ElementMap& elementMap,
+                                                  const std::unordered_map<std::string, std::array<float, 4>>* faceColors) const {
     SceneMeshStore::Mesh mesh;
     mesh.bodyId = bodyId;
     mesh.modelMatrix.setToIdentity();
@@ -332,7 +272,7 @@ SceneMeshStore::Mesh TessellationCache::buildMesh(const std::string& bodyId,
     for (int i = 1; i <= edgeToFacesMap.Extent(); ++i) {
         const TopoDS_Edge& edge = TopoDS::Edge(edgeToFacesMap.FindKey(i));
         const TopTools_ListOfShape& faces = edgeToFacesMap.FindFromIndex(i);
-        if (isVisibleEdge(edge, faces)) {
+        if (core::modeling::isVisibleTopologyEdge(edge, faces, kSmoothEdgeCos)) {
             visibleEdges.insert(edge);
         }
     }
@@ -419,6 +359,11 @@ SceneMeshStore::Mesh TessellationCache::buildMesh(const std::string& bodyId,
     for (const auto& entry : faceIdByShape) {
         const std::string& faceId = entry.second;
         mesh.faceGroupByFaceId[faceId] = faceGroups.find(faceId);
+    }
+
+    // Copy face colors into mesh if provided
+    if (faceColors) {
+        mesh.faceColors = *faceColors;
     }
 
     // Compute smooth normals with vertex splitting at crease edges

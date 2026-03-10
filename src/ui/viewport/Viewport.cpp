@@ -9,6 +9,7 @@
 #include "../../core/sketch/constraints/Constraints.h"
 #include "../../core/sketch/tools/SketchToolManager.h"
 #include "../../core/loop/RegionUtils.h"
+#include "../../core/modeling/FacePatchResolver.h"
 #include "../../app/commands/CommandProcessor.h"
 #include "../../app/commands/SketchDragGestureCommand.h"
 #include "../../app/document/Document.h"
@@ -37,6 +38,10 @@
 #include <QPanGesture>
 #include <QNativeGestureEvent>
 #include <QApplication>
+#include <QDragEnterEvent>
+#include <QDropEvent>
+#include <QMimeData>
+#include <QUrl>
 #include <QLoggingCategory>
 #include <QOpenGLContext>
 #include <QSizePolicy>
@@ -65,24 +70,12 @@ namespace sketchTools = core::sketch::tools;
 Q_LOGGING_CATEGORY(logUiInput, "onecad.ui.input")
 
 namespace {
-constexpr float kOrbitSensitivity = 0.3f;
 constexpr float kTrackpadPanScale = 1.0f;
 constexpr float kTrackpadOrbitScale = 0.35f;
 constexpr float kPinchZoomScale = 1000.0f;
 constexpr float kWheelZoomShiftScale = 0.2f;
 constexpr float kAngleDeltaToPixels = 1.0f / 8.0f;
 constexpr qint64 kNativeZoomPostSuppressMs = 120;
-constexpr qint64 kNativeZoomActiveTimeoutMs = 250;
-constexpr float kNativeZoomMinFactor = 0.7f;
-constexpr float kNativeZoomMaxFactor = 1.3f;
-constexpr qreal kNativeZoomScaleValueMin = 0.5;
-constexpr qreal kNativeZoomScaleValueMax = 1.5;
-constexpr float kPlaneSelectSize = 120.0f;
-constexpr float kPlaneSelectHalf = kPlaneSelectSize * 0.5f;
-constexpr float kThumbnailCameraAngle = 45.0f;
-constexpr float kGridDepthScaleMin = 1.0f;
-constexpr float kGridDepthScaleMax = 8.0f;
-constexpr float kGridBoundsMaxScale = 6.0f;
 constexpr std::array<sketch::SnapType, 8> kPointDragSnapTypes = {
     sketch::SnapType::Vertex,
     sketch::SnapType::Endpoint,
@@ -124,218 +117,6 @@ std::vector<sketch::SketchRenderer::GuideLineInfo> buildFeasibleDragGuides(
 }
 
 } // namespace
-
-namespace {
-struct PlaneSelectionVisual {
-    core::sketch::SketchPlane plane;
-    QString label;
-    QColor color;
-};
-
-std::array<PlaneSelectionVisual, 3> planeSelections(const ThemeViewportPlaneColors& colors) {
-    return {{
-        {core::sketch::SketchPlane::XY(), QStringLiteral("XY"), colors.xy},
-        {core::sketch::SketchPlane::XZ(), QStringLiteral("XZ"), colors.xz},
-        {core::sketch::SketchPlane::YZ(), QStringLiteral("YZ"), colors.yz}
-    }};
-}
-
-struct PlaneAxes {
-    QVector3D normal;
-    QVector3D xAxis;
-    QVector3D yAxis;
-};
-
-PlaneAxes buildPlaneAxes(const core::sketch::SketchPlane& plane) {
-    PlaneAxes axes;
-    axes.normal = QVector3D(plane.normal.x, plane.normal.y, plane.normal.z);
-    axes.xAxis = QVector3D(plane.xAxis.x, plane.xAxis.y, plane.xAxis.z);
-    axes.yAxis = QVector3D(plane.yAxis.x, plane.yAxis.y, plane.yAxis.z);
-
-    if (axes.normal.lengthSquared() < 1e-8f) {
-        axes.normal = QVector3D::crossProduct(axes.xAxis, axes.yAxis);
-    }
-    if (axes.normal.lengthSquared() < 1e-8f) {
-        axes.normal = QVector3D(0.0f, 0.0f, 1.0f);
-    }
-    axes.normal.normalize();
-
-    if (axes.xAxis.lengthSquared() < 1e-8f) {
-        axes.xAxis = QVector3D::crossProduct(axes.yAxis, axes.normal);
-    }
-    if (axes.xAxis.lengthSquared() < 1e-8f) {
-        axes.xAxis = (std::abs(axes.normal.z()) < 0.9f)
-            ? QVector3D::crossProduct(axes.normal, QVector3D(0, 0, 1))
-            : QVector3D::crossProduct(axes.normal, QVector3D(0, 1, 0));
-    }
-
-    axes.xAxis -= axes.normal * QVector3D::dotProduct(axes.normal, axes.xAxis);
-    if (axes.xAxis.lengthSquared() < 1e-8f) {
-        axes.xAxis = (std::abs(axes.normal.z()) < 0.9f)
-            ? QVector3D::crossProduct(axes.normal, QVector3D(0, 0, 1))
-            : QVector3D::crossProduct(axes.normal, QVector3D(0, 1, 0));
-    }
-    axes.xAxis.normalize();
-
-    axes.yAxis = QVector3D::crossProduct(axes.normal, axes.xAxis).normalized();
-    return axes;
-}
-
-sketch::Vec3d toVec3d(const QColor& color) {
-    return {color.redF(), color.greenF(), color.blueF()};
-}
-
-void applySketchColors(const ThemeSketchColors& colors, sketch::SketchRenderStyle* style) {
-    if (!style) {
-        return;
-    }
-    style->colors.normalGeometry = toVec3d(colors.normalGeometry);
-    style->colors.constructionGeometry = toVec3d(colors.constructionGeometry);
-    style->colors.selectedGeometry = toVec3d(colors.selectedGeometry);
-    style->colors.previewGeometry = toVec3d(colors.previewGeometry);
-    style->colors.errorGeometry = toVec3d(colors.errorGeometry);
-    style->colors.constraintIcon = toVec3d(colors.constraintIcon);
-    style->colors.dimensionText = toVec3d(colors.dimensionText);
-    style->colors.conflictHighlight = toVec3d(colors.conflictHighlight);
-    style->colors.fullyConstrained = toVec3d(colors.fullyConstrained);
-    style->colors.underConstrained = toVec3d(colors.underConstrained);
-    style->colors.overConstrained = toVec3d(colors.overConstrained);
-    style->colors.gridMajor = toVec3d(colors.gridMajor);
-    style->colors.gridMinor = toVec3d(colors.gridMinor);
-    style->colors.regionFill = toVec3d(colors.regionFill);
-}
-
-bool projectToScreen(const QMatrix4x4& viewProjection,
-                     const QVector3D& worldPos,
-                     float width,
-                     float height,
-                     QPointF* outPos) {
-    QVector4D clip = viewProjection * QVector4D(worldPos, 1.0f);
-    if (clip.w() <= 1e-6f) {
-        return false;
-    }
-
-    QVector3D ndc = clip.toVector3D() / clip.w();
-    float x = (ndc.x() * 0.5f + 0.5f) * width;
-    float y = (1.0f - (ndc.y() * 0.5f + 0.5f)) * height;
-    *outPos = QPointF(x, y);
-    return true;
-}
-
-bool intersectRayWithPlane(const QVector3D& origin,
-                           const QVector3D& direction,
-                           const QVector3D& planeOrigin,
-                           const QVector3D& planeNormal,
-                           QVector3D* outPoint,
-                           float* outDistance) {
-    constexpr float kEpsilon = 1e-6f;
-    float denom = QVector3D::dotProduct(direction, planeNormal);
-    if (std::abs(denom) < kEpsilon) {
-        return false;
-    }
-
-    float t = QVector3D::dotProduct(planeOrigin - origin, planeNormal) / denom;
-    if (t < 0.0f) {
-        return false;
-    }
-
-    if (outPoint) {
-        *outPoint = origin + direction * t;
-    }
-    if (outDistance) {
-        *outDistance = t;
-    }
-    return true;
-}
-
-QVector2D worldToPlaneCoords(const QVector3D& worldPoint,
-                             const QVector3D& planeOrigin,
-                             const QVector3D& planeXAxis,
-                             const QVector3D& planeYAxis) {
-    QVector3D relative = worldPoint - planeOrigin;
-    return {
-        QVector3D::dotProduct(relative, planeXAxis),
-        QVector3D::dotProduct(relative, planeYAxis)
-    };
-}
-
-QMatrix4x4 buildPlaneModelMatrix(const QVector3D& planeOrigin,
-                                 const QVector3D& planeXAxis,
-                                 const QVector3D& planeYAxis,
-                                 const QVector3D& planeNormal) {
-    QMatrix4x4 model;
-    model.setColumn(0, QVector4D(planeXAxis, 0.0f));
-    model.setColumn(1, QVector4D(planeYAxis, 0.0f));
-    model.setColumn(2, QVector4D(planeNormal, 0.0f));
-    model.setColumn(3, QVector4D(planeOrigin, 1.0f));
-    return model;
-}
-
-bool computePlaneBoundsOnPlane(const QMatrix4x4& viewProjection,
-                               const QVector3D& planeOrigin,
-                               const QVector3D& planeNormal,
-                               const QVector3D& planeXAxis,
-                               const QVector3D& planeYAxis,
-                               QRectF* outBounds) {
-    bool invertible = false;
-    QMatrix4x4 inverse = viewProjection.inverted(&invertible);
-    if (!invertible) {
-        return false;
-    }
-
-    QVector2D minPoint(std::numeric_limits<float>::max(), std::numeric_limits<float>::max());
-    QVector2D maxPoint(-std::numeric_limits<float>::max(), -std::numeric_limits<float>::max());
-    int hitCount = 0;
-
-    constexpr float kEpsilon = 1e-6f;
-    const float ndc[2] = { -1.0f, 1.0f };
-
-    for (float x : ndc) {
-        for (float y : ndc) {
-            QVector4D nearPoint = inverse * QVector4D(x, y, -1.0f, 1.0f);
-            QVector4D farPoint = inverse * QVector4D(x, y, 1.0f, 1.0f);
-
-            if (qFuzzyIsNull(nearPoint.w()) || qFuzzyIsNull(farPoint.w())) {
-                continue;
-            }
-
-            QVector3D p0 = nearPoint.toVector3D() / nearPoint.w();
-            QVector3D p1 = farPoint.toVector3D() / farPoint.w();
-            QVector3D dir = p1 - p0;
-
-            float denom = QVector3D::dotProduct(dir, planeNormal);
-            if (std::abs(denom) < kEpsilon) {
-                continue;
-            }
-
-            float t = QVector3D::dotProduct(planeOrigin - p0, planeNormal) / denom;
-            if (t < 0.0f) {
-                continue;
-            }
-
-            QVector3D hit = p0 + dir * t;
-            if (!std::isfinite(hit.x()) || !std::isfinite(hit.y()) || !std::isfinite(hit.z())) {
-                continue;
-            }
-            QVector2D planePoint = worldToPlaneCoords(hit, planeOrigin, planeXAxis, planeYAxis);
-            minPoint.setX(std::min(minPoint.x(), planePoint.x()));
-            minPoint.setY(std::min(minPoint.y(), planePoint.y()));
-            maxPoint.setX(std::max(maxPoint.x(), planePoint.x()));
-            maxPoint.setY(std::max(maxPoint.y(), planePoint.y()));
-            ++hitCount;
-        }
-    }
-
-    if (hitCount < 4) {
-        return false;
-    }
-
-    *outBounds = QRectF(QPointF(minPoint.x(), minPoint.y()),
-                        QPointF(maxPoint.x(), maxPoint.y())).normalized();
-    return true;
-}
-} // namespace
-
 Viewport::Viewport(QWidget* parent)
     : QOpenGLWidget(parent) {
 
@@ -353,6 +134,7 @@ Viewport::Viewport(QWidget* parent)
     
     // Prevent partial updates which can cause compositing artifacts on macOS
     setUpdateBehavior(QOpenGLWidget::NoPartialUpdate);
+    setAcceptDrops(true);
     
     // Gesture handling:
     // - macOS: rely on NativeGesture to avoid duplicate pinch streams
@@ -419,13 +201,13 @@ Viewport::Viewport(QWidget* parent)
     // Selection manager
     m_selectionManager = new app::selection::SelectionManager(this);
     m_selectionManager->setMode(app::selection::SelectionMode::Model);
+    m_selectionManager->setDeepSelectEnabled(false);
     {
         app::selection::SelectionFilter filter;
         filter.allowedKinds = {
             app::selection::SelectionKind::Vertex,
             app::selection::SelectionKind::Edge,
-            app::selection::SelectionKind::Face,
-            app::selection::SelectionKind::Body
+            app::selection::SelectionKind::Face
         };
         m_selectionManager->setFilter(filter);
     }
@@ -490,486 +272,6 @@ Viewport::~Viewport() {
     }
     m_grid->cleanup();
     doneCurrent();
-}
-
-void Viewport::initializeGL() {
-    initializeOpenGLFunctions();
-    
-    // Background color set via updateTheme
-    glClearColor(m_backgroundColor.redF(), m_backgroundColor.greenF(), m_backgroundColor.blueF(), m_backgroundColor.alphaF());
-    
-    glEnable(GL_DEPTH_TEST);
-    glEnable(GL_MULTISAMPLE);
-    glEnable(GL_LINE_SMOOTH);
-    glHint(GL_LINE_SMOOTH_HINT, GL_NICEST);
-    
-    // Disable states we don't want by default
-    glDisable(GL_CULL_FACE);
-    
-    m_grid->initialize();
-
-    m_bodyRenderer = std::make_unique<render::BodyRenderer>();
-    m_bodyRenderer->initialize();
-
-    // Create and initialize sketch renderer (requires OpenGL context)
-    m_sketchRenderer = std::make_unique<sketch::SketchRenderer>();
-    if (!m_sketchRenderer->initialize()) {
-        qWarning() << "Failed to initialize SketchRenderer";
-    }
-    updateTheme();
-}
-
-void Viewport::updateTheme() {
-    const ThemeDefinition& theme = ThemeManager::instance().currentTheme();
-    m_backgroundColor = theme.viewport.background;
-    if (m_grid) {
-        m_grid->setMajorColor(theme.viewport.grid.major);
-        m_grid->setMinorColor(theme.viewport.grid.minor);
-        m_grid->setAxisColors(theme.viewport.grid.axisX,
-                              theme.viewport.grid.axisY,
-                              theme.viewport.grid.axisZ);
-        m_grid->forceUpdate();
-    }
-    if (m_sketchRenderer) {
-        sketch::SketchRenderStyle style = m_sketchRenderer->getStyle();
-        applySketchColors(theme.sketch, &style);
-        m_sketchRenderer->setStyle(style);
-    }
-    const auto& body = theme.viewport.body;
-    m_renderTuning.keyLightDir = body.keyLightDir;
-    m_renderTuning.fillLightDir = body.fillLightDir;
-    m_renderTuning.fillLightIntensity = body.fillLightIntensity;
-    m_renderTuning.ambientIntensity = body.ambientIntensity;
-    m_renderTuning.hemiUpDir = body.hemiUpDir;
-    m_renderTuning.gradientDir = body.ambientGradientDir;
-    m_renderTuning.gradientStrength = body.ambientGradientStrength;
-    update();
-}
-
-void Viewport::resizeGL(int w, int h) {
-    m_width = w > 0 ? w : 1;
-    m_height = h > 0 ? h : 1;
-    
-    // Handle Retina/High-DPI displays
-    const qreal ratio = devicePixelRatio();
-    glViewport(0, 0, static_cast<GLsizei>(m_width * ratio), static_cast<GLsizei>(m_height * ratio));
-}
-
-void Viewport::resizeEvent(QResizeEvent* event) {
-    QOpenGLWidget::resizeEvent(event);
-    if (m_viewCube) {
-        // Position top-right with margin
-        m_viewCube->move(width() - m_viewCube->width() - 20, 20);
-    }
-}
-
-void Viewport::paintGL() {
-    // Ensure viewport is set correctly with correct device pixel ratio
-    const qreal ratio = devicePixelRatio();
-    glViewport(0, 0, static_cast<GLsizei>(m_width * ratio), static_cast<GLsizei>(m_height * ratio));
-
-    // Clear to background color
-    glClearColor(m_backgroundColor.redF(), m_backgroundColor.greenF(), m_backgroundColor.blueF(), m_backgroundColor.alphaF());
-    glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
-
-    // Reset depth test state
-    glEnable(GL_DEPTH_TEST);
-    glDepthFunc(GL_LESS);
-
-    float aspectRatio = static_cast<float>(m_width) / static_cast<float>(m_height);
-    QMatrix4x4 projection = m_camera->projectionMatrix(aspectRatio);
-    QMatrix4x4 view = m_camera->viewMatrix();
-    QMatrix4x4 viewProjection = projection * view;
-
-    // Calculate pixel scale for sketch rendering and adaptive grid
-    double pixelScale = 1.0;
-    float dist = m_camera->distance();
-    float fov = m_camera->fov();
-
-    if (m_camera->projectionType() == render::Camera3D::ProjectionType::Orthographic) {
-        double worldHeight = static_cast<double>(m_camera->orthoScale());
-        pixelScale = worldHeight / (static_cast<double>(m_height) * ratio);
-    } else {
-        double halfFov = qDegreesToRadians(fov * 0.5f);
-        double worldHeight = 2.0 * static_cast<double>(dist) * std::tan(halfFov);
-        pixelScale = worldHeight / (static_cast<double>(m_height) * ratio);
-    }
-
-    if (pixelScale <= 0.0) {
-        pixelScale = 1.0;
-    }
-    m_pixelScale = pixelScale;
-
-    const double maxDimension = static_cast<double>(qMax(m_width, m_height));
-    const double viewExtent = 0.5 * maxDimension * ratio * pixelScale;
-
-    // Render grid
-    sketch::SketchPlane gridPlane =
-        (m_inSketchMode && m_activeSketch) ? m_activeSketch->getPlane() : sketch::SketchPlane::XY();
-    PlaneAxes gridAxes = buildPlaneAxes(gridPlane);
-    QVector3D gridOrigin(gridPlane.origin.x, gridPlane.origin.y, gridPlane.origin.z);
-    QVector3D gridNormal = gridAxes.normal;
-    QVector3D gridXAxis = gridAxes.xAxis;
-    QVector3D gridYAxis = gridAxes.yAxis;
-
-    QMatrix4x4 gridModel = buildPlaneModelMatrix(gridOrigin, gridXAxis, gridYAxis, gridNormal);
-    QMatrix4x4 gridMvp = viewProjection * gridModel;
-
-    QVector3D target = m_camera->target();
-    QVector3D forward = m_camera->forward();
-    QVector3D position = m_camera->position();
-
-    float planeDistance = dist;
-    QVector3D planeAnchorWorld = gridOrigin;
-    bool hasPlaneHit = intersectRayWithPlane(position,
-                                             forward,
-                                             gridOrigin,
-                                             gridNormal,
-                                             &planeAnchorWorld,
-                                             &planeDistance);
-    if (!hasPlaneHit) {
-        float targetSignedDistance = QVector3D::dotProduct(target - gridOrigin, gridNormal);
-        planeAnchorWorld = target - gridNormal * targetSignedDistance;
-    }
-
-    float depthScale = 1.0f;
-    if (m_camera->projectionType() == render::Camera3D::ProjectionType::Perspective &&
-        dist > 1e-4f) {
-        depthScale = planeDistance / dist;
-    }
-    depthScale = std::clamp(depthScale, kGridDepthScaleMin, kGridDepthScaleMax);
-
-    QVector2D planeAnchor = worldToPlaneCoords(planeAnchorWorld, gridOrigin, gridXAxis, gridYAxis);
-    float viewHalf = static_cast<float>(viewExtent) * depthScale;
-    QRectF fallbackBounds(QPointF(planeAnchor.x() - viewHalf, planeAnchor.y() - viewHalf),
-                          QPointF(planeAnchor.x() + viewHalf, planeAnchor.y() + viewHalf));
-
-    QRectF gridBounds = fallbackBounds;
-    QRectF frustumBounds;
-    bool hasFrustumBounds = computePlaneBoundsOnPlane(viewProjection,
-                                                      gridOrigin,
-                                                      gridNormal,
-                                                      gridXAxis,
-                                                      gridYAxis,
-                                                      &frustumBounds);
-    if (hasFrustumBounds) {
-        float maxHalf = 0.5f * static_cast<float>(qMax(frustumBounds.width(),
-                                                       frustumBounds.height()));
-        QVector2D anchor2d(planeAnchor.x(), planeAnchor.y());
-        QVector2D frustumCenter(static_cast<float>(frustumBounds.center().x()),
-                                static_cast<float>(frustumBounds.center().y()));
-        float centerDistance = (frustumCenter - anchor2d).length();
-        float maxAllowed = viewHalf * kGridBoundsMaxScale;
-
-        if (maxHalf > maxAllowed || centerDistance > maxAllowed) {
-            hasFrustumBounds = false;
-        }
-    }
-    if (hasFrustumBounds) {
-        gridBounds = frustumBounds;
-    }
-
-    float minX = static_cast<float>(gridBounds.left());
-    float maxX = static_cast<float>(gridBounds.right());
-    float minY = static_cast<float>(gridBounds.top());
-    float maxY = static_cast<float>(gridBounds.bottom());
-
-    QVector2D fadeOriginPlane = worldToPlaneCoords(position, gridOrigin, gridXAxis, gridYAxis);
-
-    m_grid->render(gridMvp,
-                   static_cast<float>(pixelScale),
-                   QVector2D(minX, minY),
-                   QVector2D(maxX, maxY),
-                   fadeOriginPlane);
-
-    if (m_bodyRenderer) {
-        render::BodyRenderer::RenderStyle style;
-        const ThemeDefinition& theme = ThemeManager::instance().currentTheme();
-        style.baseColor = theme.viewport.body.base;
-        style.edgeColor = theme.viewport.body.edge;
-        style.specularColor = theme.viewport.body.specular;
-        style.rimColor = theme.viewport.body.rim;
-        style.glowColor = theme.viewport.body.glow;
-        style.highlightColor = theme.viewport.body.highlight;
-        style.hemiSkyColor = theme.viewport.body.hemiSky;
-        style.hemiGroundColor = theme.viewport.body.hemiGround;
-        style.highlightStrength = 0.08f;
-        style.drawGlow = true;
-        style.glowAlpha = 0.18f;
-        style.drawEdges = true;
-        style.previewAlpha = 0.35f;
-        if (!m_previewHiddenBodyId.empty()) {
-            style.previewAlpha = 0.8f;
-        }
-        style.keyLightDir = m_renderTuning.keyLightDir;
-        style.fillLightDir = m_renderTuning.fillLightDir;
-        style.fillLightIntensity = m_renderTuning.fillLightIntensity;
-        style.ambientIntensity = m_renderTuning.ambientIntensity;
-        style.hemiUpDir = m_renderTuning.hemiUpDir;
-        style.ambientGradientStrength = m_renderTuning.gradientStrength;
-        style.ambientGradientDir = m_renderTuning.gradientDir;
-        if (m_inSketchMode) {
-            style.ghosted = true;
-            style.ghostFactor = 0.6f;
-            style.baseAlpha = 0.25f;
-            style.edgeAlpha = 0.5f;
-            style.glowAlpha = 0.12f;
-            style.highlightStrength = 0.04f;
-        }
-
-        // Debug visualization modes (F1-F5)
-        style.debugNormals = m_debugNormals;
-        style.debugDepth = m_debugDepth;
-        style.wireframeOnly = m_wireframeOnly;
-        style.disableGamma = m_disableGamma;
-        style.useMatcap = m_useMatcap;
-        style.nearPlane = m_camera->nearPlane();
-        style.farPlane = m_camera->farPlane();
-        style.isOrtho = (m_camera->projectionType() == render::Camera3D::ProjectionType::Orthographic);
-
-        // Dynamic quality: reduce during navigation for better responsiveness
-        if (m_isNavigating) {
-            style.drawEdges = false;
-            style.drawGlow = false;
-        }
-
-        m_bodyRenderer->render(viewProjection, view, style);
-    }
-
-    // Render sketch(es)
-    if (m_inSketchMode && m_activeSketch && m_sketchRenderer) {
-        // In sketch mode: render only the active sketch with tool preview
-        const auto& plane = m_activeSketch->getPlane();
-        QVector3D target = m_camera->target();
-        sketch::Vec3d target3d{target.x(), target.y(), target.z()};
-        sketch::Vec2d center = plane.toSketch(target3d);
-
-        sketch::Viewport sketchViewport;
-        sketchViewport.center = center;
-        sketchViewport.size = {
-            static_cast<double>(m_width) * ratio * pixelScale,
-            static_cast<double>(m_height) * ratio * pixelScale
-        };
-        sketchViewport.zoom = pixelScale > 0.0 ? 1.0 / pixelScale : 1.0;
-        m_sketchRenderer->setViewport(sketchViewport);
-        m_sketchRenderer->setPixelScale(pixelScale);
-
-        // Render tool preview
-        if (m_toolManager) {
-            m_toolManager->renderPreview();
-        }
-
-        m_sketchRenderer->render(view, projection);
-
-        // Render preview dimensions overlay
-        const auto& dims = m_sketchRenderer->getPreviewDimensions();
-        if (!dims.empty()) {
-            // Unbind GL context resources before QPainter to be safe
-            // QPainter painter(this) automatically handles GL state for the widget
-            QPainter painter(this);
-            painter.setRenderHint(QPainter::Antialiasing);
-            
-            const ThemeDefinition& theme = ThemeManager::instance().currentTheme();
-            QColor textColor = theme.viewport.overlay.previewDimensionText;
-            QColor bgColor = theme.viewport.overlay.previewDimensionBackground;
-            
-            QFont font = painter.font();
-            font.setPointSize(10);
-            font.setBold(true);
-            painter.setFont(font);
-
-            PlaneAxes axes = buildPlaneAxes(plane);
-            QVector3D origin(plane.origin.x, plane.origin.y, plane.origin.z);
-
-            for (const auto& dim : dims) {
-                // Calculate world position: origin + xAxis * x + yAxis * y
-                QVector3D worldPos = origin + 
-                                   axes.xAxis * dim.position.x + 
-                                   axes.yAxis * dim.position.y;
-                
-                QPointF screenPos;
-                if (projectToScreen(viewProjection, worldPos, 
-                                  static_cast<float>(width()), 
-                                  static_cast<float>(height()), 
-                                  &screenPos)) {
-                    
-                    QString text = QString::fromStdString(dim.text);
-                    QFontMetrics fm(font);
-                    int textWidth = fm.horizontalAdvance(text);
-                    int textHeight = fm.height();
-                    int padding = 4;
-                    
-                    QRectF bgRect(screenPos.x() - textWidth / 2 - padding, 
-                                screenPos.y() - textHeight / 2 - padding, 
-                                textWidth + 2 * padding, 
-                                textHeight + 2 * padding);
-                    
-                    painter.setPen(Qt::NoPen);
-                    painter.setBrush(bgColor);
-                    painter.drawRoundedRect(bgRect, 4, 4);
-                    
-                    painter.setPen(textColor);
-                    painter.drawText(bgRect, Qt::AlignCenter, text);
-                }
-            }
-        }
-
-        // Render snap hint overlay
-        const auto& snap = m_sketchRenderer->getSnapIndicator();
-        if (snap.active && !snap.hintText.empty()) {
-            QPainter painter(this);
-            painter.setRenderHint(QPainter::Antialiasing);
-            
-            const ThemeDefinition& theme = ThemeManager::instance().currentTheme();
-            QColor textColor = theme.viewport.overlay.previewDimensionText;
-            QColor bgColor = theme.viewport.overlay.previewDimensionBackground;
-            
-            QFont font = painter.font();
-            font.setPointSize(10);
-            font.setBold(true);
-            painter.setFont(font);
-
-            PlaneAxes axes = buildPlaneAxes(plane);
-            QVector3D origin(plane.origin.x, plane.origin.y, plane.origin.z);
-            
-            QVector3D worldPos = origin + 
-                               axes.xAxis * snap.position.x + 
-                               axes.yAxis * snap.position.y;
-            
-            QPointF screenPos;
-            if (projectToScreen(viewProjection, worldPos, 
-                              static_cast<float>(width()), 
-                              static_cast<float>(height()), 
-                              &screenPos)) {
-                
-                QString text = QString::fromStdString(snap.hintText);
-                QFontMetrics fm(font);
-                int textWidth = fm.horizontalAdvance(text);
-                int textHeight = fm.height();
-                int padding = 4;
-                
-                // Offset ~20px above snap point
-                QRectF bgRect(screenPos.x() - textWidth / 2 - padding, 
-                            screenPos.y() - textHeight / 2 - padding - 20, 
-                            textWidth + 2 * padding, 
-                            textHeight + 2 * padding);
-                
-                painter.setPen(Qt::NoPen);
-                painter.setBrush(bgColor);
-                painter.drawRoundedRect(bgRect, 4, 4);
-                
-                painter.setPen(textColor);
-                painter.drawText(bgRect, Qt::AlignCenter, text);
-            }
-        }
-    } else if (m_document && m_sketchRenderer) {
-        // Not in sketch mode: render only the navigator-selected sketch (if any).
-        if (m_referenceSketch) {
-            if (m_documentSketchesDirty) {
-                m_sketchRenderer->updateGeometry();
-            }
-
-            const auto& plane = m_referenceSketch->getPlane();
-            QVector3D target = m_camera->target();
-            sketch::Vec3d target3d{target.x(), target.y(), target.z()};
-            sketch::Vec2d center = plane.toSketch(target3d);
-
-            sketch::Viewport sketchViewport;
-            sketchViewport.center = center;
-            sketchViewport.size = {
-                static_cast<double>(m_width) * ratio * pixelScale,
-                static_cast<double>(m_height) * ratio * pixelScale
-            };
-            sketchViewport.zoom = pixelScale > 0.0 ? 1.0 / pixelScale : 1.0;
-            m_sketchRenderer->setViewport(sketchViewport);
-            m_sketchRenderer->setPixelScale(pixelScale);
-
-            const sketch::SketchRenderStyle previousStyle = m_sketchRenderer->getStyle();
-            sketch::SketchRenderStyle ghostStyle = previousStyle;
-            ghostStyle.colors.normalGeometry.x *= 0.6;
-            ghostStyle.colors.normalGeometry.y *= 0.6;
-            ghostStyle.colors.normalGeometry.z *= 0.6;
-            ghostStyle.colors.constructionGeometry.x *= 0.6;
-            ghostStyle.colors.constructionGeometry.y *= 0.6;
-            ghostStyle.colors.constructionGeometry.z *= 0.6;
-            ghostStyle.colors.selectedGeometry.x *= 0.7;
-            ghostStyle.colors.selectedGeometry.y *= 0.7;
-            ghostStyle.colors.selectedGeometry.z *= 0.7;
-            ghostStyle.regionOpacity *= 0.4f;
-            ghostStyle.regionHoverOpacity *= 0.4f;
-            ghostStyle.regionSelectedOpacity *= 0.6f;
-            m_sketchRenderer->setStyle(ghostStyle);
-
-            m_sketchRenderer->render(view, projection);
-
-            m_sketchRenderer->setStyle(previousStyle);
-            m_documentSketchesDirty = false;
-        }
-    }
-
-    if (m_planeSelectionActive) {
-        glDisable(GL_DEPTH_TEST);
-        drawPlaneSelectionOverlay(viewProjection);
-    }
-
-    drawModelSelectionOverlay(viewProjection);
-    drawModelToolOverlay(viewProjection);
-}
-
-void Viewport::setSketchInteractionState(SketchInteractionState newState, const char* reason) {
-    if (m_sketchInteractionState == newState) {
-        return;
-    }
-    auto stateName = [](SketchInteractionState state) {
-        switch (state) {
-        case SketchInteractionState::Idle:
-            return "Idle";
-        case SketchInteractionState::PendingPointSingleDrag:
-            return "PendingPointSingleDrag";
-        case SketchInteractionState::PointSingleDragging:
-            return "PointSingleDragging";
-        case SketchInteractionState::PendingPointGroupDrag:
-            return "PendingPointGroupDrag";
-        case SketchInteractionState::PointGroupDragging:
-            return "PointGroupDragging";
-        case SketchInteractionState::SketchMoving:
-            return "SketchMoving";
-        }
-        return "Unknown";
-    };
-    qCDebug(logUiInput) << "sketch_interaction_transition"
-                        << stateName(m_sketchInteractionState)
-                        << "->"
-                        << stateName(newState)
-                        << "reason="
-                        << reason;
-    m_sketchInteractionState = newState;
-}
-
-void Viewport::setSketchDragIntent(SketchDragIntent newIntent, const char* reason) {
-    if (m_sketchDragIntent == newIntent) {
-        return;
-    }
-    auto intentName = [](SketchDragIntent intent) {
-        switch (intent) {
-        case SketchDragIntent::None:
-            return "None";
-        case SketchDragIntent::PointSingle:
-            return "PointSingle";
-        case SketchDragIntent::PointGroup:
-            return "PointGroup";
-        case SketchDragIntent::SelectionBox:
-            return "SelectionBox";
-        }
-        return "Unknown";
-    };
-    qCDebug(logUiInput) << "sketch_drag_intent_transition"
-                        << intentName(m_sketchDragIntent)
-                        << "->"
-                        << intentName(newIntent)
-                        << "reason="
-                        << reason;
-    m_sketchDragIntent = newIntent;
 }
 
 void Viewport::mousePressEvent(QMouseEvent* event) {
@@ -1182,12 +484,7 @@ void Viewport::mousePressEvent(QMouseEvent* event) {
             modifiers.shift = event->modifiers() & Qt::ShiftModifier;
             modifiers.toggle = event->modifiers() & (Qt::MetaModifier | Qt::ControlModifier);
 
-            auto pickResult = m_referenceSketch
-                ? buildModelPickResult(event->pos())
-                : m_modelPicker->pick(event->pos(),
-                                      static_cast<double>(sketch::constants::PICK_TOLERANCE_PIXELS),
-                                      buildViewProjection(),
-                                      viewportSize());
+            auto pickResult = buildModelPickResult(event->pos());
 
             auto topCandidate = m_selectionManager->topCandidate(pickResult);
 
@@ -1302,12 +599,7 @@ void Viewport::mouseDoubleClickEvent(QMouseEvent* event) {
 
         // Handle double-click: sketch part → open for edit; otherwise body selection
         if (event->button() == Qt::LeftButton) {
-            auto pickResult = m_referenceSketch
-                ? buildModelPickResult(event->pos())
-                : m_modelPicker->pick(event->pos(),
-                                      static_cast<double>(sketch::constants::PICK_TOLERANCE_PIXELS),
-                                      buildViewProjection(),
-                                      viewportSize());
+            auto pickResult = buildModelPickResult(event->pos());
 
             auto topCandidate = m_selectionManager->topCandidate(pickResult);
             if (topCandidate.has_value()) {
@@ -1544,6 +836,19 @@ void Viewport::mouseMoveEvent(QMouseEvent* event) {
                 }
             }
         }
+        // Box selection tracking
+        if (m_sketchDragIntent == SketchDragIntent::SelectionBox &&
+            (event->buttons() & Qt::LeftButton)) {
+            QPoint delta = event->pos() - m_sketchPressPos;
+            int distSq = delta.x() * delta.x() + delta.y() * delta.y();
+            if (distSq >= kPointDragThresholdPixels * kPointDragThresholdPixels) {
+                m_boxSelectionActive = true;
+                m_boxSelectionStart = m_sketchPressPos;
+                m_boxSelectionEnd = event->pos();
+                update();
+            }
+        }
+
         if (m_sketchInteractionState == SketchInteractionState::PointSingleDragging &&
             m_activeSketch && m_sketchRenderer && !m_pointDragCandidateId.empty()) {
             m_sketchRenderer->setDragGuides(
@@ -1659,12 +964,7 @@ void Viewport::mouseMoveEvent(QMouseEvent* event) {
                 setCursor(Qt::ArrowCursor);
             }
             if (m_selectionManager && m_modelPicker) {
-                auto pickResult = m_referenceSketch
-                    ? buildModelPickResult(event->pos())
-                    : m_modelPicker->pick(event->pos(),
-                                          static_cast<double>(sketch::constants::PICK_TOLERANCE_PIXELS),
-                                          buildViewProjection(),
-                                          viewportSize());
+                auto pickResult = buildModelPickResult(event->pos());
                 m_selectionManager->updateHover(pickResult);
             }
         }
@@ -1714,6 +1014,43 @@ void Viewport::mouseReleaseEvent(QMouseEvent* event) {
         m_groupDragStartPositions.clear();
         m_groupDragFailureFeedbackShown = false;
         setCursor(Qt::ArrowCursor);
+        update();
+        return;
+    }
+
+    // Finalize box selection
+    if (m_inSketchMode && event->button() == Qt::LeftButton && m_boxSelectionActive) {
+        m_boxSelectionActive = false;
+
+        if (m_activeSketch && m_selectionManager) {
+            QRect rect = QRect(m_boxSelectionStart, m_boxSelectionEnd).normalized();
+            sketch::Vec2d topLeft = screenToSketch(rect.topLeft());
+            sketch::Vec2d bottomRight = screenToSketch(rect.bottomRight());
+            sketch::Vec2d minPt{std::min(topLeft.x, bottomRight.x),
+                                std::min(topLeft.y, bottomRight.y)};
+            sketch::Vec2d maxPt{std::max(topLeft.x, bottomRight.x),
+                                std::max(topLeft.y, bottomRight.y)};
+
+            auto entityIds = m_activeSketch->findInRect(minPt, maxPt);
+
+            std::vector<app::selection::SelectionItem> items;
+            for (const auto& eid : entityIds) {
+                auto* entity = m_activeSketch->getEntity(eid);
+                if (!entity) continue;
+                app::selection::SelectionItem item;
+                if (entity->type() == sketch::EntityType::Point) {
+                    item.kind = app::selection::SelectionKind::SketchPoint;
+                } else {
+                    item.kind = app::selection::SelectionKind::SketchEdge;
+                }
+                item.id.elementId = eid;
+                items.push_back(item);
+            }
+            m_selectionManager->replaceSelection(items);
+            updateSketchSelectionFromManager();
+        }
+
+        setSketchDragIntent(SketchDragIntent::None, "release box selection");
         update();
         return;
     }
@@ -1897,6 +1234,46 @@ void Viewport::leaveEvent(QEvent* event) {
     QOpenGLWidget::leaveEvent(event);
 }
 
+void Viewport::dragEnterEvent(QDragEnterEvent* event) {
+    if (event->mimeData()->hasUrls()) {
+        for (const QUrl& url : event->mimeData()->urls()) {
+            QString path = url.toLocalFile().toLower();
+            if (path.endsWith(".step") || path.endsWith(".stp")) {
+                event->acceptProposedAction();
+                return;
+            }
+        }
+    }
+    event->ignore();
+}
+
+void Viewport::dragMoveEvent(QDragMoveEvent* event) {
+    if (event->mimeData()->hasUrls()) {
+        for (const QUrl& url : event->mimeData()->urls()) {
+            QString path = url.toLocalFile().toLower();
+            if (path.endsWith(".step") || path.endsWith(".stp")) {
+                event->acceptProposedAction();
+                return;
+            }
+        }
+    }
+    event->ignore();
+}
+
+void Viewport::dropEvent(QDropEvent* event) {
+    if (!event->mimeData()->hasUrls()) {
+        return;
+    }
+    for (const QUrl& url : event->mimeData()->urls()) {
+        QString path = url.toLocalFile();
+        QString lower = path.toLower();
+        if (lower.endsWith(".step") || lower.endsWith(".stp")) {
+            emit fileDropped(path);
+        }
+    }
+    event->acceptProposedAction();
+}
+
 bool Viewport::event(QEvent* event) {
     if (event->type() == QEvent::NativeGesture) {
         auto* gestureEvent = static_cast<QNativeGestureEvent*>(event);
@@ -2018,567 +1395,8 @@ bool Viewport::event(QEvent* event) {
     return QOpenGLWidget::event(event);
 }
 
-void Viewport::beginPlaneSelection() {
-    if (m_inSketchMode) {
-        return;
-    }
-    if (m_selectionManager) {
-        m_selectionManager->clearSelection();
-    }
-    if (m_modelingToolManager) {
-        m_modelingToolManager->cancelActiveTool();
-    }
-    setExtrudeToolActive(false);
-    setRevolveToolActive(false);
-    setFilletToolActive(false);
-    setShellToolActive(false);
-    if (m_deepSelectPopup && m_deepSelectPopup->isVisible()) {
-        m_deepSelectPopup->hide();
-    }
-    m_pendingCandidates.clear();
-    m_pendingClickPos = QPoint();
-    m_pendingModifiers = {};
-    m_pendingShellFaceToggle = false;
-    m_planeSelectionActive = true;
-    m_planeHoverIndex = -1;
-    update();
-}
-
-void Viewport::cancelPlaneSelection() {
-    if (!m_planeSelectionActive) {
-        return;
-    }
-    m_planeSelectionActive = false;
-    m_planeHoverIndex = -1;
-    setCursor(Qt::ArrowCursor);
-    update();
-    emit planeSelectionCancelled();
-}
-
-void Viewport::updateSketchRenderingState() {
-    if (!m_inSketchMode || !m_activeSketch || !m_sketchRenderer) {
-        return;
-    }
-
-    int dof = m_activeSketch->getDegreesOfFreedom();
-    bool overConstrained = m_activeSketch->isOverConstrained();
-    m_sketchRenderer->setDOF(overConstrained ? -1 : dof);
-    m_sketchRenderer->updateConstraints();
-}
-
-void Viewport::setDebugToggles(bool normals, bool depth, bool wireframe, bool disableGamma, bool matcap) {
-    if (normals && depth) {
-        depth = false;
-    }
-    if (m_debugNormals == normals &&
-        m_debugDepth == depth &&
-        m_wireframeOnly == wireframe &&
-        m_disableGamma == disableGamma &&
-        m_useMatcap == matcap) {
-        return;
-    }
-
-    m_debugNormals = normals;
-    m_debugDepth = depth;
-    m_wireframeOnly = wireframe;
-    m_disableGamma = disableGamma;
-    m_useMatcap = matcap;
-    update();
-    emit debugTogglesChanged(m_debugNormals, m_debugDepth, m_wireframeOnly, m_disableGamma, m_useMatcap);
-}
-
-void Viewport::setRenderLightRig(const QVector3D& keyDir,
-                                 const QVector3D& fillDir,
-                                 float fillIntensity,
-                                 float ambientIntensity,
-                                 const QVector3D& hemiUpDir,
-                                 const QVector3D& gradientDir,
-                                 float gradientStrength) {
-    m_renderTuning.keyLightDir = keyDir;
-    m_renderTuning.fillLightDir = fillDir;
-    m_renderTuning.fillLightIntensity = fillIntensity;
-    m_renderTuning.ambientIntensity = ambientIntensity;
-    m_renderTuning.hemiUpDir = hemiUpDir;
-    m_renderTuning.gradientDir = gradientDir;
-    m_renderTuning.gradientStrength = gradientStrength;
-    update();
-}
-
-void Viewport::handlePan(float dx, float dy) {
-    m_isNavigating = true;
-    m_navigationTimer->start(150);  // 150ms debounce
-    m_camera->pan(dx, dy);
-    update();
-    emit cameraChanged();
-}
-
-void Viewport::handleOrbit(float dx, float dy) {
-    m_isNavigating = true;
-    m_navigationTimer->start(150);  // 150ms debounce
-    // Sensitivity adjustment
-    m_camera->orbit(-dx * kOrbitSensitivity, dy * kOrbitSensitivity);
-    update();
-    emit cameraChanged();
-}
-
-void Viewport::handleZoom(float delta) {
-    applyZoomFactor(1.0f - delta * 0.001f);
-}
-
-void Viewport::applyZoomFactor(float factor) {
-    if (!m_camera || !std::isfinite(factor) || factor <= 0.0f) {
-        return;
-    }
-
-    m_isNavigating = true;
-    m_navigationTimer->start(150);  // 150ms debounce
-    m_camera->zoomByFactor(factor);
-    update();
-    emit cameraChanged();
-}
-
-void Viewport::applyAnchoredZoomFactor(float factor, const QPointF& screenPos) {
-    if (!m_camera || !std::isfinite(factor) || factor <= 0.0f) {
-        return;
-    }
-
-    m_isNavigating = true;
-    m_navigationTimer->start(150);  // 150ms debounce
-    QVector3D preZoomPoint;
-    bool preZoomValid = false;
-
-    if (!m_zoomAnchor.valid) {
-        initializeZoomAnchor(screenPos);
-    }
-    if (m_zoomAnchor.valid) {
-        preZoomValid = intersectScreenPointWithZoomPlane(screenPos, &preZoomPoint);
-    }
-
-    m_camera->zoomByFactor(factor);
-
-    if (preZoomValid) {
-        QVector3D postZoomPoint;
-        if (intersectScreenPointWithZoomPlane(screenPos, &postZoomPoint)) {
-            const QVector3D correction = preZoomPoint - postZoomPoint;
-            if (std::isfinite(correction.x()) &&
-                std::isfinite(correction.y()) &&
-                std::isfinite(correction.z())) {
-                m_camera->setPosition(m_camera->position() + correction);
-                m_camera->setTarget(m_camera->target() + correction);
-                qCDebug(logUiInput) << "zoom_anchor_correction"
-                                    << "magnitude=" << correction.length();
-            }
-        }
-    }
-
-    update();
-    emit cameraChanged();
-}
-
-bool Viewport::isTrackpadScrollEvent(const QWheelEvent* event) const {
-    if (!event) {
-        return false;
-    }
-    const bool hasPixelDelta = !event->pixelDelta().isNull();
-    const bool hasAngleDelta = !event->angleDelta().isNull();
-    return (event->phase() != Qt::NoScrollPhase) || (hasPixelDelta && !hasAngleDelta);
-}
-
-bool Viewport::isNativeZoomActive() const {
-    if (!m_nativeGestureTimer.isValid()) {
-        return false;
-    }
-
-    const qint64 now = m_nativeGestureTimer.elapsed();
-    const bool active = m_nativeZoomActive &&
-        m_lastNativeZoomEventMs >= 0 &&
-        (now - m_lastNativeZoomEventMs) < kNativeZoomActiveTimeoutMs;
-    const bool suppressing = m_nativeZoomSuppressUntilMs >= 0 &&
-        now < m_nativeZoomSuppressUntilMs;
-
-    return active || suppressing;
-}
-
-bool Viewport::normalizeNativeZoomFactor(qreal rawValue, float* outFactor) const {
-    if (!outFactor || !std::isfinite(rawValue)) {
-        return false;
-    }
-
-    qreal normalized = rawValue;
-    if (rawValue > kNativeZoomScaleValueMin && rawValue < kNativeZoomScaleValueMax) {
-        normalized = rawValue - 1.0;
-    }
-
-    float factor = static_cast<float>(1.0 - normalized);
-    factor = std::clamp(factor, kNativeZoomMinFactor, kNativeZoomMaxFactor);
-    *outFactor = factor;
-    return true;
-}
-
-bool Viewport::initializeZoomAnchor(const QPointF& screenPos) {
-    if (!m_camera) {
-        clearZoomAnchor();
-        return false;
-    }
-
-    QVector3D planePoint;
-    QVector3D planeNormal;
-
-    if (m_inSketchMode && m_activeSketch) {
-        const auto& plane = m_activeSketch->getPlane();
-        planePoint = QVector3D(plane.origin.x, plane.origin.y, plane.origin.z);
-        planeNormal = QVector3D(plane.normal.x, plane.normal.y, plane.normal.z);
-    } else {
-        planePoint = m_camera->target();
-        planeNormal = m_camera->forward();
-    }
-
-    if (planeNormal.lengthSquared() < 1e-8f) {
-        clearZoomAnchor();
-        return false;
-    }
-    planeNormal.normalize();
-
-    QVector3D intersection;
-    if (!intersectScreenPointWithPlane(screenPos, planePoint, planeNormal, &intersection)) {
-        clearZoomAnchor();
-        return false;
-    }
-
-    m_zoomAnchor.valid = true;
-    m_zoomAnchor.planePoint = intersection;
-    m_zoomAnchor.planeNormal = planeNormal;
-    return true;
-}
-
-bool Viewport::intersectScreenPointWithZoomPlane(const QPointF& screenPos, QVector3D* outPoint) const {
-    if (!m_zoomAnchor.valid) {
-        return false;
-    }
-    return intersectScreenPointWithPlane(screenPos,
-                                         m_zoomAnchor.planePoint,
-                                         m_zoomAnchor.planeNormal,
-                                         outPoint);
-}
-
-bool Viewport::intersectScreenPointWithPlane(const QPointF& screenPos,
-                                             const QVector3D& planePoint,
-                                             const QVector3D& planeNormal,
-                                             QVector3D* outPoint) const {
-    if (!m_camera || !outPoint || m_width <= 0 || m_height <= 0) {
-        return false;
-    }
-
-    QVector3D normalizedNormal = planeNormal;
-    if (normalizedNormal.lengthSquared() < 1e-8f) {
-        return false;
-    }
-    normalizedNormal.normalize();
-
-    const float aspectRatio = static_cast<float>(m_width) / static_cast<float>(m_height);
-    const QMatrix4x4 view = m_camera->viewMatrix();
-    const QMatrix4x4 projection = m_camera->projectionMatrix(aspectRatio);
-    const QMatrix4x4 viewProjection = projection * view;
-
-    bool invertible = false;
-    const QMatrix4x4 inverse = viewProjection.inverted(&invertible);
-    if (!invertible) {
-        return false;
-    }
-
-    const float ndcX = (2.0f * static_cast<float>(screenPos.x()) / static_cast<float>(m_width)) - 1.0f;
-    const float ndcY = 1.0f - (2.0f * static_cast<float>(screenPos.y()) / static_cast<float>(m_height));
-    const QVector4D nearPoint = inverse * QVector4D(ndcX, ndcY, -1.0f, 1.0f);
-    const QVector4D farPoint = inverse * QVector4D(ndcX, ndcY, 1.0f, 1.0f);
-    if (std::abs(nearPoint.w()) < 1e-8f || std::abs(farPoint.w()) < 1e-8f) {
-        return false;
-    }
-
-    const QVector3D rayOrigin = nearPoint.toVector3D() / nearPoint.w();
-    const QVector3D rayEnd = farPoint.toVector3D() / farPoint.w();
-    const QVector3D rayDir = (rayEnd - rayOrigin).normalized();
-    const float denom = QVector3D::dotProduct(rayDir, normalizedNormal);
-    if (std::abs(denom) < 1e-8f) {
-        return false;
-    }
-
-    const float t = QVector3D::dotProduct(planePoint - rayOrigin, normalizedNormal) / denom;
-    if (!std::isfinite(t) || t < 0.0f) {
-        return false;
-    }
-
-    const QVector3D hit = rayOrigin + rayDir * t;
-    if (!std::isfinite(hit.x()) || !std::isfinite(hit.y()) || !std::isfinite(hit.z())) {
-        return false;
-    }
-
-    *outPoint = hit;
-    return true;
-}
-
-void Viewport::clearZoomAnchor() {
-    m_zoomAnchor = {};
-}
-
-void Viewport::animateCamera(const CameraState& targetState) {
-    if (!m_camera || !m_cameraAnimation) return;
-
-    // Capture start state
-    CameraState startState;
-    startState.position = m_camera->position();
-    startState.target = m_camera->target();
-    startState.up = m_camera->up();
-    startState.angle = m_camera->cameraAngle();
-
-    // Stop any running animation
-    m_cameraAnimation->stop();
-
-    // Disconnect previous connections to avoid stacking slots
-    m_cameraAnimation->disconnect(this);
-
-    // Connect update slot
-    connect(m_cameraAnimation, &QVariantAnimation::valueChanged, this, [this, startState, targetState](const QVariant& value) {
-        float t = value.toFloat();
-
-        // Linear interpolation for vectors
-        // Note: For 'up' vector and camera rotation, SLERP would be mathematically ideal,
-        // but LERP + normalize is sufficient for smooth camera transitions in this context.
-        QVector3D newPos = startState.position * (1.0f - t) + targetState.position * t;
-        QVector3D newTarget = startState.target * (1.0f - t) + targetState.target * t;
-        QVector3D newUp = (startState.up * (1.0f - t) + targetState.up * t).normalized();
-
-        // Apply to camera
-        // CRITICAL: Do NOT interpolate angle during animation! setCameraAngle() adjusts
-        // position when changing FOV within perspective mode (Camera3D.cpp:239), which
-        // conflicts with our spatial interpolation trajectory. Instead, keep projection
-        // mode constant during animation and switch only at the end.
-        m_camera->setPosition(newPos);
-        m_camera->setTarget(newTarget);
-        m_camera->setUp(newUp);
-        // angle will be set in finished callback
-
-        update();
-        emit cameraChanged();
-    });
-
-    // Cleanup when finished
-    connect(m_cameraAnimation, &QVariantAnimation::finished, this, [this, targetState]() {
-        // Set final spatial state first
-        m_camera->setPosition(targetState.position);
-        m_camera->setTarget(targetState.target);
-        m_camera->setUp(targetState.up);
-
-        // Set ortho scale BEFORE changing projection to prevent zoom adjustment
-        // This ensures transitions preserve visual scale exactly
-        m_camera->setOrthoScale(targetState.orthoScale);
-
-        // Now safe to switch projection - won't recalculate distance
-        m_camera->setCameraAngle(targetState.angle);
-
-        // Validation: verify final state matches expected values
-        float finalDist = m_camera->distance();
-        float finalScale = (m_camera->projectionType() == render::Camera3D::ProjectionType::Perspective)
-            ? 2.0f * finalDist * qTan(qDegreesToRadians(m_camera->fov() * 0.5f))
-            : m_camera->orthoScale();
-        qDebug() << "[AnimationFinished] angle=" << m_camera->cameraAngle()
-                 << "distance=" << finalDist << "visualScale=" << finalScale
-                 << "expected=" << targetState.orthoScale;
-
-        update();
-        emit cameraChanged();
-    });
-
-    // Start animation (0.0 to 1.0)
-    m_cameraAnimation->setStartValue(0.0f);
-    m_cameraAnimation->setEndValue(1.0f);
-    m_cameraAnimation->start();
-}
-
-// Sketch mode
-void Viewport::enterSketchMode(sketch::Sketch* sketch) {
-    if (m_inSketchMode || !sketch) return;
-
-    if (m_modelingToolManager) {
-        m_modelingToolManager->cancelActiveTool();
-    }
-    setExtrudeToolActive(false);
-    setRevolveToolActive(false);
-
-    m_activeSketch = sketch;
-    m_activeSketchId.clear();
-    m_activeSketchId = resolveActiveSketchId();
-    m_inSketchMode = true;
-    m_planeSelectionActive = false;
-    m_planeHoverIndex = -1;
-    if (m_selectionManager) {
-        m_selectionManager->setMode(app::selection::SelectionMode::Sketch);
-        app::selection::SelectionFilter filter;
-        filter.allowedKinds = {
-            app::selection::SelectionKind::SketchPoint,
-            app::selection::SelectionKind::SketchEdge,
-            app::selection::SelectionKind::SketchRegion,
-            app::selection::SelectionKind::SketchConstraint
-        };
-        m_selectionManager->setFilter(filter);
-    }
-
-    // Reset any active tool
-    if (m_toolManager) {
-        m_toolManager->deactivateTool();
-        m_toolManager->setSketch(m_activeSketch);
-        m_toolManager->setRenderer(m_sketchRenderer.get());
-    }
-
-    // Store current camera state
-    m_savedCameraPosition = m_camera->position();
-    m_savedCameraTarget = m_camera->target();
-    m_savedCameraUp = m_camera->up();
-    m_savedCameraAngle = m_camera->cameraAngle();
-
-    // Calculate current visual scale (world height visible in viewport)
-    // This preserves zoom level when switching projection modes
-    float currentVisualScale;
-    float currentDist = m_camera->distance();
-    if (m_camera->projectionType() == render::Camera3D::ProjectionType::Perspective) {
-        float halfFovRad = qDegreesToRadians(m_camera->fov() * 0.5f);
-        currentVisualScale = 2.0f * currentDist * qTan(halfFovRad);
-        qDebug() << "[EnterSketch] Perspective→Ortho: dist=" << currentDist
-                 << "FOV=" << m_camera->fov() << "visualScale=" << currentVisualScale;
-    } else {
-        currentVisualScale = m_camera->orthoScale();
-        qDebug() << "[EnterSketch] Ortho→Ortho: preserving orthoScale=" << currentVisualScale;
-    }
-
-    // Align camera to sketch plane and switch to orthographic
-    const auto& plane = sketch->getPlane();
-
-    // Use plane vectors directly for camera alignment
-    // Normal -> View direction (from camera towards target)
-    // Y-Axis -> Camera Up vector
-    QVector3D normal(plane.normal.x, plane.normal.y, plane.normal.z);
-    QVector3D up(plane.yAxis.x, plane.yAxis.y, plane.yAxis.z);
-
-    // Ensure vectors are normalized
-    normal.normalize();
-    up.normalize();
-
-    QVector3D target(plane.origin.x, plane.origin.y, plane.origin.z);
-    float dist = m_camera->distance();
-
-    CameraState targetState;
-    targetState.target = target;
-    targetState.up = up;
-    targetState.position = target + normal * dist;
-    targetState.angle = 0.0f; // 0° = orthographic
-    targetState.orthoScale = currentVisualScale;  // Preserve zoom level
-
-    // Animate to sketch view
-    animateCamera(targetState);
-
-    // Bind sketch to renderer
-    if (m_sketchRenderer) {
-        m_sketchRenderer->setSketch(sketch);
-        m_sketchRenderer->updateGeometry();
-        updateSketchRenderingState();
-    }
-
-    // Initialize tool manager
-    m_toolManager = std::make_unique<sketchTools::SketchToolManager>(this);
-    m_toolManager->setSketch(sketch);
-    m_toolManager->setRenderer(m_sketchRenderer.get());
-    syncSnapGridSizeFromCamera();
-    updateSnapGeometry();
-
-    // Connect tool signals
-    connect(m_toolManager.get(), &sketchTools::SketchToolManager::geometryCreated, this, [this]() {
-        if (m_sketchRenderer) {
-            m_sketchRenderer->updateGeometry();
-            updateSketchRenderingState();
-        }
-        update();
-        emit sketchUpdated();  // Notify DOF changes
-    });
-    connect(m_toolManager.get(), &sketchTools::SketchToolManager::updateRequested, this, [this]() {
-        update();
-    });
-
-    update();
-    emit sketchModeChanged(true);
-}
-
-void Viewport::exitSketchMode() {
-    if (!m_inSketchMode) return;
-
-    if (m_activeSketch) {
-        m_activeSketch->endPointDrag();
-        m_activeSketch->endGroupDrag();
-    }
-    endSketchDragGestureCapture(false);
-    if (m_sketchRenderer) {
-        m_sketchRenderer->clearDragGuides();
-    }
-    m_groupDragPointIds.clear();
-    m_groupDragStartPositions.clear();
-    m_groupDragFailureFeedbackShown = false;
-
-    m_inSketchMode = false;
-    m_activeSketch = nullptr;
-    m_activeSketchId.clear();
-    if (m_selectionManager) {
-        m_selectionManager->setMode(app::selection::SelectionMode::Model);
-        updateModelSelectionFilter();
-    }
-
-    // Reset any active tool
-    if (m_toolManager) {
-        m_toolManager->deactivateTool();
-        m_toolManager->setSketch(m_activeSketch);
-        m_toolManager->setRenderer(m_sketchRenderer.get());
-    }
-
-    updateSnapGeometry();
-
-    // Rebind renderer to reference sketch (if any)
-    if (m_sketchRenderer) {
-        m_sketchRenderer->setSketch(m_referenceSketch);
-    }
-
-    // Mark document sketches dirty for rebuild
-    m_documentSketchesDirty = true;
-
-    // Restore camera to previous state with animation
-    CameraState savedState;
-    savedState.position = m_savedCameraPosition;
-    savedState.target = m_savedCameraTarget;
-    savedState.up = m_savedCameraUp;
-    savedState.angle = m_savedCameraAngle;
-
-    // Calculate ortho scale for transition
-    // Edge case: if saved state was already ortho (angle ≈ 0°), preserve current ortho scale
-    if (m_savedCameraAngle < 0.01f) {
-        // Ortho → Ortho: just preserve current ortho scale (no projection change)
-        savedState.orthoScale = m_camera->orthoScale();
-        qDebug() << "[ExitSketch] Ortho→Ortho: preserving orthoScale=" << savedState.orthoScale;
-    } else {
-        // Ortho → Perspective: calculate ortho scale that produces correct distance
-        // Formula: when setCameraAngle switches to perspective, it computes:
-        //   newDistance = orthoScale / (2 * tan(fov/2))
-        // So to get savedDistance, we need: orthoScale = savedDistance * 2 * tan(fov/2)
-        float savedDistance = (m_savedCameraPosition - m_savedCameraTarget).length();
-        float halfFovRad = qDegreesToRadians(m_savedCameraAngle * 0.5f);
-        savedState.orthoScale = 2.0f * savedDistance * qTan(halfFovRad);
-        qDebug() << "[ExitSketch] Ortho→Perspective: savedDist=" << savedDistance
-                 << "savedFOV=" << m_savedCameraAngle << "requiredOrthoScale=" << savedState.orthoScale;
-    }
-
-    animateCamera(savedState);
-
-    update();
-    emit sketchModeChanged(false);
-}
-
 bool Viewport::activateExtrudeTool() {
-    if (m_inSketchMode || !m_selectionManager || !m_modelingToolManager || !m_referenceSketch) {
+    if (m_inSketchMode || !m_selectionManager || !m_modelingToolManager) {
         setExtrudeToolActive(false);
         setFilletToolActive(false);
         setShellToolActive(false);
@@ -2609,124 +1427,6 @@ bool Viewport::activateExtrudeTool() {
     setShellToolActive(false);
     return false;
 }
-
-// Standard view slots
-void Viewport::setFrontView() {
-    m_camera->setFrontView();
-    update();
-    emit cameraChanged();
-}
-
-void Viewport::setBackView() {
-    m_camera->setBackView();
-    update();
-    emit cameraChanged();
-}
-
-void Viewport::setLeftView() {
-    m_camera->setLeftView();
-    update();
-    emit cameraChanged();
-}
-
-void Viewport::setRightView() {
-    m_camera->setRightView();
-    update();
-    emit cameraChanged();
-}
-
-void Viewport::setTopView() {
-    m_camera->setTopView();
-    update();
-    emit cameraChanged();
-}
-
-void Viewport::setBottomView() {
-    m_camera->setBottomView();
-    update();
-    emit cameraChanged();
-}
-
-void Viewport::setIsometricView() {
-    m_camera->setIsometricView();
-    update();
-    emit cameraChanged();
-}
-
-void Viewport::resetView() {
-    m_camera->reset();
-    update();
-    emit cameraChanged();
-}
-
-void Viewport::setCameraAngle(float degrees) {
-    m_camera->setCameraAngle(degrees);
-    update();
-    emit cameraChanged();
-}
-
-void Viewport::toggleGrid() {
-    m_grid->setVisible(!m_grid->isVisible());
-    update();
-}
-
-QImage Viewport::captureThumbnail(int maxSize) {
-    if (maxSize <= 0) {
-        return {};
-    }
-    if (!m_camera) {
-        return {};
-    }
-
-    // Qt6 grabFramebuffer() handles MSAA internally
-    const QVector3D savedPosition = m_camera->position();
-    const QVector3D savedTarget = m_camera->target();
-    const QVector3D savedUp = m_camera->up();
-    const float savedCameraAngle = m_camera->cameraAngle();
-    const float savedFov = m_camera->fov();
-    const float savedOrthoScale = m_camera->orthoScale();
-
-    m_camera->setCameraAngle(kThumbnailCameraAngle);
-    m_camera->setIsometricView();
-
-    QImage frame = grabFramebuffer();
-
-    m_camera->setCameraAngle(savedCameraAngle);
-    m_camera->setFov(savedFov);
-    m_camera->setOrthoScale(savedOrthoScale);
-    m_camera->setPosition(savedPosition);
-    m_camera->setTarget(savedTarget);
-    m_camera->setUp(savedUp);
-
-    if (frame.isNull()) {
-        return {};
-    }
-    frame.setDevicePixelRatio(1.0);
-
-    QImage scaled = frame;
-    if (frame.width() > maxSize || frame.height() > maxSize) {
-        scaled = frame.scaled(maxSize, maxSize,
-                              Qt::KeepAspectRatio,
-                              Qt::SmoothTransformation);
-    }
-
-    QImage result(QSize(maxSize, maxSize), QImage::Format_ARGB32_Premultiplied);
-    if (result.isNull()) {
-        return {};
-    }
-
-    QColor background = m_backgroundColor.isValid() ? m_backgroundColor : QColor(32, 32, 32);
-    background.setAlpha(255);
-    result.fill(background);
-
-    QPainter painter(&result);
-    painter.setRenderHint(QPainter::SmoothPixmapTransform, true);
-    const int x = (maxSize - scaled.width()) / 2;
-    const int y = (maxSize - scaled.height()) / 2;
-    painter.drawImage(QPoint(x, y), scaled);
-    return result;
-}
-
 void Viewport::keyPressEvent(QKeyEvent* event) {
     if (m_planeSelectionActive && !m_inSketchMode && event->key() == Qt::Key_Escape) {
         cancelPlaneSelection();
@@ -2826,97 +1526,6 @@ sketch::SketchRenderer* Viewport::sketchRenderer() const {
     return m_sketchRenderer.get();
 }
 
-sketch::Vec2d Viewport::screenToSketch(const QPoint& screenPos) const {
-    // Convert screen coordinates to sketch plane coordinates
-    // This involves unprojecting from screen space through the camera
-    // to the sketch plane
-
-    if (!m_activeSketch || !m_camera) {
-        return {0.0, 0.0};
-    }
-
-    return screenToSketchPlane(screenPos, m_activeSketch->getPlane());
-}
-
-sketch::Vec2d Viewport::screenToSketchPlane(const QPoint& screenPos,
-                                            const sketch::SketchPlane& plane) const {
-    if (!m_camera) {
-        return {0.0, 0.0};
-    }
-
-    float aspectRatio = static_cast<float>(m_width) / static_cast<float>(m_height);
-
-    // Get view and projection matrices
-    QMatrix4x4 view = m_camera->viewMatrix();
-    QMatrix4x4 projection = m_camera->projectionMatrix(aspectRatio);
-    QMatrix4x4 viewProj = projection * view;
-    bool invertible = false;
-    QMatrix4x4 invViewProj = viewProj.inverted(&invertible);
-
-    if (!invertible) {
-        return {0.0, 0.0};
-    }
-
-    // Normalize screen coordinates to [-1, 1]
-    float ndcX = (2.0f * screenPos.x() / m_width) - 1.0f;
-    float ndcY = 1.0f - (2.0f * screenPos.y() / m_height);  // Y is flipped
-
-    // Create ray in world space
-    QVector4D nearPoint = invViewProj * QVector4D(ndcX, ndcY, -1.0f, 1.0f);
-    QVector4D farPoint = invViewProj * QVector4D(ndcX, ndcY, 1.0f, 1.0f);
-
-    if (std::abs(nearPoint.w()) < 1e-8f || std::abs(farPoint.w()) < 1e-8f) {
-        return {0.0, 0.0};
-    }
-
-    QVector3D rayOrigin = nearPoint.toVector3D() / nearPoint.w();
-    QVector3D rayEnd = farPoint.toVector3D() / farPoint.w();
-    QVector3D rayDir = (rayEnd - rayOrigin).normalized();
-
-    QVector3D planeOrigin(plane.origin.x, plane.origin.y, plane.origin.z);
-    QVector3D planeNormal(plane.normal.x, plane.normal.y, plane.normal.z);
-
-    // Ray-plane intersection
-    float denom = QVector3D::dotProduct(rayDir, planeNormal);
-    if (std::abs(denom) < 1e-8f) {
-        // Ray parallel to plane - use closest point
-        QVector3D toPlane = planeOrigin - rayOrigin;
-        float distToPlane = QVector3D::dotProduct(toPlane, planeNormal);
-        QVector3D closestPoint = rayOrigin + planeNormal * distToPlane;
-        sketch::Vec3d worldPt{closestPoint.x(), closestPoint.y(), closestPoint.z()};
-        return plane.toSketch(worldPt);
-    }
-
-    float t = QVector3D::dotProduct(planeOrigin - rayOrigin, planeNormal) / denom;
-    QVector3D intersection = rayOrigin + rayDir * t;
-
-    // Convert world point to sketch 2D coordinates
-    sketch::Vec3d worldPt{intersection.x(), intersection.y(), intersection.z()};
-    return plane.toSketch(worldPt);
-}
-
-void Viewport::updatePlaneSelectionHover(const QPoint& screenPos) {
-    int hitIndex = -1;
-    if (pickPlaneSelection(screenPos, &hitIndex)) {
-        if (m_planeHoverIndex != hitIndex) {
-            m_planeHoverIndex = hitIndex;
-            update();
-        }
-        if (!m_isOrbiting && !m_isPanning) {
-            setCursor(Qt::PointingHandCursor);
-        }
-        return;
-    }
-
-    if (m_planeHoverIndex != -1) {
-        m_planeHoverIndex = -1;
-        update();
-    }
-    if (!m_isOrbiting && !m_isPanning) {
-        setCursor(Qt::ArrowCursor);
-    }
-}
-
 QMatrix4x4 Viewport::buildViewProjection() const {
     if (!m_camera) {
         return QMatrix4x4();
@@ -2991,64 +1600,9 @@ std::vector<app::selection::SelectionItem> Viewport::sketchSelection() const {
     }
     return result;
 }
-
-std::unordered_set<sketch::EntityID> Viewport::selectedSketchPointIds() const {
-    std::unordered_set<sketch::EntityID> pointIds;
-    if (!m_selectionManager) {
-        return pointIds;
-    }
-
-    for (const auto& item : m_selectionManager->selection()) {
-        if (item.kind != app::selection::SelectionKind::SketchPoint) {
-            continue;
-        }
-        if (!item.id.elementId.empty()) {
-            pointIds.insert(item.id.elementId);
-        }
-    }
-    return pointIds;
-}
-
 int Viewport::suppressedConstraintMarkerCount() const {
     return static_cast<int>(m_suppressedConstraintMarkers.size());
 }
-
-void Viewport::updateSketchSelectionFromManager() {
-    if (!m_sketchRenderer) {
-        return;
-    }
-
-    m_sketchRenderer->clearSelection();
-    m_sketchRenderer->clearRegionSelection();
-    m_sketchRenderer->setSelectedConstraint({});
-    syncSuppressedConstraintMarkers();
-
-    const bool hasSketchContext = m_inSketchMode || (m_referenceSketch != nullptr);
-    if (!hasSketchContext || !m_selectionManager) {
-        update();
-        return;
-    }
-
-    for (const auto& item : m_selectionManager->selection()) {
-        if (item.kind == app::selection::SelectionKind::SketchRegion) {
-            m_sketchRenderer->toggleRegionSelection(item.id.elementId);
-            continue;
-        }
-        if (item.kind == app::selection::SelectionKind::SketchConstraint) {
-            m_sketchRenderer->setSelectedConstraint(item.id.elementId);
-            continue;
-        }
-        if (m_inSketchMode &&
-            (item.kind == app::selection::SelectionKind::SketchPoint ||
-             item.kind == app::selection::SelectionKind::SketchEdge)) {
-            m_sketchRenderer->setEntitySelection(item.id.elementId,
-                                                 sketch::SelectionState::Selected);
-        }
-    }
-
-    update();
-}
-
 void Viewport::handleModelSelectionChanged() {
     if (m_inSketchMode || !m_selectionManager || !m_modelingToolManager) {
         return;
@@ -3106,7 +1660,7 @@ void Viewport::handleModelSelectionChanged() {
     // Auto-activate Extrude if selection is valid (SketchRegion OR Face)
     bool canExtrude = false;
     if (selection.size() == 1) {
-        if (selection.front().kind == app::selection::SelectionKind::SketchRegion && m_referenceSketch) {
+        if (selection.front().kind == app::selection::SelectionKind::SketchRegion) {
             canExtrude = true;
         } else if (selection.front().kind == app::selection::SelectionKind::Face) {
             canExtrude = true;
@@ -3150,156 +1704,6 @@ void Viewport::setShellToolActive(bool active) {
     m_shellToolActive = active;
     emit shellToolActiveChanged(active);
 }
-
-void Viewport::updateSketchHoverFromManager() {
-    if (!m_sketchRenderer) {
-        return;
-    }
-
-    m_sketchRenderer->setHoverEntity("");
-    m_sketchRenderer->setHoverConstraint({});
-    m_sketchRenderer->clearRegionHover();
-
-    const bool hasSketchContext = m_inSketchMode || (m_referenceSketch != nullptr);
-    if (!hasSketchContext || !m_selectionManager) {
-        update();
-        return;
-    }
-
-    auto hover = m_selectionManager->hover();
-    if (!hover.has_value()) {
-        update();
-        return;
-    }
-
-    switch (hover->kind) {
-        case app::selection::SelectionKind::SketchRegion:
-            m_sketchRenderer->setRegionHover(hover->id.elementId);
-            break;
-        case app::selection::SelectionKind::SketchConstraint:
-            m_sketchRenderer->setHoverConstraint(hover->id.elementId);
-            break;
-        case app::selection::SelectionKind::SketchPoint:
-        case app::selection::SelectionKind::SketchEdge:
-            if (m_inSketchMode) {
-                m_sketchRenderer->setHoverEntity(hover->id.elementId);
-            }
-            break;
-        default:
-            break;
-    }
-
-    update();
-}
-
-void Viewport::selectSketchConstraint(const QString& constraintId) {
-    if (!m_selectionManager || !m_sketchRenderer || !m_inSketchMode || constraintId.isEmpty()) {
-        return;
-    }
-
-    app::selection::SelectionItem item;
-    item.kind = app::selection::SelectionKind::SketchConstraint;
-    item.id.ownerId = resolveActiveSketchId();
-    item.id.elementId = constraintId.toStdString();
-    m_selectionManager->replaceSelection({item});
-    m_sketchRenderer->setSelectedConstraint(item.id.elementId);
-    update();
-}
-
-void Viewport::suppressConstraintMarker(const QString& constraintId) {
-    if (constraintId.isEmpty()) {
-        return;
-    }
-    m_suppressedConstraintMarkers.insert(constraintId.toStdString());
-    syncSuppressedConstraintMarkers();
-    emit sketchSelectionChanged();
-    update();
-}
-
-void Viewport::unsuppressConstraintMarker(const QString& constraintId) {
-    if (constraintId.isEmpty()) {
-        return;
-    }
-    m_suppressedConstraintMarkers.erase(constraintId.toStdString());
-    syncSuppressedConstraintMarkers();
-    emit sketchSelectionChanged();
-    update();
-}
-
-void Viewport::clearSuppressedConstraintMarkers() {
-    if (m_suppressedConstraintMarkers.empty()) {
-        return;
-    }
-    m_suppressedConstraintMarkers.clear();
-    syncSuppressedConstraintMarkers();
-    emit sketchSelectionChanged();
-    update();
-}
-
-void Viewport::syncSuppressedConstraintMarkers() {
-    if (!m_sketchRenderer) {
-        return;
-    }
-
-    std::vector<core::sketch::ConstraintID> suppressed;
-    suppressed.reserve(m_suppressedConstraintMarkers.size());
-    for (const auto& id : m_suppressedConstraintMarkers) {
-        suppressed.push_back(id);
-    }
-    std::sort(suppressed.begin(), suppressed.end());
-    m_sketchRenderer->setSuppressedConstraints(suppressed);
-}
-
-app::selection::PickResult Viewport::buildSketchPickResult(const QPoint& screenPos) const {
-    if (!m_sketchRenderer || !m_activeSketch || !m_sketchPicker) {
-        return {};
-    }
-
-    const double pixelScale = (m_pixelScale > 0.0) ? m_pixelScale : 1.0;
-    const double tolerancePixels = static_cast<double>(sketch::constants::PICK_TOLERANCE_PIXELS);
-    const std::string sketchId = resolveActiveSketchId();
-
-    selection::SketchPickerAdapter::Options options;
-    options.allowConstraints = true;
-    options.allowRegions = true;
-
-    sketch::Vec2d sketchPos = screenToSketch(screenPos);
-    return m_sketchPicker->pick(*m_sketchRenderer,
-                                *m_activeSketch,
-                                sketchPos,
-                                sketchId,
-                                pixelScale,
-                                tolerancePixels,
-                                options);
-}
-
-app::selection::PickResult Viewport::buildReferenceSketchPickResult(const QPoint& screenPos) {
-    if (!m_sketchRenderer || !m_referenceSketch || !m_sketchPicker || m_referenceSketchId.empty()) {
-        return {};
-    }
-
-    const double pixelScale = (m_pixelScale > 0.0) ? m_pixelScale : 1.0;
-    const double tolerancePixels = static_cast<double>(sketch::constants::PICK_TOLERANCE_PIXELS);
-
-    selection::SketchPickerAdapter::Options options;
-    options.allowConstraints = false;
-    options.allowRegions = true;
-
-    if (m_documentSketchesDirty) {
-        m_sketchRenderer->updateGeometry();
-        m_documentSketchesDirty = false;
-    }
-
-    sketch::Vec2d sketchPos = screenToSketchPlane(screenPos, m_referenceSketch->getPlane());
-    return m_sketchPicker->pick(*m_sketchRenderer,
-                                *m_referenceSketch,
-                                sketchPos,
-                                m_referenceSketchId,
-                                pixelScale,
-                                tolerancePixels,
-                                options);
-}
-
 app::selection::PickResult Viewport::buildModelPickResult(const QPoint& screenPos) {
     app::selection::PickResult result;
     if (m_modelPicker) {
@@ -3309,9 +1713,39 @@ app::selection::PickResult Viewport::buildModelPickResult(const QPoint& screenPo
                                      viewportSize());
     }
 
-    if (m_referenceSketch) {
-        auto sketchResult = buildReferenceSketchPickResult(screenPos);
-        result.hits.insert(result.hits.end(), sketchResult.hits.begin(), sketchResult.hits.end());
+    std::optional<double> frontModelDepth;
+    for (const auto& hit : result.hits) {
+        switch (hit.kind) {
+            case app::selection::SelectionKind::Vertex:
+            case app::selection::SelectionKind::Edge:
+            case app::selection::SelectionKind::Face:
+                if (!frontModelDepth.has_value() || hit.depth < *frontModelDepth) {
+                    frontModelDepth = hit.depth;
+                }
+                break;
+            default:
+                break;
+        }
+    }
+
+    for (const auto& sketchId : visibleModelSketchIds()) {
+        auto* sketch = m_document ? m_document->getSketch(sketchId) : nullptr;
+        if (!sketch) {
+            continue;
+        }
+
+        auto sketchResult = buildModelSketchPickResult(screenPos, sketchId, sketch);
+        if (sketchResult.hits.empty()) {
+            continue;
+        }
+
+        for (const auto& hit : sketchResult.hits) {
+            if (frontModelDepth.has_value() &&
+                hit.depth > *frontModelDepth + std::max(1e-2, *frontModelDepth * 1e-3)) {
+                continue;
+            }
+            result.hits.push_back(hit);
+        }
     }
 
     return result;
@@ -3361,587 +1795,6 @@ QStringList Viewport::buildDeepSelectLabels(
     }
     return labels;
 }
-
-bool Viewport::pickPlaneSelection(const QPoint& screenPos, int* outIndex) const {
-    if (!m_camera) {
-        return false;
-    }
-
-    float aspectRatio = static_cast<float>(m_width) / static_cast<float>(m_height);
-    QMatrix4x4 view = m_camera->viewMatrix();
-    QMatrix4x4 projection = m_camera->projectionMatrix(aspectRatio);
-    QMatrix4x4 viewProj = projection * view;
-    bool invertible = false;
-    QMatrix4x4 invViewProj = viewProj.inverted(&invertible);
-
-    if (!invertible) {
-        return false;
-    }
-
-    float ndcX = (2.0f * screenPos.x() / m_width) - 1.0f;
-    float ndcY = 1.0f - (2.0f * screenPos.y() / m_height);
-
-    QVector4D nearPoint = invViewProj * QVector4D(ndcX, ndcY, -1.0f, 1.0f);
-    QVector4D farPoint = invViewProj * QVector4D(ndcX, ndcY, 1.0f, 1.0f);
-
-    if (std::abs(nearPoint.w()) < 1e-8f || std::abs(farPoint.w()) < 1e-8f) {
-        return false;
-    }
-
-    QVector3D rayOrigin = nearPoint.toVector3D() / nearPoint.w();
-    QVector3D rayEnd = farPoint.toVector3D() / farPoint.w();
-    QVector3D rayDir = (rayEnd - rayOrigin).normalized();
-
-    float bestT = std::numeric_limits<float>::max();
-    int bestIndex = -1;
-    const auto selections = planeSelections(ThemeManager::instance().currentTheme().viewport.planes);
-
-    for (int i = 0; i < static_cast<int>(selections.size()); ++i) {
-        const auto& selection = selections[i];
-        PlaneAxes axes = buildPlaneAxes(selection.plane);
-        QVector3D origin(selection.plane.origin.x, selection.plane.origin.y, selection.plane.origin.z);
-
-        float denom = QVector3D::dotProduct(rayDir, axes.normal);
-        if (std::abs(denom) < 1e-8f) {
-            continue;
-        }
-
-        float t = QVector3D::dotProduct(origin - rayOrigin, axes.normal) / denom;
-        if (t < 0.0f) {
-            continue;
-        }
-
-        QVector3D hitPoint = rayOrigin + rayDir * t;
-        QVector3D rel = hitPoint - origin;
-        float u = QVector3D::dotProduct(rel, axes.xAxis);
-        float v = QVector3D::dotProduct(rel, axes.yAxis);
-
-        if (std::abs(u) <= kPlaneSelectHalf && std::abs(v) <= kPlaneSelectHalf) {
-            if (t < bestT) {
-                bestT = t;
-                bestIndex = i;
-            }
-        }
-    }
-
-    if (bestIndex >= 0) {
-        if (outIndex) {
-            *outIndex = bestIndex;
-        }
-        return true;
-    }
-
-    return false;
-}
-
-void Viewport::drawModelSelectionOverlay(const QMatrix4x4& viewProjection) {
-    if (!m_selectionManager || !m_modelPicker || m_inSketchMode) {
-        return;
-    }
-
-    const auto hover = m_selectionManager->hover();
-    const auto& selection = m_selectionManager->selection();
-    if (!hover.has_value() && selection.empty()) {
-        return;
-    }
-
-    struct HighlightStyle {
-        QColor faceFillHover;
-        QColor faceOutlineHover;
-        QColor faceFillSelected;
-        QColor faceOutlineSelected;
-        QColor edgeHover;
-        QColor edgeSelected;
-        QColor vertexHover;
-        QColor vertexSelected;
-    };
-
-    HighlightStyle style;
-    const ThemeViewportSelectionColors& themeSelection =
-        ThemeManager::instance().currentTheme().viewport.selection;
-    style.faceFillHover = themeSelection.faceFillHover;
-    style.faceOutlineHover = themeSelection.faceOutlineHover;
-    style.faceFillSelected = themeSelection.faceFillSelected;
-    style.faceOutlineSelected = themeSelection.faceOutlineSelected;
-    style.edgeHover = themeSelection.edgeHover;
-    style.edgeSelected = themeSelection.edgeSelected;
-    style.vertexHover = themeSelection.vertexHover;
-    style.vertexSelected = themeSelection.vertexSelected;
-
-    auto isSameItem = [](const app::selection::SelectionItem& a,
-                         const app::selection::SelectionItem& b) {
-        return a.kind == b.kind &&
-               a.id.ownerId == b.id.ownerId &&
-               a.id.elementId == b.id.elementId;
-    };
-
-    QPainter painter(this);
-    painter.setRenderHint(QPainter::Antialiasing, true);
-
-    auto drawFace = [&](const app::selection::SelectionItem& item, bool hovered) {
-        std::vector<std::array<QVector3D, 3>> triangles;
-        if (!m_modelPicker->getFaceTriangles(item.id.ownerId, item.id.elementId, triangles)) {
-            return;
-        }
-        const QColor fill = hovered ? style.faceFillHover : style.faceFillSelected;
-        const QColor outline = hovered ? style.faceOutlineHover : style.faceOutlineSelected;
-
-        // Draw filled triangles WITHOUT outline (no internal mesh lines)
-        painter.setPen(Qt::NoPen);
-        painter.setBrush(fill);
-        for (const auto& tri : triangles) {
-            QPolygonF poly;
-            bool projected = true;
-            for (const auto& v : tri) {
-                QPointF screenPos;
-                if (!projectToScreen(viewProjection, v, static_cast<float>(m_width),
-                                     static_cast<float>(m_height), &screenPos)) {
-                    projected = false;
-                    break;
-                }
-                poly << screenPos;
-            }
-            if (projected && poly.size() == 3) {
-                painter.drawPolygon(poly);
-            }
-        }
-
-        // Draw boundary edges only (from OCCT topology, not tessellation)
-        std::vector<std::vector<QVector3D>> boundaryEdges;
-        if (m_modelPicker->getFaceBoundaryEdges(item.id.ownerId, item.id.elementId, boundaryEdges)) {
-            painter.setPen(QPen(outline, hovered ? 1.5 : 2.0));
-            painter.setBrush(Qt::NoBrush);
-            for (const auto& edgePts : boundaryEdges) {
-                QPolygonF line;
-                for (const auto& pt : edgePts) {
-                    QPointF screenPos;
-                    if (projectToScreen(viewProjection, pt, static_cast<float>(m_width),
-                                        static_cast<float>(m_height), &screenPos)) {
-                        line << screenPos;
-                    }
-                }
-                if (line.size() >= 2) {
-                    painter.drawPolyline(line);
-                }
-            }
-        }
-    };
-
-    auto drawEdge = [&](const app::selection::SelectionItem& item, bool hovered) {
-        std::vector<QVector3D> polyline;
-        if (!m_modelPicker->getEdgePolyline(item.id.ownerId, item.id.elementId, polyline) ||
-            polyline.size() < 2) {
-            return;
-        }
-        painter.setPen(QPen(hovered ? style.edgeHover : style.edgeSelected, hovered ? 2.0 : 3.0));
-        QPolygonF line;
-        line.reserve(static_cast<int>(polyline.size()));
-        for (const auto& point : polyline) {
-            QPointF screenPos;
-            if (!projectToScreen(viewProjection, point, static_cast<float>(m_width),
-                                 static_cast<float>(m_height), &screenPos)) {
-                continue;
-            }
-            line << screenPos;
-        }
-        if (line.size() >= 2) {
-            painter.drawPolyline(line);
-        }
-    };
-
-    auto drawVertex = [&](const app::selection::SelectionItem& item, bool hovered) {
-        QVector3D vertex;
-        if (!m_modelPicker->getVertexPosition(item.id.ownerId, item.id.elementId, vertex)) {
-            return;
-        }
-        QPointF screenPos;
-        if (!projectToScreen(viewProjection, vertex, static_cast<float>(m_width),
-                             static_cast<float>(m_height), &screenPos)) {
-            return;
-        }
-        painter.setPen(Qt::NoPen);
-        painter.setBrush(hovered ? style.vertexHover : style.vertexSelected);
-        const double radius = hovered ? 4.0 : 5.0;
-        painter.drawEllipse(screenPos, radius, radius);
-    };
-
-    auto drawBody = [&](const app::selection::SelectionItem& item, bool hovered) {
-        std::vector<std::array<QVector3D, 3>> triangles;
-        if (!m_modelPicker->getBodyTriangles(item.id.ownerId, triangles)) {
-            return;
-        }
-        const QColor fill = hovered ? style.faceFillHover : style.faceFillSelected;
-
-        // Draw filled triangles WITHOUT outline (no internal mesh lines)
-        painter.setPen(Qt::NoPen);
-        painter.setBrush(fill);
-        for (const auto& tri : triangles) {
-            QPolygonF poly;
-            bool projected = true;
-            for (const auto& v : tri) {
-                QPointF screenPos;
-                if (!projectToScreen(viewProjection, v, static_cast<float>(m_width),
-                                     static_cast<float>(m_height), &screenPos)) {
-                    projected = false;
-                    break;
-                }
-                poly << screenPos;
-            }
-            if (projected && poly.size() == 3) {
-                painter.drawPolygon(poly);
-            }
-        }
-        // Note: Body selection doesn't draw boundary edges - just fill
-    };
-
-    for (const auto& item : selection) {
-        if (item.kind == app::selection::SelectionKind::Face) {
-            drawFace(item, false);
-        } else if (item.kind == app::selection::SelectionKind::Edge) {
-            drawEdge(item, false);
-        } else if (item.kind == app::selection::SelectionKind::Vertex) {
-            drawVertex(item, false);
-        } else if (item.kind == app::selection::SelectionKind::Body) {
-            drawBody(item, false);
-        }
-    }
-
-    if (hover.has_value()) {
-        bool alreadySelected = std::any_of(selection.begin(), selection.end(),
-                                           [&](const app::selection::SelectionItem& item) {
-            return isSameItem(item, hover.value());
-        });
-        if (!alreadySelected) {
-            if (hover->kind == app::selection::SelectionKind::Face) {
-                drawFace(*hover, true);
-            } else if (hover->kind == app::selection::SelectionKind::Edge) {
-                drawEdge(*hover, true);
-            } else if (hover->kind == app::selection::SelectionKind::Vertex) {
-                drawVertex(*hover, true);
-            } else if (hover->kind == app::selection::SelectionKind::Body) {
-                drawBody(*hover, true);
-            }
-        }
-    }
-}
-
-namespace {
-struct IndicatorGeometry {
-    QPainterPath path;
-    QPointF startScreen;
-    QPointF endScreen;
-    QPolygonF head;
-    QPolygonF backHead;
-    QPointF labelPos;
-    bool visible = false;
-};
-
-IndicatorGeometry calculateIndicatorGeometry(
-    const ui::tools::ModelingTool::Indicator& indicator,
-    const QMatrix4x4& viewProjection,
-    float width,
-    float height,
-    double pixelScale)
-{
-    IndicatorGeometry geo;
-    if (indicator.direction.lengthSquared() < 1e-6f) {
-        return geo;
-    }
-
-    QVector3D dir = indicator.direction.normalized();
-
-    const float visualLength = 30.0f; // 30 pixels per side (Compact)
-    
-    QPointF originScreen;
-    if (!projectToScreen(viewProjection, indicator.origin, width, height, &originScreen)) {
-        return geo;
-    }
-    
-    // Project direction to screen to get 2D orientation
-    QVector3D worldEnd = indicator.origin + dir * static_cast<float>(pixelScale * visualLength);
-    QPointF endScreen;
-    if (!projectToScreen(viewProjection, worldEnd, width, height, &endScreen)) {
-        return geo;
-    }
-
-    QVector2D screenDir(endScreen - originScreen);
-    if (screenDir.lengthSquared() < 1e-4f) {
-        return geo;
-    }
-    screenDir.normalize();
-    QVector2D perp(-screenDir.y(), screenDir.x());
-
-    // Arrow Head parameters (Thick and distinct)
-    const float headLength = 16.0f;
-    const float headWidth = 10.0f;
-    
-    // Calculate endpoints
-    geo.endScreen = originScreen + QPointF(screenDir.x() * visualLength, screenDir.y() * visualLength);
-    
-    // Front Head
-    {
-        QPointF headBase = geo.endScreen - QPointF(screenDir.x() * headLength, screenDir.y() * headLength);
-        QPointF left = headBase + QPointF(perp.x() * headWidth, perp.y() * headWidth);
-        QPointF right = headBase - QPointF(perp.x() * headWidth, perp.y() * headWidth);
-        geo.head << geo.endScreen << left << right;
-    }
-
-    if (indicator.isDoubleSided) {
-        geo.startScreen = originScreen - QPointF(screenDir.x() * visualLength, screenDir.y() * visualLength);
-        
-        // Back Head
-        QPointF backHeadBase = geo.startScreen + QPointF(screenDir.x() * headLength, screenDir.y() * headLength);
-        QPointF backLeft = backHeadBase + QPointF(perp.x() * headWidth, perp.y() * headWidth);
-        QPointF backRight = backHeadBase - QPointF(perp.x() * headWidth, perp.y() * headWidth);
-        geo.backHead << geo.startScreen << backLeft << backRight;
-    } else {
-        geo.startScreen = originScreen;
-    }
-
-    // Build the hit-test path
-    // 1. Line segment
-    QPainterPath linePath;
-    linePath.moveTo(geo.startScreen);
-    linePath.lineTo(geo.endScreen);
-    
-    // Use a stroker to make the line thick for hit testing
-    QPainterPathStroker stroker;
-    stroker.setWidth(60.0); // 60 pixel hit zone (Generous tolerance)
-    stroker.setCapStyle(Qt::RoundCap);
-    geo.path = stroker.createStroke(linePath);
-    
-    // 2. Add arrowheads to path
-    geo.path.addPolygon(geo.head);
-    if (!geo.backHead.isEmpty()) {
-        geo.path.addPolygon(geo.backHead);
-    }
-
-    geo.labelPos = geo.endScreen + QPointF(perp.x() * 20.0f, perp.y() * 20.0f);
-    geo.visible = true;
-    return geo;
-}
-} // namespace
-
-bool Viewport::isMouseOverIndicator(const QPoint& screenPos) const {
-    if (!m_modelingToolManager) return false;
-    auto indicator = m_modelingToolManager->activeIndicator();
-    if (!indicator.has_value()) return false;
-
-    QMatrix4x4 viewProjection = buildViewProjection();
-    IndicatorGeometry geo = calculateIndicatorGeometry(*indicator, viewProjection, 
-                                                     width(), height(), m_pixelScale);
-    if (!geo.visible) return false;
-
-    return geo.path.contains(QPointF(screenPos));
-}
-
-void Viewport::drawModelToolOverlay(const QMatrix4x4& viewProjection) {
-    if (m_inSketchMode || !m_modelingToolManager) {
-        return;
-    }
-
-    auto indicator = m_modelingToolManager->activeIndicator();
-    if (!indicator.has_value()) {
-        return;
-    }
-
-    IndicatorGeometry geo = calculateIndicatorGeometry(*indicator, viewProjection, 
-                                                     width(), height(), m_pixelScale);
-    if (!geo.visible) {
-        return;
-    }
-
-    const ThemeViewportOverlayColors& overlay =
-        ThemeManager::instance().currentTheme().viewport.overlay;
-    QColor color = overlay.toolIndicator; // Normal state
-
-    const bool isDragging = m_modelingToolManager->isDragging();
-    
-    if (isDragging) {
-        // Dragging state: High contrast (White)
-        color = Qt::white;
-    } else if (m_indicatorHovered) {
-        // Hover state: Brighter/Lighter
-        color = color.lighter(130);
-    }
-
-    QPainter painter(this);
-    painter.setRenderHint(QPainter::Antialiasing, true);
-
-    // Draw White Border (Thickest)
-    QPen borderPen(Qt::white, 8.0, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin);
-    painter.setPen(borderPen);
-    painter.setBrush(Qt::white);
-    
-    painter.drawLine(geo.startScreen, geo.endScreen);
-    painter.drawPolygon(geo.head);
-    if (!geo.backHead.isEmpty()) {
-        painter.drawPolygon(geo.backHead);
-    }
-
-    // Draw Inner Color (Thick)
-    QPen innerPen(color, 3.5, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin);
-    painter.setPen(innerPen);
-    painter.setBrush(color);
-    
-    painter.drawLine(geo.startScreen, geo.endScreen);
-    painter.drawPolygon(geo.head);
-    if (!geo.backHead.isEmpty()) {
-        painter.drawPolygon(geo.backHead);
-    }
-
-    if (indicator->showDistance) {
-        const double distanceValue = std::abs(indicator->distance);
-        QString text = QString::number(distanceValue, 'f', 2);
-
-        QFont font = painter.font();
-        font.setPointSize(10);
-        font.setBold(true);
-        painter.setFont(font);
-
-        QColor textColor = overlay.toolLabelText;
-        QColor bgColor = overlay.toolLabelBackground;
-
-        QFontMetrics metrics(font);
-        const int padding = 4;
-        QRectF labelRect(geo.labelPos.x(), geo.labelPos.y(),
-                         metrics.horizontalAdvance(text) + padding * 2,
-                         metrics.height() + padding * 2);
-
-        painter.setPen(Qt::NoPen);
-        painter.setBrush(bgColor);
-        painter.drawRoundedRect(labelRect, 4.0, 4.0);
-
-        painter.setPen(textColor);
-        painter.drawText(labelRect, Qt::AlignCenter, text);
-    }
-}
-
-void Viewport::drawPlaneSelectionOverlay(const QMatrix4x4& viewProjection) {
-    if (!m_planeSelectionActive) {
-        return;
-    }
-
-    QPainter painter(this);
-    painter.setRenderHint(QPainter::Antialiasing, true);
-
-    QFont labelFont = painter.font();
-    labelFont.setBold(true);
-    labelFont.setPointSize(labelFont.pointSize() + 1);
-    painter.setFont(labelFont);
-
-    const ThemeViewportPlaneColors& planeColors =
-        ThemeManager::instance().currentTheme().viewport.planes;
-    const QColor textColor = planeColors.labelText;
-    const auto selections = planeSelections(planeColors);
-    for (int i = 0; i < static_cast<int>(selections.size()); ++i) {
-        const auto& selection = selections[i];
-        PlaneAxes axes = buildPlaneAxes(selection.plane);
-        QVector3D origin(selection.plane.origin.x, selection.plane.origin.y, selection.plane.origin.z);
-
-        QVector<QVector3D> corners;
-        corners.reserve(4);
-        corners.append(origin + axes.xAxis * -kPlaneSelectHalf + axes.yAxis * -kPlaneSelectHalf);
-        corners.append(origin + axes.xAxis * kPlaneSelectHalf + axes.yAxis * -kPlaneSelectHalf);
-        corners.append(origin + axes.xAxis * kPlaneSelectHalf + axes.yAxis * kPlaneSelectHalf);
-        corners.append(origin + axes.xAxis * -kPlaneSelectHalf + axes.yAxis * kPlaneSelectHalf);
-
-        QPolygonF polygon;
-        bool projectedAll = true;
-        for (const auto& corner : corners) {
-            QPointF screenPos;
-            if (!projectToScreen(viewProjection, corner, static_cast<float>(m_width),
-                                 static_cast<float>(m_height), &screenPos)) {
-                projectedAll = false;
-                break;
-            }
-            polygon << screenPos;
-        }
-
-        if (!projectedAll) {
-            continue;
-        }
-
-        QColor fillColor = selection.color;
-        QColor outlineColor = selection.color;
-        outlineColor.setAlpha(200);
-
-        bool hovered = (i == m_planeHoverIndex);
-        if (hovered) {
-            fillColor = fillColor.lighter(130);
-            fillColor.setAlpha(140);
-            outlineColor = outlineColor.lighter(150);
-        }
-
-        painter.setPen(QPen(outlineColor, hovered ? 2.5 : 1.5));
-        painter.setBrush(fillColor);
-        painter.drawPolygon(polygon);
-
-        QPointF center;
-        if (projectToScreen(viewProjection, origin, static_cast<float>(m_width),
-                            static_cast<float>(m_height), &center)) {
-            painter.setPen(textColor);
-            QRectF labelRect(center.x() - 18, center.y() - 10, 36, 20);
-            painter.drawText(labelRect, Qt::AlignCenter, selection.label);
-        }
-    }
-}
-
-void Viewport::activateLineTool() {
-    setMoveSketchMode(false);
-    if (m_toolManager) {
-        m_toolManager->activateTool(sketchTools::ToolType::Line);
-    }
-}
-
-void Viewport::activateCircleTool() {
-    setMoveSketchMode(false);
-    if (m_toolManager) {
-        m_toolManager->activateTool(sketchTools::ToolType::Circle);
-    }
-}
-
-void Viewport::activateRectangleTool() {
-    setMoveSketchMode(false);
-    if (m_toolManager) {
-        m_toolManager->activateTool(sketchTools::ToolType::Rectangle);
-    }
-}
-
-void Viewport::activateArcTool() {
-    setMoveSketchMode(false);
-    if (m_toolManager) {
-        m_toolManager->activateTool(sketchTools::ToolType::Arc);
-    }
-}
-
-void Viewport::activateEllipseTool() {
-    setMoveSketchMode(false);
-    if (m_toolManager) {
-        m_toolManager->activateTool(sketchTools::ToolType::Ellipse);
-    }
-}
-
-void Viewport::activateTrimTool() {
-    setMoveSketchMode(false);
-    if (m_toolManager) {
-        m_toolManager->activateTool(sketchTools::ToolType::Trim);
-    }
-}
-
-void Viewport::activateMirrorTool() {
-    setMoveSketchMode(false);
-    if (m_toolManager) {
-        m_toolManager->activateTool(sketchTools::ToolType::Mirror);
-    }
-}
-
-void Viewport::deactivateTool() {
-    if (m_toolManager) {
-        m_toolManager->deactivateTool();
-    }
-}
-
 void Viewport::setDocument(app::Document* document) {
     m_document = document;
     m_documentSketchesDirty = true;
@@ -3951,7 +1804,7 @@ void Viewport::setDocument(app::Document* document) {
         m_referenceSketch = nullptr;
     }
     if (!m_inSketchMode && m_sketchRenderer) {
-        m_sketchRenderer->setSketch(m_referenceSketch);
+        m_sketchRenderer->setSketch(nullptr);
     }
     if (m_modelingToolManager) {
         m_modelingToolManager->setDocument(m_document);
@@ -3961,6 +1814,7 @@ void Viewport::setDocument(app::Document* document) {
     if (m_document) {
         connect(m_document, &app::Document::sketchAdded, this, [this]() {
             m_documentSketchesDirty = true;
+            updateModelSelectionFilter();
             update();
         });
         connect(m_document, &app::Document::sketchRemoved, this, [this]() {
@@ -3972,6 +1826,18 @@ void Viewport::setDocument(app::Document* document) {
                 updateModelSelectionFilter();
             }
             m_documentSketchesDirty = true;
+            updateModelSelectionFilter();
+            if (!m_inSketchMode && m_sketchRenderer) {
+                m_sketchRenderer->setSketch(nullptr);
+            }
+            update();
+        });
+        connect(m_document, &app::Document::sketchVisibilityChanged, this, [this]() {
+            m_documentSketchesDirty = true;
+            updateModelSelectionFilter();
+            if (!m_inSketchMode && m_sketchRenderer) {
+                m_sketchRenderer->setSketch(nullptr);
+            }
             update();
         });
         connect(m_document, &app::Document::bodyAdded, this, [this]() {
@@ -4024,47 +1890,10 @@ void Viewport::setCommandProcessor(app::commands::CommandProcessor* processor) {
     }
 }
 
-void Viewport::beginSketchDragGestureCapture() {
-    if (!m_sketchDragGestureCaptureEnabled || !m_document || !m_activeSketch) {
-        return;
-    }
-    if (m_sketchDragGestureCommand) {
-        return;
-    }
-
-    const std::string activeSketchId = resolveActiveSketchId();
-    if (activeSketchId.empty()) {
-        return;
-    }
-
-    auto command = std::make_unique<app::commands::SketchDragGestureCommand>(m_document,
-                                                                              activeSketchId);
-    if (!command->beginGesture()) {
-        return;
-    }
-    m_sketchDragGestureCommand = std::move(command);
-}
-
-void Viewport::endSketchDragGestureCapture(bool commit) {
-    if (!m_sketchDragGestureCommand) {
-        return;
-    }
-    if (commit) {
-        const bool finalized = m_sketchDragGestureCommand->finalizeGesture();
-        if (finalized && m_sketchDragGestureCommand->hasCapturedChange() && m_commandProcessor) {
-            auto command = std::move(m_sketchDragGestureCommand);
-            m_commandProcessor->execute(std::move(command));
-            return;
-        }
-    } else {
-        m_sketchDragGestureCommand->cancelGesture();
-    }
-    m_sketchDragGestureCommand.reset();
-}
-
 void Viewport::setReferenceSketch(const QString& sketchId) {
     const std::string id = sketchId.toStdString();
-    if (id == m_referenceSketchId && m_referenceSketch) {
+    if (id == m_referenceSketchId &&
+        ((id.empty() && m_referenceSketch == nullptr) || (!id.empty() && m_referenceSketch))) {
         return;
     }
     m_referenceSketchId = id;
@@ -4074,7 +1903,7 @@ void Viewport::setReferenceSketch(const QString& sketchId) {
         m_referenceSketch = nullptr;
     }
     if (!m_inSketchMode && m_sketchRenderer) {
-        m_sketchRenderer->setSketch(m_referenceSketch);
+        m_sketchRenderer->setSketch(nullptr);
     }
     m_documentSketchesDirty = true;
     updateModelSelectionFilter();
@@ -4090,275 +1919,17 @@ void Viewport::updateModelSelectionFilter() {
     filter.allowedKinds = {
         app::selection::SelectionKind::Vertex,
         app::selection::SelectionKind::Edge,
-        app::selection::SelectionKind::Face,
-        app::selection::SelectionKind::Body
+        app::selection::SelectionKind::Face
     };
-    if (m_referenceSketch) {
+    if (hasVisibleModelSketches()) {
+        filter.allowedKinds.insert(app::selection::SelectionKind::SketchPoint);
+        filter.allowedKinds.insert(app::selection::SelectionKind::SketchEdge);
         filter.allowedKinds.insert(app::selection::SelectionKind::SketchRegion);
-        if (m_revolveToolActive) {
-            filter.allowedKinds.insert(app::selection::SelectionKind::SketchEdge);
-        }
     }
     m_selectionManager->setFilter(filter);
 }
-
-void Viewport::setModelPickMeshes(std::vector<selection::ModelPickerAdapter::Mesh>&& meshes) {
-    if (m_modelPicker) {
-        m_modelPicker->setMeshes(std::move(meshes));
-    }
-}
-
-void Viewport::setModelPreviewMeshes(const std::vector<render::SceneMeshStore::Mesh>& meshes) {
-    if (m_bodyRenderer) {
-        m_bodyRenderer->setPreviewMeshes(meshes);
-        update();
-    }
-}
-
-void Viewport::clearModelPreviewMeshes() {
-    if (m_bodyRenderer) {
-        m_bodyRenderer->clearPreview();
-        update();
-    }
-    clearPreviewHiddenBody();
-}
-
-void Viewport::setPreviewHiddenBody(const std::string& bodyId) {
-    if (m_previewHiddenBodyId == bodyId) {
-        return;
-    }
-    m_previewHiddenBodyId = bodyId;
-    syncModelMeshes();
-    update();
-}
-
-void Viewport::clearPreviewHiddenBody() {
-    if (m_previewHiddenBodyId.empty()) {
-        return;
-    }
-    m_previewHiddenBodyId.clear();
-    syncModelMeshes();
-    update();
-}
-
-void Viewport::syncModelMeshes() {
-    if (!m_document || !m_modelPicker) {
-        return;
-    }
-    const auto& store = m_document->meshStore();
-
-    // Build filtered list of visible body meshes
-    std::vector<render::SceneMeshStore::Mesh> visibleMeshes;
-    store.forEachMesh([&](const render::SceneMeshStore::Mesh& mesh) {
-        if (m_document->isBodyVisible(mesh.bodyId) &&
-            (m_previewHiddenBodyId.empty() || mesh.bodyId != m_previewHiddenBodyId)) {
-            visibleMeshes.push_back(mesh);
-        }
-    });
-
-    if (m_bodyRenderer) {
-        m_bodyRenderer->setMeshes(visibleMeshes);
-    }
-
-    // Build pick meshes from visible bodies only
-    std::vector<selection::ModelPickerAdapter::Mesh> pickMeshes;
-    for (const auto& mesh : visibleMeshes) {
-        selection::ModelPickerAdapter::Mesh pickMesh;
-        pickMesh.bodyId = mesh.bodyId;
-        pickMesh.vertices.reserve(mesh.vertices.size());
-        for (const auto& v : mesh.vertices) {
-            QVector4D transformed = mesh.modelMatrix * QVector4D(v, 1.0f);
-            pickMesh.vertices.emplace_back(transformed.x(), transformed.y(), transformed.z());
-        }
-        pickMesh.triangles.reserve(mesh.triangles.size());
-        for (const auto& tri : mesh.triangles) {
-            selection::ModelPickerAdapter::Triangle pickTri;
-            pickTri.i0 = tri.i0;
-            pickTri.i1 = tri.i1;
-            pickTri.i2 = tri.i2;
-            pickTri.faceId = tri.faceId;
-            pickMesh.triangles.push_back(pickTri);
-        }
-        for (const auto& [faceId, topo] : mesh.topologyByFace) {
-            selection::ModelPickerAdapter::FaceTopology faceTopo;
-            for (const auto& edge : topo.edges) {
-                selection::ModelPickerAdapter::EdgePolyline edgeLine;
-                edgeLine.edgeId = edge.edgeId;
-                edgeLine.points.reserve(edge.points.size());
-                for (const auto& pt : edge.points) {
-                    QVector4D transformed = mesh.modelMatrix * QVector4D(pt, 1.0f);
-                    edgeLine.points.emplace_back(transformed.x(), transformed.y(), transformed.z());
-                }
-                faceTopo.edges.push_back(std::move(edgeLine));
-            }
-            for (const auto& vertex : topo.vertices) {
-                selection::ModelPickerAdapter::VertexSample sample;
-                sample.vertexId = vertex.vertexId;
-                QVector4D transformed = mesh.modelMatrix * QVector4D(vertex.position, 1.0f);
-                sample.position = QVector3D(transformed.x(), transformed.y(), transformed.z());
-                faceTopo.vertices.push_back(std::move(sample));
-            }
-            pickMesh.topologyByFace[faceId] = std::move(faceTopo);
-        }
-        pickMesh.faceGroupByFaceId = mesh.faceGroupByFaceId;
-        pickMeshes.push_back(std::move(pickMesh));
-    }
-    setModelPickMeshes(std::move(pickMeshes));
-}
-
-void Viewport::notifySketchUpdated() {
-    emit sketchUpdated();
-}
-
 void Viewport::setMoveSketchModeChangedCallback(std::function<void(bool)> callback) {
     m_moveSketchModeChangedCallback = std::move(callback);
-}
-
-void Viewport::setMoveSketchMode(bool active) {
-    if (m_moveSketchModeActive == active) {
-        return;
-    }
-    m_moveSketchModeActive = active;
-    if (active) {
-        setCursor(Qt::SizeAllCursor);
-    } else {
-        if (m_activeSketch) {
-            m_activeSketch->endPointDrag();
-            m_activeSketch->endGroupDrag();
-        }
-        if (m_sketchRenderer) {
-            m_sketchRenderer->clearDragGuides();
-        }
-        if (m_sketchInteractionState == SketchInteractionState::SketchMoving) {
-            endSketchDragGestureCapture(false);
-        }
-        setSketchInteractionState(SketchInteractionState::Idle, "move-sketch mode disabled");
-        setSketchDragIntent(SketchDragIntent::None, "move-sketch mode disabled");
-        m_pointDragCandidateId.clear();
-        m_moveSketchLastSketchPos = sketch::Vec2d{0.0, 0.0};
-        m_groupDragPointIds.clear();
-        m_groupDragStartPositions.clear();
-        m_groupDragFailureFeedbackShown = false;
-        setCursor(Qt::ArrowCursor);
-    }
-    if (m_moveSketchModeChangedCallback) {
-        m_moveSketchModeChangedCallback(m_moveSketchModeActive);
-    }
-    update();
-}
-
-double Viewport::currentPixelScaleForSnapping() const {
-    if (!m_camera) {
-        return 1.0;
-    }
-
-    const int viewportHeight = (m_height > 0) ? m_height : height();
-    const qreal ratio = devicePixelRatio();
-    if (viewportHeight <= 0 || ratio <= 0.0) {
-        return 1.0;
-    }
-
-    double pixelScale = 1.0;
-    if (m_camera->projectionType() == render::Camera3D::ProjectionType::Orthographic) {
-        const double worldHeight = static_cast<double>(m_camera->orthoScale());
-        pixelScale = worldHeight / (static_cast<double>(viewportHeight) * ratio);
-    } else {
-        const double halfFov = qDegreesToRadians(m_camera->fov() * 0.5f);
-        const double worldHeight = 2.0 * static_cast<double>(m_camera->distance()) * std::tan(halfFov);
-        pixelScale = worldHeight / (static_cast<double>(viewportHeight) * ratio);
-    }
-
-    if (!std::isfinite(pixelScale) || pixelScale <= 0.0) {
-        return 1.0;
-    }
-    return pixelScale;
-}
-
-void Viewport::syncSnapGridSizeFromCamera() {
-    if (!m_toolManager) {
-        return;
-    }
-
-    const double pixelScale = currentPixelScaleForSnapping();
-    m_pixelScale = pixelScale;
-
-    const float gridSpacing = render::Grid3D::adaptiveSpacing(static_cast<float>(pixelScale));
-    if (!std::isfinite(gridSpacing) || gridSpacing <= 0.0f) {
-        return;
-    }
-
-    m_toolManager->snapManager().setGridSize(static_cast<double>(gridSpacing));
-}
-
-void Viewport::updateSnapSettings(const SnapSettingsPanel::SnapSettings& settings) {
-    if (!m_toolManager) return;
-
-    auto& sm = m_toolManager->snapManager();
-    sm.setGridSnapEnabled(settings.grid);
-    sm.setSnapEnabled(core::sketch::SnapType::SketchGuide, settings.sketchGuideLines);
-    // sm.setSnapEnabled(core::sketch::SnapType::Vertex, settings.sketchGuidePoints); // Vertex is fundamental, maybe dont disable?
-    // User requested "Sketch Guide Points" toggle. Let's assume it means Vertex/Endpoint/Midpoint etc?
-    // Or just "Points" (Vertex).
-    // Let's toggle Point-like snaps for "Sketch Guide Points"
-    sm.setSnapEnabled(core::sketch::SnapType::Vertex, settings.sketchGuidePoints);
-    sm.setSnapEnabled(core::sketch::SnapType::Endpoint, settings.sketchGuidePoints);
-    sm.setSnapEnabled(core::sketch::SnapType::Midpoint, settings.sketchGuidePoints);
-    sm.setSnapEnabled(core::sketch::SnapType::Center, settings.sketchGuidePoints);
-    sm.setSnapEnabled(core::sketch::SnapType::Quadrant, settings.sketchGuidePoints);
-    // Intersection?
-    sm.setSnapEnabled(core::sketch::SnapType::Intersection, settings.sketchGuidePoints);
-
-    sm.setSnapEnabled(core::sketch::SnapType::ActiveLayer3D, settings.activeLayer3DPoints || settings.activeLayer3DEdges);
-    // Note: SnapManager distinguishes points vs edges in findExternalSnaps but flag is one.
-    // For now we pass both data if enable.
-    
-    sm.setShowGuidePoints(settings.showGuidePoints);
-    sm.setShowSnappingHints(settings.showSnappingHints);
-    syncSnapGridSizeFromCamera();
-    
-    update();
-}
-
-void Viewport::updateSnapGeometry() {
-    if (!m_inSketchMode || !m_activeSketch || !m_toolManager || !m_document) return;
-
-    std::vector<core::sketch::Vec2d> points;
-    std::vector<std::pair<core::sketch::Vec2d, core::sketch::Vec2d>> lines;
-
-    const auto& plane = m_activeSketch->getPlane();
-
-    // Iterate over all bodies in the document
-    auto bodyIds = m_document->getBodyIds();
-    for (const auto& bodyId : bodyIds) {
-        const auto* body = m_document->getBodyShape(bodyId);
-        if (!body || !m_document->isBodyVisible(bodyId)) continue;
-        
-        // Extract Vertices
-        TopExp_Explorer exV;
-        for (exV.Init(*body, TopAbs_VERTEX); exV.More(); exV.Next()) {
-            const TopoDS_Vertex& v = TopoDS::Vertex(exV.Current());
-            gp_Pnt p = BRep_Tool::Pnt(v);
-            core::sketch::Vec3d p3d{p.X(), p.Y(), p.Z()};
-            points.push_back(plane.toSketch(p3d));
-        }
-
-        // Extract Edges (Linear only for now, or discretized)
-        // For simplicity, snapping to "Distant Edges" usually means snapping to the projected line of an edge.
-        // We will take endpoints of edges for now as lines, or sample them.
-        // Implementing full curve projection is complex (Curve-Plane intersection or projection).
-        // Let's stick to Vertices for this iteration as "Guide Points" is the main request.
-        // "Distant Edges" - maybe just linear edges?
-        TopExp_Explorer exE;
-        for (exE.Init(*body, TopAbs_EDGE); exE.More(); exE.Next()) {
-             const TopoDS_Edge& e = TopoDS::Edge(exE.Current());
-             // Check if linear... BRepAdaptor_Curve
-             // For now, simpler: get vertices of edge
-             // This is redundant with vertex iteration above unless we want lines.
-        }
-    }
-    
-    // Pass to SnapManager
-    m_toolManager->snapManager().setExternalGeometry(points, lines);
 }
 
 } // namespace ui

@@ -7,109 +7,114 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ```bash
 make init              # Install deps (macOS/Homebrew) + configure CMake
 make run               # Build + run
-make test              # Build + run prototype tests
+make test              # Build + run 3 core prototype tests (elementmap, tnaming, custom_map)
 
-# Manual build
-mkdir build && cd build
-cmake .. -DCMAKE_PREFIX_PATH=/opt/homebrew/opt/qt
-cmake --build .
-./OneCAD  # or ./OneCAD.app/Contents/MacOS/OneCAD
+# Build + run a single test
+cmake --build build --target proto_regeneration && ./build/tests/proto_regeneration
+
+# Headless smoke test (CI)
+ONECAD_HEADLESS=1 make run
 ```
 
-Qt path override:
-- Use env var: `CMAKE_PREFIX_PATH=/path/to/qt cmake ..`
-- Or use flag: `cmake .. -DCMAKE_PREFIX_PATH=/path/to/qt`
-
-Examples:
-- macOS (Intel Homebrew): `-DCMAKE_PREFIX_PATH=/usr/local/opt/qt`
-- Linux (distro packages): `-DCMAKE_PREFIX_PATH=/usr/lib/qt6`
-- Windows (Qt installer): `-DCMAKE_PREFIX_PATH=C:\\Qt\\6.6.0\\msvc2019_64`
-- Windows (vcpkg): use `-DCMAKE_TOOLCHAIN_FILE=.../vcpkg.cmake` and vcpkg Qt6 triplet
+Qt path override: `cmake .. -DCMAKE_PREFIX_PATH=/path/to/qt`
 
 ## Project Overview
 
-C++ CAD application. C++20. Dependencies: Qt6, OpenCASCADE (OCCT), Eigen3.
+C++ CAD application. C++20. Dependencies: Qt6, OpenCASCADE (OCCT), Eigen3, PlaneGCS (vendored from FreeCAD in `third_party/planegcs/`).
 
-**Platform**: Tested on macOS 14+ (Apple Silicon). Intel macOS, Linux, and Windows are currently out of scope / untested; support may be added in a future phase. Qt path default: `/opt/homebrew/opt/qt`
+**Platform**: macOS 14+ Apple Silicon. Default Qt path: `/opt/homebrew/opt/qt`
 
 ## Architecture
 
 ```
 src/
-├── app/           # Application lifecycle, singleton controller
+├── app/
+│   ├── commands/      # Command pattern (undo/redo via CommandProcessor)
+│   ├── document/      # Document model: sketches, bodies, operations, ElementMap
+│   ├── history/       # DependencyGraph, RegenerationEngine, KernelScheduler
+│   └── selection/     # SelectionManager (sketch/model modes, deep select)
 ├── core/
-│   ├── sketch/    # Sketch entities (Point, Line, Arc, Circle, Ellipse)
-│   │   ├── tools/ # LineTool, ArcTool, CircleTool, RectangleTool, EllipseTool, MirrorTool, TrimTool
-│   │   ├── solver/        # ConstraintSolver, PlaneGCS adapter
-│   │   └── constraints/   # Constraint types (Distance, Angle, Coincident, etc.)
-│   └── loop/      # LoopDetector for region detection
-├── kernel/        # OCCT wrappers, ElementMap (topological naming)
-├── render/        # Camera3D, Grid3D, OpenGL 4.1 Core, SketchRenderer
-├── ui/
-│   ├── mainwindow/    # MainWindow
-│   ├── viewport/      # Viewport (3D + sketch interaction)
-│   ├── toolbar/       # ContextToolbar (sketch tools)
-│   ├── sketch/        # ConstraintPanel, DimensionEditor, SketchModePanel
-│   ├── viewcube/      # ViewCube (3D navigation)
-│   └── navigator/     # ModelNavigator
-└── io/            # STEP import/export, native format
-
-tests/             # Prototype executables (proto_custom_map, proto_tnaming, proto_elementmap_rigorous)
+│   ├── sketch/        # Entities, tools, solver, constraints, SnapManager, AutoConstrainer
+│   ├── modeling/      # CoplanarFacePatch, FaceExtrudeProfileBuilder, EdgeChainer, BooleanOperation
+│   └── loop/          # LoopDetector (region detection from closed sketch loops)
+├── kernel/            # OCCT wrappers, ElementMap (topological naming)
+├── render/            # Camera3D, Grid3D, OpenGL 4.1 Core, SketchRenderer
+├── ui/                # Qt6 widgets: Viewport, ContextToolbar, ViewCube, ModelNavigator
+└── io/                # Package (ZIP/Directory), HistoryIO (JSONL), DocumentIO, SketchIO, ElementMapIO
+tests/                 # ~27 standalone prototype executables for regression testing
 ```
 
-### Key Layers
-1. **UI** → Qt6 widgets. ContextToolbar manages sketch tools. Viewport handles both 3D and 2D sketch interaction.
-2. **Render** → Camera3D (orbit/pan/zoom), Grid3D (10mm fixed), SketchRenderer (entities + constraints + dimensions)
-3. **Core/Sketch** →
-   - **Entities**: Point, Line, Arc, Circle, Ellipse (all non-copyable, movable)
-   - **Tools**: LineTool, ArcTool, CircleTool, RectangleTool, EllipseTool, MirrorTool, TrimTool
-   - **SnapManager**: 2mm radius, priority Vertex > Endpoint > Midpoint > Center > Quadrant > Intersection > Grid
-   - **AutoConstrainer**: Infers Horizontal, Vertical, Coincident, Perpendicular, Tangent constraints
-   - **ConstraintSolver**: PlaneGCS wrapper (Phase 2 integration pending)
-4. **Kernel** → OCCT geometry, ElementMap for persistent topology IDs
+### Key Subsystems
+
+**Document & History** (`src/app/`):
+
+- `Document` is the central QObject storing sketches (UUID map), bodies (TopoDS_Shape), and operations (`OperationRecord` vector)
+- `OperationRecord`: opId, type (Extrude/Revolve/Fillet/Chamfer/Shell/Boolean), input (`std::variant`: SketchRegionRef/FaceRef/BodyRef), params (`std::variant` of typed params), resultBodyIds
+- `DependencyGraph`: forward/backward adjacency, Kahn's topological sort, suppression propagation, failure tracking
+- `RegenerationEngine`: replays operations in topo-sorted order → produces bodies. Supports `regenerateAll()`, `regenerateFrom(opId)`, `previewFrom(opId, newParams)`
+- `KernelScheduler`: single-writer background thread for non-blocking regeneration
+
+**Command System** (`src/app/commands/`):
+
+- `Command` interface: `execute()`, `undo()`, `label()`
+- `CommandProcessor`: undo/redo stacks, transaction batching
+- Operation commands: AddOperation, RemoveOperation, UpdateOperationParams, Rollback, SetOperationSuppression
+- Rollback = suppress downstream ops without deletion (maintains dependency links)
+- Applied op count tracks insertion cursor (≤ total ops; ops beyond cursor are drafts)
+
+**Topological Naming** (`src/kernel/ElementMap`):
+
+- Persistent, deterministic IDs for faces/edges/vertices across regeneration
+- ID scheme: `"bodyId/kind-reason-opId-hash-ordinal"`
+- Descriptor-based matching: center distance, size, surface/curve type, normal/tangent, adjacency hash
+- **Regression-sensitive**: descriptor hashing order changes can remap IDs; validate with golden comparisons
+
+**Modeling** (`src/core/modeling/`):
+
+- `CoplanarFacePatch`: extracts connected coplanar faces (normal dot 0.9999, plane dist 1e-3)
+- `FaceExtrudeProfileBuilder`: merges coplanar patch into single extrude profile
+- `FacePatchResolver`: bridges ElementMap IDs ↔ coplanar patches
+- `EdgeChainer`: builds tangent-continuous edge chains for fillet/chamfer auto-expansion
+- `BooleanOperation`: perform + detectMode (NewBody/Add/Cut/Intersect)
+
+**Selection** (`src/app/selection/`):
+
+- `SelectionKind`: SketchPoint, SketchEdge, SketchRegion, SketchConstraint, Vertex, Edge, Face, Body
+- Modes: Sketch vs Model. Filters limit selectable kinds. Deep select cycles through ambiguous hits
+
+**I/O** (`src/io/`):
+
+- `Package` abstraction: `ZipPackage` (.onecad) / `DirectoryPackage` (.onecadpkg, Git-friendly)
+- File format: manifest.json, document.json, history/ops.jsonl, history/state.json, elementmap, sketches/
+- `HistoryIO`: JSONL format (one op per line)
+
+### Data Flow
+
+1. Sketch created → UUID → `Document.sketches_`
+2. Operation created → `OperationRecord` → `Document.operations_`
+3. Regeneration: `DependencyGraph.topologicalSort()` → execute each op → output bodies to `Document.bodies_`
+4. ElementMap tracks shape identity through regeneration cycles
+5. UI tools (ExtrudeTool, etc.) create commands → `CommandProcessor` → regenerate
 
 ### Important Patterns
-- **EntityID = std::string (UUID)** for all sketch entities
-- **ElementMap** = topological naming system. Descriptor hashing is regression-sensitive (example: a hash ordering change can remap IDs; validate with a unit test + golden descriptor comparison + migration notes).
-- **Direct parameter binding** in constraint solver (pointers to coordinates)
+
+- **EntityID = std::string (UUID)** for all sketch entities and operations
 - **Non-copyable, movable** entities
-- **Scale-preserving camera transitions** (ortho ↔ perspective)
-- **Tool pattern**: Each sketch tool inherits from `SketchTool`, managed by `SketchToolManager`
-- **Snap system**: SnapManager returns `SnapResult` with type, position, and entity IDs
-- **Auto-constraints**: AutoConstrainer infers constraints during drawing (±5° tolerance for H/V, 2mm for coincidence)
+- **Tool pattern**: `SketchTool` subclasses managed by `SketchToolManager`, lifecycle: `handleMousePress/Move/Release/DoubleClick`
+- **SnapManager**: 2mm radius (sketch coords), priority Vertex > Endpoint > Midpoint > Center > Quadrant > Intersection > Grid. Always check `snapped` flag
+- **AutoConstrainer**: infers H/V (±5°), Coincident (2mm), Perpendicular, Tangent. Ghost entities at 50% opacity, applied on commit
+- **Suppression vs Deletion**: suppress for rollback (preserves deps), delete for permanent removal
+- **Preview state**: RegenerationEngine backs up/restores bodies for non-destructive parameter preview
 
 ## Critical Implementation Notes
 
 - **Sketch coordinate system**: Non-standard mapping for XY plane:
-  - Sketch X → World Y+ (0,1,0)
-  - Sketch Y → World X- (-1,0,0)
-  - Normal → World Z+ (0,0,1)
-  - See `SketchPlane::XY()` in `src/core/sketch/Sketch.h:64`
-- **ElementMap**: Topological naming for persistent geometry. Descriptor logic changes need thorough validation
-- **PlaneGCS integration**: Phase 2 blocker. Solver skeleton exists in `src/core/sketch/solver/`
-- **LoopDetector**: Graph-based (DFS cycles, point-in-polygon holes). Implementation pending in `src/core/loop/LoopDetector.h`
-- **OCCT**: WARNING: Always null-check `Handle<>` objects before dereferencing shapes
+  - Sketch X → World Y+ (0,1,0), Sketch Y → World X- (-1,0,0), Normal → World Z+ (0,0,1)
+  - See `SketchPlane::XY()` in `src/core/sketch/Sketch.h`
+- **OCCT**: Always null-check `Handle<>` objects before dereferencing shapes
 - **Qt signals**: Queued for cross-thread, Direct for same-thread. Ensure parent ownership
-- **Sketch tools**: Use `SketchToolManager` to activate tools. Each tool has `handleMousePress/Move/Release/DoubleClick` lifecycle
-- **SnapManager**: Snap radius is 2mm in sketch coordinates (constant regardless of zoom). Always check `snapped` flag before using position
-- **AutoConstrainer**: Returns inferred constraints as ghost entities (50% opacity). Applied on commit. Can be undone separately from geometry
-
-## Status / Roadmap
-
-**Current Phase**: Phase 7 complete (all 7 sketch tools integrated into UI)
-
-**Completed**:
-- ✅ Phase 1: Architecture foundation (entities: Point, Line, Arc, Circle, Ellipse)
-- ✅ Phase 4-7: All sketch tools (Line, Arc, Circle, Rectangle, Ellipse, Mirror, Trim)
-- ✅ SnapManager (2mm radius, full snap priority system)
-- ✅ AutoConstrainer (H/V/Coincident/Perpendicular/Tangent inference)
-- ✅ ConstraintPanel (displays constraints, ghost rendering)
-- ✅ SketchRenderer (entities, constraints, dimensions, ghost feedback)
-
-**Pending**:
-- ⏳ PlaneGCS: Phase 2 blocker, integration pending in `src/core/sketch/solver/`
-- ⏳ LoopDetector: Phase 3, interface defined in `src/core/loop/LoopDetector.h`
-- ⏳ DimensionEditor: UI exists, needs solver integration
+- **Boolean target resolution**: priority chain: explicit param → FaceRef.bodyId → sketch host body
+- **Applied op count** is distinct from total op count — allows draft ops beyond cursor
 
 ## Specifications
 
@@ -119,38 +124,33 @@ tests/             # Prototype executables (proto_custom_map, proto_tnaming, pro
 
 ## Code Standards
 
-- C++20 features are allowed; use `enum class`, `std::optional`, and `std::span` where it improves clarity.
-- Ownership: prefer `std::unique_ptr` for single-owner, `std::shared_ptr` only when required.
-- Const correctness: pass by `const&` for large types, keep member functions `const` when no mutation occurs.
-- Error handling: return `bool`/`std::optional` for recoverable errors; avoid exceptions in hot paths unless required.
-- Qt: use parent ownership for QObject lifetimes and avoid raw new without parent.
+- C++20: `enum class`, `std::optional`, `std::span` where appropriate
+- Ownership: `std::unique_ptr` for single-owner, `std::shared_ptr` only when required
+- Const correctness: `const&` for large types, `const` member functions when no mutation
+- Error handling: `bool`/`std::optional` for recoverable errors; avoid exceptions in hot paths
+- Qt: parent ownership for QObject lifetimes, no raw `new` without parent
 
-## Developer Guidance
+## Testing
 
-### Setup
-- Use `CMAKE_PREFIX_PATH` for Qt and `OpenCASCADE_DIR` if OCCT is not auto-detected
-- Default Qt path on Apple Silicon: `/opt/homebrew/opt/qt`
-- Run `make init` to install deps via Homebrew (macOS only) and configure CMake
+~27 prototype executables in `tests/`. Key groups:
 
-### Testing
-- Prototype targets: `proto_custom_map`, `proto_tnaming`, `proto_elementmap_rigorous`
-- Run all: `make test`
-- Build specific: `cmake --build build --target proto_custom_map`
-- Execute: `./build/tests/proto_custom_map`
+- **ElementMap/OCCT**: proto_custom_map, proto_tnaming, proto_elementmap_rigorous
+- **Sketch**: proto_sketch_geometry, proto_sketch_constraints, proto_sketch_snap, proto_sketch_solver, proto_sketch_group_drag, proto_sketch_drag_undo
+- **History/Regen**: proto_regeneration, proto_history_io_compat, proto_document_roundtrip_compat, proto_timeline_rollback_dirty
+- **Viewport/Selection**: proto_model_picker, proto_viewport_drag_state, proto_pickmesh_integration, proto_pick_topology_promotion
 
-### Debugging
-- Build type defaults to Debug (see Makefile `BUILD_TYPE`)
-- Override: `make run BUILD_TYPE=Release`
-- Qt Creator: open root `CMakeLists.txt`, set build directory to `build/`
+Build single: `cmake --build build --target <name>`
+Run single: `./build/tests/<name>`
+Run core 3: `make test`
 
-### Troubleshooting
-- **Qt not found**: verify `CMAKE_PREFIX_PATH` or Qt installation location
-- **OCCT not found**: set `OpenCASCADE_DIR` to CMake config path (e.g., `/opt/homebrew/lib/cmake/opencascade`)
+## Troubleshooting
+
+- **Qt not found**: verify `CMAKE_PREFIX_PATH`
+- **OCCT not found**: set `OpenCASCADE_DIR` (e.g., `/opt/homebrew/lib/cmake/opencascade`)
 - **Build cache stale**: `rm -rf build/` and reconfigure
-- **Linker errors on macOS**: ensure Xcode Command Line Tools installed (`xcode-select --install`)
+- **Linker errors on macOS**: `xcode-select --install`
 
-### Git/PRs
-- Conventional Commit prefixes: `feat:`, `fix:`, `chore:`, `refactor:`, `docs:`
-- Include build notes and screenshots for UI changes
-- Review profile: assertive (coderabbit)
+## Git
+
+- Conventional Commits: `feat:`, `fix:`, `chore:`, `refactor:`, `docs:`
 - Excluded from review: `third_party/`, `build/`, `resources/`, MOC/UI generated files

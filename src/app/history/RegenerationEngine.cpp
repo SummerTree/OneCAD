@@ -7,6 +7,8 @@
 #include "../document/Document.h"
 #include "../../core/loop/RegionUtils.h"
 #include "../../core/loop/FaceBuilder.h"
+#include "../../core/modeling/FaceExtrudeProfileBuilder.h"
+#include "../../core/modeling/FacePatchResolver.h"
 #include "../../core/modeling/EdgeChainer.h"
 #include "../../core/sketch/Sketch.h"
 #include "../../core/sketch/SketchLine.h"
@@ -33,9 +35,15 @@
 #include <TopoDS.hxx>
 #include <TopTools_IndexedDataMapOfShapeListOfShape.hxx>
 #include <TopTools_IndexedMapOfShape.hxx>
+#include <BRepBuilderAPI_Transform.hxx>
+#include <BRepBuilderAPI_MakeWire.hxx>
+#include <BRepOffsetAPI_ThruSections.hxx>
+#include <BRepOffsetAPI_MakePipe.hxx>
+#include <Standard_Failure.hxx>
 
 #include <algorithm>
 #include <cmath>
+#include <unordered_map>
 #include <unordered_set>
 
 namespace onecad::app::history {
@@ -47,6 +55,142 @@ constexpr double kDraftAngleEpsilon = 1e-4;
 constexpr double kSideFaceDotThreshold = 0.9;
 constexpr double kMinValue = 1e-3;
 constexpr double kMinAngleDeg = 1e-3;
+
+std::string inputSourceSummary(const OperationInput& input) {
+    if (std::holds_alternative<SketchRegionRef>(input)) {
+        const auto& ref = std::get<SketchRegionRef>(input);
+        return "SketchRegionRef(" + ref.sketchId + "," + ref.regionId + ")";
+    }
+    if (std::holds_alternative<FaceRef>(input)) {
+        const auto& ref = std::get<FaceRef>(input);
+        return "FaceRef(" + ref.bodyId + "," + ref.faceId +
+               ",patch=" + std::to_string(ref.patchFaceIds.size()) + ")";
+    }
+    if (std::holds_alternative<BodyRef>(input)) {
+        const auto& ref = std::get<BodyRef>(input);
+        return "BodyRef(" + ref.bodyId + ")";
+    }
+    return "None";
+}
+
+std::string joinResultBodyIds(const std::vector<std::string>& ids) {
+    if (ids.empty()) {
+        return "<none>";
+    }
+    std::string out;
+    for (const auto& id : ids) {
+        if (!out.empty()) {
+            out += ",";
+        }
+        out += id;
+    }
+    return out;
+}
+
+bool operationCreatesResultBody(const OperationRecord& op) {
+    if (op.type == OperationType::Extrude && std::holds_alternative<ExtrudeParams>(op.params)) {
+        return std::get<ExtrudeParams>(op.params).booleanMode == BooleanMode::NewBody;
+    }
+    if (op.type == OperationType::Revolve && std::holds_alternative<RevolveParams>(op.params)) {
+        return std::get<RevolveParams>(op.params).booleanMode == BooleanMode::NewBody;
+    }
+    return false;
+}
+
+std::vector<std::string> sortedUniqueStrings(const std::vector<std::string>& values) {
+    std::vector<std::string> out = values;
+    std::sort(out.begin(), out.end());
+    out.erase(std::unique(out.begin(), out.end()), out.end());
+    return out;
+}
+
+bool faceBelongsToBody(const TopoDS_Shape& body, const TopoDS_Face& face) {
+    if (body.IsNull() || face.IsNull()) {
+        return false;
+    }
+    for (TopExp_Explorer exp(body, TopAbs_FACE); exp.More(); exp.Next()) {
+        if (exp.Current().IsSame(face)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+bool planarFacePlaneAndNormal(const TopoDS_Face& face, gp_Pln& planeOut, gp_Dir& normalOut) {
+    try {
+        if (face.IsNull()) {
+            return false;
+        }
+        BRepAdaptor_Surface surface(face, true);
+        if (surface.GetType() != GeomAbs_Plane) {
+            return false;
+        }
+        planeOut = surface.Plane();
+        normalOut = planeOut.Axis().Direction();
+        if (face.Orientation() == TopAbs_REVERSED) {
+            normalOut.Reverse();
+        }
+        return true;
+    } catch (...) {
+        return false;
+    }
+}
+
+std::optional<core::modeling::FacePatchSelection> resolveFacePatchSelection(
+    const FaceRef& faceRef,
+    const TopoDS_Shape& body,
+    const kernel::elementmap::ElementMap& elementMap,
+    std::string& errorOut,
+    bool& usedLegacyFallbackOut) {
+    usedLegacyFallbackOut = false;
+    if (body.IsNull()) {
+        errorOut = "Face owner body is null: " + faceRef.bodyId;
+        return std::nullopt;
+    }
+
+    if (!faceRef.patchFaceIds.empty()) {
+        std::unordered_map<std::string, TopoDS_Face> facesById;
+        std::vector<std::string> memberIds = sortedUniqueStrings(faceRef.patchFaceIds);
+        facesById.reserve(memberIds.size());
+
+        for (const auto& memberId : memberIds) {
+            const auto* entry = elementMap.find(kernel::elementmap::ElementId::From(memberId));
+            if (!entry || entry->kind != kernel::elementmap::ElementKind::Face || entry->shape.IsNull()) {
+                errorOut = "Face patch member not found: " + memberId;
+                return std::nullopt;
+            }
+            TopoDS_Face memberFace = TopoDS::Face(entry->shape);
+            if (!faceBelongsToBody(body, memberFace)) {
+                errorOut = "Face patch member not on body: " + memberId;
+                return std::nullopt;
+            }
+            facesById.emplace(memberId, memberFace);
+        }
+
+        if (facesById.empty()) {
+            errorOut = "Face patch is empty";
+            return std::nullopt;
+        }
+
+        core::modeling::FacePatchSelection patch;
+        patch.memberFaceIds = std::move(memberIds);
+        patch.leaderFaceId = patch.memberFaceIds.front();
+        patch.memberFaces.reserve(patch.memberFaceIds.size());
+        for (const auto& memberId : patch.memberFaceIds) {
+            patch.memberFaces.push_back(facesById.at(memberId));
+        }
+        return patch;
+    }
+
+    auto legacyPatch = core::modeling::FacePatchResolver::resolveFromSeedFaceId(
+        body, elementMap, faceRef.faceId);
+    if (!legacyPatch) {
+        errorOut = "Face not found: " + faceRef.faceId;
+        return std::nullopt;
+    }
+    usedLegacyFallbackOut = true;
+    return legacyPatch;
+}
 } // namespace
 
 RegenerationEngine::RegenerationEngine(Document* doc)
@@ -120,6 +264,30 @@ RegenResult RegenerationEngine::regenerateToAppliedCount(std::size_t appliedCoun
         expectedBodies.insert(bodyId);
     }
 
+    std::unordered_set<std::string> replayOutputBodyIds;
+    for (const auto& op : appliedOps) {
+        if (!operationCreatesResultBody(op)) {
+            continue;
+        }
+        for (const auto& bodyId : op.resultBodyIds) {
+            if (bodyId.empty() || doc_->isBaseBody(bodyId)) {
+                continue;
+            }
+            replayOutputBodyIds.insert(bodyId);
+        }
+    }
+    qCDebug(logRegen) << "regenerateAll:pre-reset"
+                      << "bodyCount=" << replayOutputBodyIds.size();
+    for (const auto& bodyId : replayOutputBodyIds) {
+        const bool bodyExisted = doc_->getBodyShape(bodyId) != nullptr;
+        const bool bodyRemoved = doc_->removeBodyPreserveElementMap(bodyId);
+        doc_->elementMap().removeElementsForBody(bodyId);
+        qCDebug(logRegen) << "regenerateAll:pre-reset-body"
+                          << "bodyId=" << QString::fromStdString(bodyId)
+                          << "bodyExisted=" << bodyExisted
+                          << "bodyRemoved=" << bodyRemoved;
+    }
+
     // Execute operations in order
     const int total = static_cast<int>(order.size());
     int current = 0;
@@ -186,7 +354,10 @@ RegenResult RegenerationEngine::regenerateToAppliedCount(std::size_t appliedCoun
         } else {
             qCWarning(logRegen) << "regenerateAll:operation-failed"
                                 << "opId=" << QString::fromStdString(opId)
-                                << "error=" << QString::fromStdString(errorMsg);
+                                << "error=" << QString::fromStdString(errorMsg)
+                                << "source=" << QString::fromStdString(inputSourceSummary(opRecord->input))
+                                << "resultBodies=" << QString::fromStdString(
+                                       joinResultBodyIds(opRecord->resultBodyIds));
             graph_.setFailed(opId, true, errorMsg);
             doc_->setOperationFailed(opId, errorMsg);
             FailedOp failedOp;
@@ -453,6 +624,21 @@ bool RegenerationEngine::executeOperation(const OperationRecord& op, std::string
     case OperationType::Boolean:
         result = buildBoolean(op, errorOut);
         break;
+    case OperationType::LinearPattern:
+        result = buildLinearPattern(op, errorOut);
+        break;
+    case OperationType::CircularPattern:
+        result = buildCircularPattern(op, errorOut);
+        break;
+    case OperationType::Loft:
+        result = buildLoft(op, errorOut);
+        break;
+    case OperationType::Sweep:
+        result = buildSweep(op, errorOut);
+        break;
+    case OperationType::MirrorBody:
+        result = buildMirrorBody(op, errorOut);
+        break;
     default:
         errorOut = "Unknown operation type";
         return false;
@@ -479,6 +665,7 @@ bool RegenerationEngine::executeOperation(const OperationRecord& op, std::string
 }
 
 TopoDS_Shape RegenerationEngine::buildExtrude(const OperationRecord& op, std::string& errorOut) {
+    try {
     if (!std::holds_alternative<ExtrudeParams>(op.params)) {
         errorOut = "Invalid params for extrude";
         return {};
@@ -490,34 +677,169 @@ TopoDS_Shape RegenerationEngine::buildExtrude(const OperationRecord& op, std::st
         return {};
     }
 
-    // Resolve input face
-    auto faceOpt = resolveFaceInput(op.input, errorOut);
-    if (!faceOpt) {
+    TopoDS_Face baseFace;
+    std::vector<TopoDS_Face> patchFaces;
+    bool usedLegacyPatchFallback = false;
+
+    if (std::holds_alternative<SketchRegionRef>(op.input)) {
+        auto faceOpt = resolveFaceInput(op.input, errorOut);
+        if (!faceOpt) {
+            return {};
+        }
+        baseFace = *faceOpt;
+        patchFaces = {baseFace};
+    } else if (std::holds_alternative<FaceRef>(op.input)) {
+        const auto& faceRef = std::get<FaceRef>(op.input);
+        if (faceRef.bodyId.empty()) {
+            errorOut = "Face owner body is required";
+            return {};
+        }
+
+        auto bodyOpt = resolveBody(faceRef.bodyId);
+        if (!bodyOpt) {
+            errorOut = "Face owner body not found: " + faceRef.bodyId;
+            return {};
+        }
+
+        auto patch = resolveFacePatchSelection(faceRef, *bodyOpt, doc_->elementMap(), errorOut,
+                                               usedLegacyPatchFallback);
+        if (!patch) {
+            return {};
+        }
+        patchFaces = patch->memberFaces;
+        if (patchFaces.empty()) {
+            errorOut = "Face patch is empty";
+            return {};
+        }
+
+        if (!faceRef.faceId.empty()) {
+            auto seedFaceOpt = resolveFace(faceRef.faceId);
+            if (seedFaceOpt) {
+                baseFace = TopoDS::Face(*seedFaceOpt);
+            }
+        }
+        if (baseFace.IsNull()) {
+            baseFace = patchFaces.front();
+        }
+
+        qCDebug(logRegen) << "buildExtrude:coplanar-patch"
+                          << "opId=" << QString::fromStdString(op.opId)
+                          << "seedFaceId=" << QString::fromStdString(faceRef.faceId)
+                          << "patchFaces=" << patchFaces.size()
+                          << "patchFaceIds=" << patch->memberFaceIds.size()
+                          << "legacyFallback=" << usedLegacyPatchFallback;
+    } else {
+        errorOut = "Invalid input type for extrude";
         return {};
     }
 
-    TopoDS_Face baseFace = *faceOpt;
+    // Get direction from a valid planar patch face.
+    gp_Pln plane;
+    gp_Dir direction(0.0, 0.0, 1.0);
+    if (!planarFacePlaneAndNormal(baseFace, plane, direction)) {
+        bool resolvedDirection = false;
+        for (const TopoDS_Face& patchFace : patchFaces) {
+            if (planarFacePlaneAndNormal(patchFace, plane, direction)) {
+                baseFace = patchFace;
+                resolvedDirection = true;
+                break;
+            }
+        }
+        if (!resolvedDirection) {
+            errorOut = "Only planar faces supported for extrusion";
+            return {};
+        }
+    }
 
-    // Get direction from face normal
-    BRepAdaptor_Surface surface(baseFace, true);
-    if (surface.GetType() != GeomAbs_Plane) {
-        errorOut = "Only planar faces supported for extrusion";
+    TopoDS_Shape profileShape = baseFace;
+    if (std::holds_alternative<FaceRef>(op.input) && patchFaces.size() > 1) {
+        std::string profileError;
+        std::optional<core::modeling::FaceExtrudeProfileBuilder::Result> mergedProfile;
+        try {
+            mergedProfile = core::modeling::FaceExtrudeProfileBuilder::build(
+                baseFace, patchFaces, profileError);
+        } catch (const Standard_Failure& failure) {
+            errorOut = "Extrude merged profile failed: " + std::string(failure.GetMessageString());
+            qCWarning(logRegen) << "buildExtrude:merged-profile-exception"
+                                << "opId=" << QString::fromStdString(op.opId)
+                                << "patchFaces=" << patchFaces.size()
+                                << "legacyFallback=" << usedLegacyPatchFallback
+                                << "reason=" << QString::fromStdString(errorOut);
+            return {};
+        } catch (...) {
+            errorOut = "Extrude merged profile failed";
+            qCWarning(logRegen) << "buildExtrude:merged-profile-exception"
+                                << "opId=" << QString::fromStdString(op.opId)
+                                << "patchFaces=" << patchFaces.size()
+                                << "legacyFallback=" << usedLegacyPatchFallback
+                                << "reason=" << QString::fromStdString(errorOut);
+            return {};
+        }
+        if (!mergedProfile || mergedProfile->profileShape.IsNull()) {
+            errorOut = "Extrude merged profile failed";
+            if (!profileError.empty()) {
+                errorOut += ": " + profileError;
+            }
+            qCWarning(logRegen) << "buildExtrude:merged-profile-failed"
+                                << "opId=" << QString::fromStdString(op.opId)
+                                << "patchFaces=" << patchFaces.size()
+                                << "legacyFallback=" << usedLegacyPatchFallback
+                                << "reason=" << QString::fromStdString(profileError);
+            return {};
+        }
+        profileShape = mergedProfile->profileShape;
+        qCDebug(logRegen) << "buildExtrude:merged-profile"
+                          << "opId=" << QString::fromStdString(op.opId)
+                          << "inputPatchFaces=" << mergedProfile->inputFaceCount
+                          << "mergedFaces=" << mergedProfile->mergedFaceCount
+                          << "legacyFallback=" << usedLegacyPatchFallback;
+    } else if (std::holds_alternative<FaceRef>(op.input)) {
+        qCDebug(logRegen) << "buildExtrude:single-face-profile"
+                          << "opId=" << QString::fromStdString(op.opId)
+                          << "patchFaces=" << patchFaces.size()
+                          << "legacyFallback=" << usedLegacyPatchFallback;
+    }
+
+    // Build prism based on extrude mode
+    TopoDS_Shape result;
+    if (params.extrudeMode == ExtrudeMode::Symmetric) {
+        double halfDist = params.distance * 0.5;
+        gp_Vec fwdVec(direction.X() * halfDist, direction.Y() * halfDist, direction.Z() * halfDist);
+        gp_Vec bwdVec = fwdVec.Reversed();
+
+        BRepPrimAPI_MakePrism fwdPrism(profileShape, fwdVec, true);
+        BRepPrimAPI_MakePrism bwdPrism(profileShape, bwdVec, true);
+
+        if (fwdPrism.Shape().IsNull() || bwdPrism.Shape().IsNull()) {
+            errorOut = "Symmetric extrude prism produced null shape";
+            return {};
+        }
+        BRepAlgoAPI_Fuse fuse(fwdPrism.Shape(), bwdPrism.Shape());
+        if (!fuse.IsDone()) {
+            errorOut = "Symmetric extrude fuse failed";
+            return {};
+        }
+        result = fuse.Shape();
+    } else if (params.extrudeMode == ExtrudeMode::ThroughAll) {
+        // Use a large distance (1e5 mm) to approximate through-all
+        double throughDist = (params.distance >= 0) ? 1e5 : -1e5;
+        gp_Vec prismVec(direction.X() * throughDist, direction.Y() * throughDist, direction.Z() * throughDist);
+        BRepPrimAPI_MakePrism prism(profileShape, prismVec, true);
+        result = prism.Shape();
+    } else {
+        // Blind (default), ToNext, ToFace — use distance directly
+        // ToNext and ToFace require caller to pre-compute distance
+        gp_Vec prismVec(direction.X() * params.distance,
+                        direction.Y() * params.distance,
+                        direction.Z() * params.distance);
+        BRepPrimAPI_MakePrism prism(profileShape, prismVec, true);
+        result = prism.Shape();
+    }
+
+    if (result.IsNull()) {
+        errorOut = "Extrude prism produced null shape";
         return {};
     }
-
-    gp_Pln plane = surface.Plane();
-    gp_Dir direction = plane.Axis().Direction();
-    if (baseFace.Orientation() == TopAbs_REVERSED) {
-        direction.Reverse();
-    }
-
-    // Build prism
-    gp_Vec prismVec(direction.X() * params.distance,
-                    direction.Y() * params.distance,
-                    direction.Z() * params.distance);
-
-    BRepPrimAPI_MakePrism prism(baseFace, prismVec, true);
-    TopoDS_Shape result = prism.Shape();
 
     // Apply draft angle if specified
     if (std::abs(params.draftAngleDeg) > kDraftAngleEpsilon) {
@@ -598,6 +920,13 @@ TopoDS_Shape RegenerationEngine::buildExtrude(const OperationRecord& op, std::st
     }
 
     return result;
+    } catch (const Standard_Failure& failure) {
+        errorOut = "Extrude operation failed: " + std::string(failure.GetMessageString());
+        return {};
+    } catch (...) {
+        errorOut = "Extrude operation failed";
+        return {};
+    }
 }
 
 TopoDS_Shape RegenerationEngine::buildRevolve(const OperationRecord& op, std::string& errorOut) {
@@ -612,12 +941,62 @@ TopoDS_Shape RegenerationEngine::buildRevolve(const OperationRecord& op, std::st
         return {};
     }
 
-    auto faceOpt = resolveFaceInput(op.input, errorOut);
-    if (!faceOpt) {
+    TopoDS_Face baseFace;
+    std::vector<TopoDS_Face> profileFaces;
+    bool usedLegacyPatchFallback = false;
+
+    if (std::holds_alternative<SketchRegionRef>(op.input)) {
+        auto faceOpt = resolveFaceInput(op.input, errorOut);
+        if (!faceOpt) {
+            return {};
+        }
+        baseFace = *faceOpt;
+        profileFaces = {baseFace};
+    } else if (std::holds_alternative<FaceRef>(op.input)) {
+        const auto& faceRef = std::get<FaceRef>(op.input);
+        if (faceRef.bodyId.empty()) {
+            errorOut = "Face owner body is required";
+            return {};
+        }
+
+        auto bodyOpt = resolveBody(faceRef.bodyId);
+        if (!bodyOpt) {
+            errorOut = "Face owner body not found: " + faceRef.bodyId;
+            return {};
+        }
+
+        auto patch = resolveFacePatchSelection(faceRef, *bodyOpt, doc_->elementMap(), errorOut,
+                                               usedLegacyPatchFallback);
+        if (!patch) {
+            return {};
+        }
+
+        profileFaces = patch->memberFaces;
+        if (profileFaces.empty()) {
+            errorOut = "Face patch is empty";
+            return {};
+        }
+
+        if (!faceRef.faceId.empty()) {
+            auto seedFaceOpt = resolveFace(faceRef.faceId);
+            if (seedFaceOpt) {
+                baseFace = TopoDS::Face(*seedFaceOpt);
+            }
+        }
+        if (baseFace.IsNull()) {
+            baseFace = profileFaces.front();
+        }
+
+        qCDebug(logRegen) << "buildRevolve:coplanar-patch"
+                          << "opId=" << QString::fromStdString(op.opId)
+                          << "seedFaceId=" << QString::fromStdString(faceRef.faceId)
+                          << "patchFaces=" << profileFaces.size()
+                          << "patchFaceIds=" << patch->memberFaceIds.size()
+                          << "legacyFallback=" << usedLegacyPatchFallback;
+    } else {
+        errorOut = "Invalid input type for revolve";
         return {};
     }
-
-    TopoDS_Face baseFace = *faceOpt;
 
     // Resolve axis
     gp_Ax1 axis;
@@ -689,14 +1068,36 @@ TopoDS_Shape RegenerationEngine::buildRevolve(const OperationRecord& op, std::st
     }
 
     const double angleRad = params.angleDeg * M_PI / 180.0;
-    BRepPrimAPI_MakeRevol revol(baseFace, axis, angleRad, true);
-
-    if (!revol.IsDone()) {
-        errorOut = "Revolve operation failed";
-        return {};
+    TopoDS_Shape result;
+    for (const TopoDS_Face& profileFace : profileFaces) {
+        if (profileFace.IsNull()) {
+            continue;
+        }
+        BRepPrimAPI_MakeRevol revol(profileFace, axis, angleRad, true);
+        if (!revol.IsDone()) {
+            errorOut = "Revolve operation failed";
+            return {};
+        }
+        TopoDS_Shape revolShape = revol.Shape();
+        if (revolShape.IsNull()) {
+            continue;
+        }
+        if (result.IsNull()) {
+            result = revolShape;
+            continue;
+        }
+        BRepAlgoAPI_Fuse fuse(result, revolShape);
+        if (!fuse.IsDone()) {
+            errorOut = "Revolve patch fuse failed";
+            return {};
+        }
+        result = fuse.Shape();
     }
 
-    TopoDS_Shape result = revol.Shape();
+    if (result.IsNull()) {
+        errorOut = "Revolve produced null shape";
+        return {};
+    }
 
     if (params.booleanMode != BooleanMode::NewBody) {
         const std::string targetBodyId = resolveBooleanTargetBodyId(op, params.targetBodyId);
@@ -916,18 +1317,24 @@ TopoDS_Shape RegenerationEngine::buildShell(const OperationRecord& op, std::stri
 
     try {
         TopTools_ListOfShape facesToRemove;
-        std::size_t addedFaces = 0;
-        for (const auto& faceId : params.openFaceIds) {
-            auto faceOpt = resolveFace(faceId);
-            if (faceOpt) {
-                facesToRemove.Append(*faceOpt);
-                ++addedFaces;
-            }
-        }
-
-        if (addedFaces == 0) {
+        const auto openFaceIds = sortedUniqueStrings(params.openFaceIds);
+        if (openFaceIds.empty()) {
             errorOut = "No valid faces for shell";
             return {};
+        }
+
+        for (const auto& faceId : openFaceIds) {
+            auto faceOpt = resolveFace(faceId);
+            if (!faceOpt) {
+                errorOut = "Open face not found: " + faceId;
+                return {};
+            }
+            TopoDS_Face face = TopoDS::Face(*faceOpt);
+            if (!faceBelongsToBody(targetShape, face)) {
+                errorOut = "Open face not on target body: " + faceId;
+                return {};
+            }
+            facesToRemove.Append(face);
         }
 
         BRepOffsetAPI_MakeThickSolid thickSolid;
@@ -1146,6 +1553,276 @@ void RegenerationEngine::applyBodyResult(const std::string& bodyId, const TopoDS
     } else {
         doc_->addBodyWithId(bodyId, shape);
         doc_->elementMap().rebindBody(bodyId, shape, opId);
+    }
+}
+
+TopoDS_Shape RegenerationEngine::buildLinearPattern(const OperationRecord& op, std::string& errorOut) {
+    try {
+    if (!std::holds_alternative<LinearPatternParams>(op.params)) {
+        errorOut = "Invalid params for linear pattern";
+        return {};
+    }
+    const auto& p = std::get<LinearPatternParams>(op.params);
+
+    if (p.count < 2) {
+        errorOut = "Pattern count must be >= 2";
+        return {};
+    }
+
+    const auto* sourceShape = doc_->getBodyShape(p.sourceBodyId);
+    if (!sourceShape || sourceShape->IsNull()) {
+        errorOut = "Source body not found for linear pattern";
+        return {};
+    }
+
+    // Normalize direction
+    double len = std::sqrt(p.dirX * p.dirX + p.dirY * p.dirY + p.dirZ * p.dirZ);
+    if (len < 1e-10) {
+        errorOut = "Direction vector is zero";
+        return {};
+    }
+    double nx = p.dirX / len;
+    double ny = p.dirY / len;
+    double nz = p.dirZ / len;
+
+    TopoDS_Shape result = *sourceShape;
+    for (int i = 1; i < p.count; ++i) {
+        gp_Trsf trsf;
+        trsf.SetTranslation(gp_Vec(nx * p.spacing * i, ny * p.spacing * i, nz * p.spacing * i));
+        BRepBuilderAPI_Transform xform(*sourceShape, trsf, true);
+        if (!xform.IsDone()) {
+            errorOut = "Linear pattern transform failed at instance " + std::to_string(i);
+            return {};
+        }
+
+        if (p.fuseResult) {
+            BRepAlgoAPI_Fuse fuse(result, xform.Shape());
+            if (!fuse.IsDone()) {
+                errorOut = "Linear pattern fuse failed at instance " + std::to_string(i);
+                return {};
+            }
+            result = fuse.Shape();
+        } else {
+            // Without fuse, just return the last transformed shape
+            result = xform.Shape();
+        }
+    }
+
+    return result;
+    } catch (const Standard_Failure& e) {
+        errorOut = std::string("OCCT error in linear pattern: ") + e.GetMessageString();
+        return {};
+    }
+}
+
+TopoDS_Shape RegenerationEngine::buildLoft(const OperationRecord& op, std::string& errorOut) {
+    try {
+    if (!std::holds_alternative<LoftParams>(op.params)) {
+        errorOut = "Invalid params for loft";
+        return {};
+    }
+    const auto& p = std::get<LoftParams>(op.params);
+
+    if (p.profileSketchIds.size() < 2 ||
+        p.profileSketchIds.size() != p.profileRegionIds.size()) {
+        errorOut = "Loft requires at least 2 profiles with matching region IDs";
+        return {};
+    }
+
+    BRepOffsetAPI_ThruSections loft(p.isSolid, p.isRuled);
+
+    for (std::size_t i = 0; i < p.profileSketchIds.size(); ++i) {
+        std::string faceErr;
+        auto face = buildFaceFromSketchRegion(p.profileSketchIds[i], p.profileRegionIds[i], faceErr);
+        if (!face.has_value()) {
+            errorOut = "Loft: failed to build profile " + std::to_string(i) + ": " + faceErr;
+            return {};
+        }
+
+        // Extract outer wire from face
+        TopExp_Explorer wireExp(face.value(), TopAbs_WIRE);
+        if (wireExp.More()) {
+            loft.AddWire(TopoDS::Wire(wireExp.Current()));
+        } else {
+            errorOut = "Loft: profile " + std::to_string(i) + " has no wire";
+            return {};
+        }
+    }
+
+    loft.Build();
+    if (!loft.IsDone()) {
+        errorOut = "Loft build failed";
+        return {};
+    }
+
+    return loft.Shape();
+    } catch (const Standard_Failure& e) {
+        errorOut = std::string("OCCT error in loft: ") + e.GetMessageString();
+        return {};
+    }
+}
+
+TopoDS_Shape RegenerationEngine::buildSweep(const OperationRecord& op, std::string& errorOut) {
+    try {
+    if (!std::holds_alternative<SweepParams>(op.params)) {
+        errorOut = "Invalid params for sweep";
+        return {};
+    }
+    const auto& p = std::get<SweepParams>(op.params);
+
+    // Build profile face
+    std::string faceErr;
+    auto profileFace = buildFaceFromSketchRegion(p.profileSketchId, p.profileRegionId, faceErr);
+    if (!profileFace.has_value()) {
+        errorOut = "Sweep: failed to build profile: " + faceErr;
+        return {};
+    }
+
+    // Extract profile wire
+    TopExp_Explorer wireExp(profileFace.value(), TopAbs_WIRE);
+    if (!wireExp.More()) {
+        errorOut = "Sweep: profile has no wire";
+        return {};
+    }
+    TopoDS_Wire profileWire = TopoDS::Wire(wireExp.Current());
+
+    // Build path wire from path sketch
+    TopoDS_Wire pathWire;
+    if (!p.pathSketchId.empty()) {
+        auto* pathSketch = doc_->getSketch(p.pathSketchId);
+        if (!pathSketch) {
+            errorOut = "Sweep: path sketch not found";
+            return {};
+        }
+        // Build a wire from all sketch edges
+        BRepBuilderAPI_MakeWire wireMaker;
+        // Use the sketch's face builder to get edges
+        std::string pathFaceErr;
+        // Detect regions and use the first wire
+        auto pathFace = buildFaceFromSketchRegion(p.pathSketchId, p.pathEdgeId, pathFaceErr);
+        if (pathFace.has_value()) {
+            TopExp_Explorer pathWireExp(pathFace.value(), TopAbs_WIRE);
+            if (pathWireExp.More()) {
+                pathWire = TopoDS::Wire(pathWireExp.Current());
+            }
+        }
+    }
+
+    if (pathWire.IsNull()) {
+        errorOut = "Sweep: could not build path wire";
+        return {};
+    }
+
+    BRepOffsetAPI_MakePipe pipe(pathWire, profileWire);
+    if (!pipe.IsDone()) {
+        errorOut = "Sweep pipe build failed";
+        return {};
+    }
+
+    return pipe.Shape();
+    } catch (const Standard_Failure& e) {
+        errorOut = std::string("OCCT error in sweep: ") + e.GetMessageString();
+        return {};
+    }
+}
+
+TopoDS_Shape RegenerationEngine::buildCircularPattern(const OperationRecord& op, std::string& errorOut) {
+    try {
+    if (!std::holds_alternative<CircularPatternParams>(op.params)) {
+        errorOut = "Invalid params for circular pattern";
+        return {};
+    }
+    const auto& p = std::get<CircularPatternParams>(op.params);
+
+    if (p.count < 2) {
+        errorOut = "Pattern count must be >= 2";
+        return {};
+    }
+
+    const auto* sourceShape = doc_->getBodyShape(p.sourceBodyId);
+    if (!sourceShape || sourceShape->IsNull()) {
+        errorOut = "Source body not found for circular pattern";
+        return {};
+    }
+
+    gp_Pnt axisPoint(p.axisX, p.axisY, p.axisZ);
+    gp_Dir axisDir(p.axisDirX, p.axisDirY, p.axisDirZ);
+    gp_Ax1 axis(axisPoint, axisDir);
+
+    double stepAngle = (p.angleDeg / p.count) * M_PI / 180.0;
+
+    TopoDS_Shape result = *sourceShape;
+    for (int i = 1; i < p.count; ++i) {
+        gp_Trsf trsf;
+        trsf.SetRotation(axis, stepAngle * i);
+        BRepBuilderAPI_Transform xform(*sourceShape, trsf, true);
+        if (!xform.IsDone()) {
+            errorOut = "Circular pattern transform failed at instance " + std::to_string(i);
+            return {};
+        }
+
+        if (p.fuseResult) {
+            BRepAlgoAPI_Fuse fuse(result, xform.Shape());
+            if (!fuse.IsDone()) {
+                errorOut = "Circular pattern fuse failed at instance " + std::to_string(i);
+                return {};
+            }
+            result = fuse.Shape();
+        } else {
+            result = xform.Shape();
+        }
+    }
+
+    return result;
+    } catch (const Standard_Failure& e) {
+        errorOut = std::string("OCCT error in circular pattern: ") + e.GetMessageString();
+        return {};
+    }
+}
+
+TopoDS_Shape RegenerationEngine::buildMirrorBody(const OperationRecord& op, std::string& errorOut) {
+    try {
+    if (!std::holds_alternative<MirrorBodyParams>(op.params)) {
+        errorOut = "Invalid params for mirror body";
+        return {};
+    }
+    const auto& p = std::get<MirrorBodyParams>(op.params);
+
+    const auto* sourceShape = doc_->getBodyShape(p.sourceBodyId);
+    if (!sourceShape || sourceShape->IsNull()) {
+        errorOut = "Source body not found for mirror";
+        return {};
+    }
+
+    // Build mirror transformation
+    gp_Pnt planePoint(p.planePointX, p.planePointY, p.planePointZ);
+    gp_Dir planeNormal(p.planeNormalX, p.planeNormalY, p.planeNormalZ);
+    gp_Ax2 mirrorPlane(planePoint, planeNormal);
+
+    gp_Trsf mirrorTrsf;
+    mirrorTrsf.SetMirror(mirrorPlane);
+
+    BRepBuilderAPI_Transform mirror(*sourceShape, mirrorTrsf, true);
+    if (!mirror.IsDone()) {
+        errorOut = "Mirror transform failed";
+        return {};
+    }
+
+    TopoDS_Shape mirrored = mirror.Shape();
+
+    if (p.fuseWithOriginal) {
+        BRepAlgoAPI_Fuse fuse(*sourceShape, mirrored);
+        if (!fuse.IsDone()) {
+            errorOut = "Mirror fuse failed";
+            return {};
+        }
+        return fuse.Shape();
+    }
+
+    return mirrored;
+    } catch (const Standard_Failure& e) {
+        errorOut = std::string("OCCT error in mirror body: ") + e.GetMessageString();
+        return {};
     }
 }
 

@@ -258,6 +258,9 @@ void DependencyGraph::extractDependencies(const OperationRecord& op, FeatureNode
         const auto& ref = std::get<FaceRef>(op.input);
         node.inputBodyIds.insert(ref.bodyId);
         node.inputFaceIds.insert(ref.faceId);
+        for (const auto& patchFaceId : ref.patchFaceIds) {
+            node.inputFaceIds.insert(patchFaceId);
+        }
     } else if (std::holds_alternative<BodyRef>(op.input)) {
         const auto& ref = std::get<BodyRef>(op.input);
         node.inputBodyIds.insert(ref.bodyId);

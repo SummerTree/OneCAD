@@ -6,6 +6,9 @@ add_library(onecad_ui STATIC
     theme/ThemeConfig.cpp
     theme/ThemeManager.cpp
     viewport/Viewport.cpp
+    viewport/ViewportNavigation.cpp
+    viewport/ViewportSketchInteraction.cpp
+    viewport/ViewportRendering.cpp
     viewport/RenderDebugPanel.cpp
     viewport/ViewportRevolve.cpp
     viewport/ViewportModeling.cpp
@@ -31,6 +34,14 @@ add_library(onecad_ui STATIC
     history/EditParameterDialog.cpp
     history/RegenFailureDialog.cpp
     viewport/SnapSettingsPanel.cpp
+    dialogs/CrashRecoveryDialog.cpp
+    dialogs/MeshExportDialog.cpp
+    dialogs/StepExportDialog.cpp
+    tools/MeasureTool.cpp
+    inspector/MassPropertiesPanel.cpp
+    inspector/PropertyInspector.cpp
+    palette/ActionRegistry.cpp
+    palette/CommandPalette.cpp
 )
 
 target_include_directories(onecad_ui PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
