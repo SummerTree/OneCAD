@@ -176,18 +176,27 @@ void terminateHandler() {
     std::abort();
 }
 
-QString makeLogDirectoryPath() {
+QStringList makeLogDirectoryCandidates() {
+    QStringList paths;
     const QString overridePath = qEnvironmentVariable("ONECAD_LOG_DIR").trimmed();
     if (!overridePath.isEmpty()) {
-        return overridePath;
+        paths << overridePath;
     }
 
     const QString appDataPath = QStandardPaths::writableLocation(QStandardPaths::AppLocalDataLocation);
     if (!appDataPath.isEmpty()) {
-        return QDir(appDataPath).filePath(QStringLiteral("logs"));
+        paths << QDir(appDataPath).filePath(QStringLiteral("logs"));
     }
 
-    return QDir::current().filePath(QStringLiteral("logs"));
+    paths << QDir::current().filePath(QStringLiteral("logs"));
+
+    const QString tempPath = QStandardPaths::writableLocation(QStandardPaths::TempLocation);
+    if (!tempPath.isEmpty()) {
+        paths << QDir(tempPath).filePath(QStringLiteral("onecad/logs"));
+    }
+
+    paths.removeDuplicates();
+    return paths;
 }
 
 void pruneOldLogs(const QDir& dir, const QString& currentLogPath) {
@@ -231,6 +240,8 @@ void pruneOldLogs(const QDir& dir, const QString& currentLogPath) {
 bool Logging::initialize(const QString& appName, bool debugBuild) {
     QString initializedLogFilePath;
     QString logDirectoryPath;
+    QString fileLoggingWarning;
+    bool fileLoggingEnabled = false;
 
     {
         QMutexLocker lock(&gLogMutex);
@@ -240,43 +251,67 @@ bool Logging::initialize(const QString& appName, bool debugBuild) {
 
         setLoggingRules(debugBuild);
 
-        const QString logDirPath = makeLogDirectoryPath();
-        QDir dir(logDirPath);
-        if (!dir.exists() && !dir.mkpath(QStringLiteral("."))) {
-            std::cerr << "Failed to create log directory: " << logDirPath.toStdString() << std::endl;
-            return false;
-        }
-
         const QString timestamp = QDateTime::currentDateTime().toString(QStringLiteral("yyyyMMdd_HHmmss_zzz"));
         const QString fileName = QStringLiteral("%1_%2_%3.log")
                                      .arg(appName.toLower(), timestamp)
                                      .arg(QCoreApplication::applicationPid());
-        gLogFilePath = dir.filePath(fileName);
 
-        gLogFile.setFileName(gLogFilePath);
-        if (!gLogFile.open(QIODevice::WriteOnly | QIODevice::Text)) {
-            std::cerr << "Failed to open log file: " << gLogFilePath.toStdString() << std::endl;
+        for (const QString& candidatePath : makeLogDirectoryCandidates()) {
+            QDir dir(candidatePath);
+            if (!dir.exists() && !dir.mkpath(QStringLiteral("."))) {
+                fileLoggingWarning += QStringLiteral("Failed to create log directory: %1\n")
+                                          .arg(candidatePath);
+                continue;
+            }
+
+            const QString candidateLogFile = dir.filePath(fileName);
+            gLogFile.setFileName(candidateLogFile);
+            if (!gLogFile.open(QIODevice::WriteOnly | QIODevice::Text)) {
+                fileLoggingWarning += QStringLiteral("Failed to open log file: %1\n")
+                                          .arg(candidateLogFile);
+                gLogFile.setFileName(QString());
+                continue;
+            }
+
+            gLogFilePath = candidateLogFile;
+            initializedLogFilePath = gLogFilePath;
+            logDirectoryPath = dir.absolutePath();
+            fileLoggingEnabled = true;
+            break;
+        }
+
+        if (!fileLoggingEnabled) {
             gLogFilePath.clear();
-            return false;
+            initializedLogFilePath = QStringLiteral("<console-only>");
+            logDirectoryPath = QStringLiteral("<none>");
         }
 
         gPreviousHandler = qInstallMessageHandler(messageHandler);
         gPreviousTerminateHandler = std::set_terminate(terminateHandler);
         gInitialized = true;
-        initializedLogFilePath = gLogFilePath;
-        logDirectoryPath = dir.absolutePath();
+    }
+
+    if (!fileLoggingWarning.isEmpty()) {
+        std::cerr << fileLoggingWarning.toStdString();
+    }
+    if (!fileLoggingEnabled) {
+        std::cerr << "File logging unavailable; continuing with console logging only" << std::endl;
     }
 
     qInfo().noquote() << "Logging initialized"
-                      << "logFile=" << QFileInfo(initializedLogFilePath).absoluteFilePath()
+                      << "logFile=" << (fileLoggingEnabled
+                                           ? QFileInfo(initializedLogFilePath).absoluteFilePath()
+                                           : initializedLogFilePath)
                       << "logDir=" << logDirectoryPath
                       << "debugBuild=" << debugBuild
                       << "debugLogsEnabled=" << gDebugLoggingEnabled;
 
-    pruneOldLogs(QDir(logDirectoryPath), initializedLogFilePath);
-    qInfo().noquote() << "Log retention applied"
-                      << "days=" << kLogRetentionDays
-                      << "maxFiles=" << kMaxRunLogFiles;
+    if (fileLoggingEnabled) {
+        pruneOldLogs(QDir(logDirectoryPath), initializedLogFilePath);
+        qInfo().noquote() << "Log retention applied"
+                          << "days=" << kLogRetentionDays
+                          << "maxFiles=" << kMaxRunLogFiles;
+    }
     return true;
 }
 

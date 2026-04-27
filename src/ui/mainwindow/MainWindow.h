@@ -2,6 +2,7 @@
 #define ONECAD_UI_MAINWINDOW_H
 
 #include <QMainWindow>
+#include <QMetaObject>
 #include <QStringList>
 #include <memory>
 #include <string>
@@ -153,6 +154,7 @@ private:
     std::unique_ptr<app::Document> m_document;
     std::unique_ptr<app::commands::CommandProcessor> m_commandProcessor;
     app::AutosaveManager* m_autosaveManager = nullptr;
+    std::vector<QMetaObject::Connection> m_documentConnections;
 
     // Active editing state
     std::string m_activeSketchId;  // Currently editing sketch ID (empty if not in sketch mode)

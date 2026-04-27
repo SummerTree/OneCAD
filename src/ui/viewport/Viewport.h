@@ -13,6 +13,7 @@
 #include <QStringList>
 #include <QSize>
 #include <QImage>
+#include <QMetaObject>
 #include <QRectF>
 #include "SnapSettingsPanel.h"
 #include "selection/ModelPickerAdapter.h"
@@ -132,6 +133,7 @@ public:
     void clearModelPreviewMeshes();
     void setPreviewHiddenBody(const std::string& bodyId);
     void clearPreviewHiddenBody();
+    void resetTransientState();
 
 signals:
     void mousePositionChanged(double x, double y, double z);
@@ -447,6 +449,7 @@ private:
 
     // Signal connection management
     QMetaObject::Connection m_themeConnection;
+    std::vector<QMetaObject::Connection> m_documentConnections;
 };
 
 } // namespace ui

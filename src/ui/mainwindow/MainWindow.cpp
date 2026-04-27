@@ -309,49 +309,69 @@ void MainWindow::applyTheme() {
 }
 
 void MainWindow::connectDocumentSignals() {
+    for (const auto& connection : m_documentConnections) {
+        disconnect(connection);
+    }
+    m_documentConnections.clear();
+
     if (!m_document || !m_navigator) {
         return;
     }
 
-    connect(m_document.get(), &app::Document::sketchAdded,
-            m_navigator, &ModelNavigator::onSketchAdded);
-    connect(m_document.get(), &app::Document::sketchRemoved,
-            m_navigator, &ModelNavigator::onSketchRemoved);
-    connect(m_document.get(), &app::Document::sketchRenamed,
-            m_navigator, &ModelNavigator::onSketchRenamed);
-    connect(m_document.get(), &app::Document::bodyAdded,
-            m_navigator, &ModelNavigator::onBodyAdded);
-    connect(m_document.get(), &app::Document::bodyRemoved,
-            m_navigator, &ModelNavigator::onBodyRemoved);
-    connect(m_document.get(), &app::Document::bodyRenamed,
-            m_navigator, &ModelNavigator::onBodyRenamed);
-    connect(m_document.get(), &app::Document::bodyVisibilityChanged,
-            m_navigator, &ModelNavigator::onBodyVisibilityChanged);
-    connect(m_document.get(), &app::Document::sketchVisibilityChanged,
-            m_navigator, &ModelNavigator::onSketchVisibilityChanged);
+    auto trackConnection = [this](const QMetaObject::Connection& connection) {
+        m_documentConnections.push_back(connection);
+    };
+
+    trackConnection(connect(m_document.get(), &app::Document::sketchAdded,
+            m_navigator, &ModelNavigator::onSketchAdded));
+    trackConnection(connect(m_document.get(), &app::Document::sketchRemoved,
+            m_navigator, &ModelNavigator::onSketchRemoved));
+    trackConnection(connect(m_document.get(), &app::Document::sketchRenamed,
+            m_navigator, &ModelNavigator::onSketchRenamed));
+    trackConnection(connect(m_document.get(), &app::Document::bodyAdded,
+            m_navigator, &ModelNavigator::onBodyAdded));
+    trackConnection(connect(m_document.get(), &app::Document::bodyRemoved,
+            m_navigator, &ModelNavigator::onBodyRemoved));
+    trackConnection(connect(m_document.get(), &app::Document::bodyRenamed,
+            m_navigator, &ModelNavigator::onBodyRenamed));
+    trackConnection(connect(m_document.get(), &app::Document::bodyVisibilityChanged,
+            m_navigator, &ModelNavigator::onBodyVisibilityChanged));
+    trackConnection(connect(m_document.get(), &app::Document::sketchVisibilityChanged,
+            m_navigator, &ModelNavigator::onSketchVisibilityChanged));
 
     if (m_historyPanel) {
-        connect(m_document.get(), &app::Document::operationAdded,
-                m_historyPanel, &HistoryPanel::onOperationAdded);
-        connect(m_document.get(), &app::Document::operationRemoved,
-                m_historyPanel, &HistoryPanel::onOperationRemoved);
-        connect(m_document.get(), &app::Document::operationUpdated,
-                m_historyPanel, &HistoryPanel::onOperationAdded);
-        connect(m_document.get(), &app::Document::operationSuppressionChanged,
-                m_historyPanel, &HistoryPanel::onOperationSuppressed);
-        connect(m_document.get(), &app::Document::operationFailed,
-                m_historyPanel, &HistoryPanel::onOperationFailed);
-        connect(m_document.get(), &app::Document::operationSucceeded,
-                m_historyPanel, &HistoryPanel::onOperationSucceeded);
-        connect(m_document.get(), &app::Document::appliedOpCountChanged,
-                m_historyPanel, [this](qulonglong) {
+        trackConnection(connect(m_document.get(), &app::Document::operationAdded,
+                m_historyPanel, &HistoryPanel::onOperationAdded));
+        trackConnection(connect(m_document.get(), &app::Document::operationRemoved,
+                m_historyPanel, &HistoryPanel::onOperationRemoved));
+        trackConnection(connect(m_document.get(), &app::Document::operationUpdated,
+                m_historyPanel, &HistoryPanel::onOperationAdded));
+        trackConnection(connect(m_document.get(), &app::Document::operationSuppressionChanged,
+                m_historyPanel, &HistoryPanel::onOperationSuppressed));
+        trackConnection(connect(m_document.get(), &app::Document::operationFailed,
+                m_historyPanel, &HistoryPanel::onOperationFailed));
+        trackConnection(connect(m_document.get(), &app::Document::operationSucceeded,
+                m_historyPanel, &HistoryPanel::onOperationSucceeded));
+        trackConnection(connect(m_document.get(), &app::Document::appliedOpCountChanged,
+                this, [this](qulonglong) {
                     if (m_historyPanel) {
                         m_historyPanel->rebuild();
                     }
-                });
+                }));
     }
-    connect(m_document.get(), &app::Document::documentCleared,
-            m_navigator, [this]() { m_navigator->rebuild(m_document.get()); });
+    trackConnection(connect(m_document.get(), &app::Document::documentCleared,
+            this, [this]() {
+                if (m_navigator) {
+                    m_navigator->rebuild(m_document.get());
+                }
+                if (m_historyPanel) {
+                    m_historyPanel->setDocument(m_document.get());
+                }
+                if (m_propertyInspector) {
+                    m_propertyInspector->setDocument(m_document.get());
+                    m_propertyInspector->showEmptyState();
+                }
+            }));
 }
 
 void MainWindow::updateDofStatus(core::sketch::Sketch* sketch) {
@@ -1603,14 +1623,8 @@ bool MainWindow::maybeSave() {
 
 void MainWindow::onNewDocument() {
     if (!maybeSave()) return;
-    
-    // Exit sketch mode if active
-    if (m_viewport && m_viewport->isInSketchMode()) {
-        onExitSketch();
-    }
-    
-    m_document->clear();
-    m_currentFilePath.clear();
+
+    resetDocumentState();
     setWindowTitle(tr("OneCAD - Untitled"));
     m_toolStatus->setText(tr("New document"));
     if (m_startOverlay && m_startOverlay->isVisible()) {
@@ -1639,6 +1653,9 @@ bool MainWindow::loadDocumentFromPath(const QString& fileName) {
     if (m_viewport && m_viewport->isInSketchMode()) {
         onExitSketch();
     }
+    if (m_viewport) {
+        m_viewport->resetTransientState();
+    }
 
     m_toolStatus->setText(tr("Loading: %1").arg(QFileInfo(resolvedPath).fileName()));
 
@@ -1655,6 +1672,8 @@ bool MainWindow::loadDocumentFromPath(const QString& fileName) {
     if (m_commandProcessor) {
         m_commandProcessor->clear();
     }
+    m_activeSketchId.clear();
+    m_currentFilePath = resolvedPath;
     m_viewport->setDocument(m_document.get());
 
     // Reconnect document signals to navigator
@@ -1676,7 +1695,6 @@ bool MainWindow::loadDocumentFromPath(const QString& fileName) {
     // Populate navigator with loaded data
     m_navigator->rebuild(m_document.get());
 
-    m_currentFilePath = resolvedPath;
     setWindowTitle(tr("OneCAD - %1").arg(QFileInfo(resolvedPath).fileName()));
     m_toolStatus->setText(tr("Loaded successfully"));
 
@@ -1825,6 +1843,9 @@ void MainWindow::resetDocumentState() {
     if (m_viewport && m_viewport->isInSketchMode()) {
         onExitSketch();
     }
+    if (m_viewport) {
+        m_viewport->resetTransientState();
+    }
 
     if (m_commandProcessor) {
         m_commandProcessor->clear();
@@ -1836,6 +1857,10 @@ void MainWindow::resetDocumentState() {
 
     m_activeSketchId.clear();
     m_currentFilePath.clear();
+    if (m_autosaveManager) {
+        m_autosaveManager->setDocument(m_document.get());
+        m_autosaveManager->setCurrentFilePath(QString());
+    }
     setWindowTitle(tr("OneCAD - Untitled"));
     if (m_toolStatus) {
         m_toolStatus->setText(tr("Ready"));
@@ -1844,6 +1869,14 @@ void MainWindow::resetDocumentState() {
     if (m_propertyInspector) {
         m_propertyInspector->setDocument(m_document.get());
         m_propertyInspector->showEmptyState();
+    }
+
+    if (m_historyPanel) {
+        m_historyPanel->setDocument(m_document.get());
+    }
+
+    if (m_navigator) {
+        m_navigator->rebuild(m_document.get());
     }
 
     if (m_viewport) {
@@ -1930,6 +1963,9 @@ void MainWindow::showStartDialog() {
                 QString path = dialog.selectedFilePath();
                 if (!path.isEmpty() && loadDocumentFromPath(path)) {
                     m_currentFilePath.clear(); // Treat as untitled
+                    if (m_autosaveManager) {
+                        m_autosaveManager->setCurrentFilePath(QString());
+                    }
                     setWindowTitle(tr("OneCAD - Recovered"));
                     return;
                 }

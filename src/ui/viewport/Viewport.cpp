@@ -266,12 +266,116 @@ Viewport::Viewport(QWidget* parent)
 }
 
 Viewport::~Viewport() {
-    makeCurrent();
-    if (m_sketchRenderer) {
-        m_sketchRenderer->cleanup();
+    if (context()) {
+        makeCurrent();
+        if (m_bodyRenderer) {
+            m_bodyRenderer->cleanup();
+            m_bodyRenderer.reset();
+        }
+        if (m_sketchRenderer) {
+            m_sketchRenderer->cleanup();
+            m_sketchRenderer.reset();
+        }
+        if (m_grid) {
+            m_grid->cleanup();
+        }
+        doneCurrent();
     }
-    m_grid->cleanup();
-    doneCurrent();
+}
+
+void Viewport::resetTransientState() {
+    if (m_inSketchMode) {
+        exitSketchMode();
+    }
+
+    if (m_cameraAnimation) {
+        m_cameraAnimation->stop();
+    }
+
+    if (m_activeSketch) {
+        m_activeSketch->endPointDrag();
+        m_activeSketch->endGroupDrag();
+    }
+    endSketchDragGestureCapture(false);
+
+    if (m_modelingToolManager) {
+        m_modelingToolManager->cancelActiveTool();
+    }
+    setExtrudeToolActive(false);
+    setRevolveToolActive(false);
+    setFilletToolActive(false);
+    setShellToolActive(false);
+
+    if (m_toolManager) {
+        m_toolManager->deactivateTool();
+        m_toolManager->setSketch(nullptr);
+    }
+
+    if (m_deepSelectPopup && m_deepSelectPopup->isVisible()) {
+        m_deepSelectPopup->hide();
+    }
+    m_pendingCandidates.clear();
+    m_pendingModifiers = {};
+    m_pendingClickPos = QPoint();
+    m_pendingShellFaceToggle = false;
+
+    if (m_selectionManager) {
+        m_selectionManager->clearSelection();
+        m_selectionManager->setHoverItem(std::nullopt);
+    }
+
+    m_planeSelectionActive = false;
+    m_planeHoverIndex = -1;
+    m_indicatorHovered = false;
+    m_referenceSketchId.clear();
+    m_referenceSketch = nullptr;
+    m_activeSketch = nullptr;
+    m_activeSketchId.clear();
+    m_selectedRegionId.clear();
+    m_pointDragCandidateId.clear();
+
+    setMoveSketchMode(false);
+    setSketchInteractionState(SketchInteractionState::Idle, "transient reset");
+    setSketchDragIntent(SketchDragIntent::None, "transient reset");
+    m_groupDragPointIds.clear();
+    m_groupDragStartPositions.clear();
+    m_groupDragFailureFeedbackShown = false;
+    m_pointDragFailureFeedbackShown = false;
+    m_boxSelectionActive = false;
+    m_boxSelectionStart = QPoint();
+    m_boxSelectionEnd = QPoint();
+
+    if (m_sketchRenderer) {
+        m_sketchRenderer->setSketch(nullptr);
+        m_sketchRenderer->clearSelection();
+        m_sketchRenderer->setHoverEntity({});
+        m_sketchRenderer->setSelectedConstraint({});
+        m_sketchRenderer->setHoverConstraint({});
+        m_sketchRenderer->clearRegionSelection();
+        m_sketchRenderer->clearRegionHover();
+        m_sketchRenderer->clearPreview();
+        m_sketchRenderer->clearPreviewDimensions();
+        m_sketchRenderer->hideSnapIndicator();
+        m_sketchRenderer->clearAnchorIndicators();
+        m_sketchRenderer->clearGhostConstraints();
+        m_sketchRenderer->clearDragGuides();
+    }
+
+    m_suppressedConstraintMarkers.clear();
+    m_draftDimensionLabels.clear();
+    m_activeDraftDimensionId.clear();
+    if (m_dimensionEditor) {
+        m_dimensionEditor->hide();
+    }
+
+    clearModelPreviewMeshes();
+    clearPreviewHiddenBody();
+    clearZoomAnchor();
+    m_documentSketchesDirty = true;
+    updateModelSelectionFilter();
+    syncModelMeshes();
+    emit selectionContextChanged(0);
+    update();
 }
 
 void Viewport::mousePressEvent(QMouseEvent* event) {
@@ -1796,6 +1900,11 @@ QStringList Viewport::buildDeepSelectLabels(
     return labels;
 }
 void Viewport::setDocument(app::Document* document) {
+    for (const auto& connection : m_documentConnections) {
+        disconnect(connection);
+    }
+    m_documentConnections.clear();
+
     m_document = document;
     m_documentSketchesDirty = true;
     if (m_document && !m_referenceSketchId.empty()) {
@@ -1812,12 +1921,16 @@ void Viewport::setDocument(app::Document* document) {
 
     // Connect to document signals to mark geometry dirty
     if (m_document) {
-        connect(m_document, &app::Document::sketchAdded, this, [this]() {
+        auto trackConnection = [this](const QMetaObject::Connection& connection) {
+            m_documentConnections.push_back(connection);
+        };
+
+        trackConnection(connect(m_document, &app::Document::sketchAdded, this, [this]() {
             m_documentSketchesDirty = true;
             updateModelSelectionFilter();
             update();
-        });
-        connect(m_document, &app::Document::sketchRemoved, this, [this]() {
+        }));
+        trackConnection(connect(m_document, &app::Document::sketchRemoved, this, [this]() {
             if (!m_referenceSketchId.empty() &&
                 m_document &&
                 m_document->getSketch(m_referenceSketchId) == nullptr) {
@@ -1831,51 +1944,40 @@ void Viewport::setDocument(app::Document* document) {
                 m_sketchRenderer->setSketch(nullptr);
             }
             update();
-        });
-        connect(m_document, &app::Document::sketchVisibilityChanged, this, [this]() {
+        }));
+        trackConnection(connect(m_document, &app::Document::sketchVisibilityChanged, this, [this]() {
             m_documentSketchesDirty = true;
             updateModelSelectionFilter();
             if (!m_inSketchMode && m_sketchRenderer) {
                 m_sketchRenderer->setSketch(nullptr);
             }
             update();
-        });
-        connect(m_document, &app::Document::bodyAdded, this, [this]() {
+        }));
+        trackConnection(connect(m_document, &app::Document::bodyAdded, this, [this]() {
             syncModelMeshes();
             update();
-        });
-        connect(m_document, &app::Document::bodyRemoved, this, [this]() {
+        }));
+        trackConnection(connect(m_document, &app::Document::bodyRemoved, this, [this]() {
             syncModelMeshes();
             update();
-        });
-        connect(m_document, &app::Document::bodyUpdated, this, [this]() {
+        }));
+        trackConnection(connect(m_document, &app::Document::bodyUpdated, this, [this]() {
             syncModelMeshes();
             update();
-        });
-        connect(m_document, &app::Document::bodyVisibilityChanged, this, [this]() {
+        }));
+        trackConnection(connect(m_document, &app::Document::bodyVisibilityChanged, this, [this]() {
             syncModelMeshes();
             update();
-        });
-        connect(m_document, &app::Document::isolationChanged, this, [this]() {
+        }));
+        trackConnection(connect(m_document, &app::Document::isolationChanged, this, [this]() {
             syncModelMeshes();
             update();
-        });
-        connect(m_document, &app::Document::documentCleared, this, [this]() {
-            if (m_inSketchMode) {
-                exitSketchMode();
-            }
-            m_referenceSketchId.clear();
-            m_referenceSketch = nullptr;
-            if (m_sketchRenderer) {
-                m_sketchRenderer->setSketch(nullptr);
-            }
-            m_documentSketchesDirty = true;
-            clearModelPreviewMeshes();
-            clearPreviewHiddenBody();
-            updateModelSelectionFilter();
+        }));
+        trackConnection(connect(m_document, &app::Document::documentCleared, this, [this]() {
+            resetTransientState();
             syncModelMeshes();
             update();
-        });
+        }));
     }
 
     updateModelSelectionFilter();

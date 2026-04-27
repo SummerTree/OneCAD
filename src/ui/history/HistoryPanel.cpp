@@ -298,6 +298,8 @@ void HistoryPanel::rebuild() {
 
 FeatureCard* HistoryPanel::createItemWidget(ItemEntry& entry) {
     auto* card = new FeatureCard;
+    const std::string opId = entry.opId;
+    QTreeWidgetItem* item = entry.item;
     
     // Retrieve operation record to get details
     const app::OperationRecord* opRecord = nullptr;
@@ -336,12 +338,16 @@ FeatureCard* HistoryPanel::createItemWidget(ItemEntry& entry) {
     card->setSuppressed(entry.suppressed);
     
     // Connect signals from card to panel actions
-    connect(card, &FeatureCard::menuRequested, this, [this, &entry]() {
-        showContextMenu(QCursor::pos(), entry.item);
+    connect(card, &FeatureCard::menuRequested, this, [this, item]() {
+        showContextMenu(QCursor::pos(), item);
     });
     
-    connect(card, &FeatureCard::suppressToggled, this, [this, &entry]() {
-        emit suppressRequested(QString::fromStdString(entry.opId), !entry.suppressed);
+    connect(card, &FeatureCard::suppressToggled, this, [this, opId]() {
+        const auto* currentEntry = entryForId(opId);
+        if (!currentEntry) {
+            return;
+        }
+        emit suppressRequested(QString::fromStdString(opId), !currentEntry->suppressed);
     });
 
     updateItemState(entry);
@@ -501,11 +507,13 @@ void HistoryPanel::onCustomContextMenu(const QPoint& pos) {
 void HistoryPanel::showContextMenu(const QPoint& pos, QTreeWidgetItem* item) {
     auto* entry = entryForItem(item);
     if (!entry || !document_) return;
+    const std::string opId = entry->opId;
+    const bool suppressed = entry->suppressed;
 
     // Find the operation
     const app::OperationRecord* opRecord = nullptr;
     for (const auto& op : document_->operations()) {
-        if (op.opId == entry->opId) {
+        if (op.opId == opId) {
             opRecord = &op;
             break;
         }
@@ -514,12 +522,12 @@ void HistoryPanel::showContextMenu(const QPoint& pos, QTreeWidgetItem* item) {
 
     QMenu menu;
 
-    if (isEditableType(opRecord->type) && !isReplayOnly(entry->opId) && !isDirty(entry->opId)) {
+    if (isEditableType(opRecord->type) && !isReplayOnly(opId) && !isDirty(opId)) {
         QAction* editAction = menu.addAction(tr("Edit Parameters..."));
-        connect(editAction, &QAction::triggered, this, [this, entry]() {
-            showEditDialog(entry->opId);
+        connect(editAction, &QAction::triggered, this, [this, opId]() {
+            showEditDialog(opId);
         });
-    } else if (isDirty(entry->opId)) {
+    } else if (isDirty(opId)) {
         QAction* pendingAction = menu.addAction(tr("Edit Parameters (Pending Regeneration)"));
         pendingAction->setEnabled(false);
     }
@@ -527,22 +535,22 @@ void HistoryPanel::showContextMenu(const QPoint& pos, QTreeWidgetItem* item) {
     menu.addSeparator();
 
     QAction* rollbackAction = menu.addAction(tr("Rollback to Here"));
-    connect(rollbackAction, &QAction::triggered, this, [this, entry]() {
-        emit rollbackRequested(QString::fromStdString(entry->opId));
+    connect(rollbackAction, &QAction::triggered, this, [this, opId]() {
+        emit rollbackRequested(QString::fromStdString(opId));
     });
 
-    QString suppressText = entry->suppressed ? tr("Unsuppress") : tr("Suppress");
+    QString suppressText = suppressed ? tr("Unsuppress") : tr("Suppress");
     QAction* suppressAction = menu.addAction(suppressText);
-    connect(suppressAction, &QAction::triggered, this, [this, entry]() {
-        emit suppressRequested(QString::fromStdString(entry->opId), !entry->suppressed);
+    connect(suppressAction, &QAction::triggered, this, [this, opId, suppressed]() {
+        emit suppressRequested(QString::fromStdString(opId), !suppressed);
     });
 
     menu.addSeparator();
 
     QAction* deleteAction = menu.addAction(tr("Delete"));
     deleteAction->setShortcut(QKeySequence::Delete);
-    connect(deleteAction, &QAction::triggered, this, [this, entry]() {
-        emit deleteRequested(QString::fromStdString(entry->opId));
+    connect(deleteAction, &QAction::triggered, this, [this, opId]() {
+        emit deleteRequested(QString::fromStdString(opId));
     });
 
     menu.exec(pos);
