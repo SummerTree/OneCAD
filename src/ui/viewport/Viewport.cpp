@@ -708,9 +708,12 @@ void Viewport::mouseDoubleClickEvent(QMouseEvent* event) {
             auto topCandidate = m_selectionManager->topCandidate(pickResult);
             if (topCandidate.has_value()) {
                 const auto kind = topCandidate->kind;
+                if (kind == app::selection::SelectionKind::SketchRegion) {
+                    event->accept();
+                    return;
+                }
                 if (kind == app::selection::SelectionKind::SketchPoint ||
-                    kind == app::selection::SelectionKind::SketchEdge ||
-                    kind == app::selection::SelectionKind::SketchRegion) {
+                    kind == app::selection::SelectionKind::SketchEdge) {
                     const std::string sketchId = topCandidate->id.ownerId;
                     if (m_document && !sketchId.empty()) {
                         core::sketch::Sketch* sketch = m_document->getSketch(sketchId);
@@ -1729,6 +1732,9 @@ void Viewport::handleModelSelectionChanged() {
             case app::selection::SelectionKind::Body:
                 context = 3;
                 break;
+            case app::selection::SelectionKind::SketchRegion:
+                context = 4;
+                break;
             default:
                 context = 0;
                 break;
@@ -2024,8 +2030,6 @@ void Viewport::updateModelSelectionFilter() {
         app::selection::SelectionKind::Face
     };
     if (hasVisibleModelSketches()) {
-        filter.allowedKinds.insert(app::selection::SelectionKind::SketchPoint);
-        filter.allowedKinds.insert(app::selection::SelectionKind::SketchEdge);
         filter.allowedKinds.insert(app::selection::SelectionKind::SketchRegion);
     }
     m_selectionManager->setFilter(filter);

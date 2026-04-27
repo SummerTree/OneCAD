@@ -21,6 +21,7 @@ namespace onecad::core::loop {
  */
 struct RegionDefinition {
     std::string id;
+    std::string signature;
     Loop outerLoop;
     std::vector<Loop> holes;
 };
@@ -29,6 +30,16 @@ struct RegionDefinition {
  * @brief Stable region key based on loop edge IDs.
  */
 std::string regionKey(const Loop& loop);
+
+/**
+ * @brief Stable region signature based on outer loop and hole topology.
+ */
+std::string regionSignature(const Loop& outerLoop, const std::vector<Loop>& holes);
+
+/**
+ * @brief Stable region signature for an existing region definition.
+ */
+std::string regionSignature(const RegionDefinition& region);
 
 /**
  * @brief Build region definitions (outer + holes) from loop detection result.

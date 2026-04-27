@@ -15,6 +15,7 @@ ContextToolbar::ContextToolbar(QWidget* parent)
     // Use Preferred size policy to allow layout to calculate proper width
     setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Fixed);
     setupUi();
+    setModelActionAvailability(false, false, false, false);
     setContext(Context::Default);
 }
 
@@ -62,6 +63,39 @@ void ContextToolbar::setShellActive(bool active) {
     m_shellButton->blockSignals(true);
     m_shellButton->setChecked(active);
     m_shellButton->blockSignals(false);
+}
+
+void ContextToolbar::setModelActionAvailability(bool canExtrude,
+                                                bool canRevolve,
+                                                bool canFillet,
+                                                bool canShell) {
+    auto apply = [](SidebarToolButton* button,
+                    bool enabled,
+                    const QString& enabledTip,
+                    const QString& disabledTip) {
+        if (!button) {
+            return;
+        }
+        button->setEnabled(enabled);
+        button->setToolTip(enabled ? enabledTip : disabledTip);
+    };
+
+    apply(m_extrudeButton,
+          canExtrude,
+          tr("Extrude selected face or sketch profile (E)"),
+          tr("Select a face or closed sketch profile to extrude"));
+    apply(m_revolveButton,
+          canRevolve,
+          tr("Revolve selected face or sketch profile"),
+          tr("Select a face or closed sketch profile to revolve"));
+    apply(m_filletButton,
+          canFillet,
+          tr("Fillet or chamfer selected edge (F)"),
+          tr("Select an edge to fillet or chamfer"));
+    apply(m_shellButton,
+          canShell,
+          tr("Shell selected body (H)"),
+          tr("Select a body to shell"));
 }
 
 void ContextToolbar::setupUi() {

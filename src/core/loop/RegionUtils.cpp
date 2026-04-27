@@ -83,6 +83,26 @@ std::string regionKey(const Loop& loop) {
     return key;
 }
 
+std::string regionSignature(const Loop& outerLoop, const std::vector<Loop>& holes) {
+    std::vector<std::string> holeKeys;
+    holeKeys.reserve(holes.size());
+    for (const auto& hole : holes) {
+        holeKeys.push_back(regionKey(hole));
+    }
+    std::sort(holeKeys.begin(), holeKeys.end());
+
+    std::string signature = "outer:" + regionKey(outerLoop) + ";holes:";
+    for (const auto& holeKey : holeKeys) {
+        signature.append(holeKey);
+        signature.push_back(';');
+    }
+    return signature;
+}
+
+std::string regionSignature(const RegionDefinition& region) {
+    return regionSignature(region.outerLoop, region.holes);
+}
+
 std::vector<RegionDefinition> buildRegionDefinitions(const LoopDetectionResult& result,
                                                      double tolerance) {
     std::vector<RegionDefinition> regions;
@@ -173,6 +193,7 @@ std::vector<RegionDefinition> buildRegionDefinitions(const LoopDetectionResult& 
             }
             region.holes.push_back(loops[childIdx]);
         }
+        region.signature = regionSignature(region);
         regions.push_back(std::move(region));
     }
 

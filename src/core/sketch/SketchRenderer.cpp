@@ -1580,6 +1580,13 @@ void SketchRenderer::updateConstraints() {
 void SketchRenderer::updateRegions() {
     std::unordered_set<std::string> previousSelection = selectedRegions_;
     std::optional<std::string> previousHover = hoverRegion_;
+    std::unordered_map<std::string, std::string> previousSignatureById;
+    previousSignatureById.reserve(regionRenderData_.size());
+    for (const auto& region : regionRenderData_) {
+        if (!region.signature.empty()) {
+            previousSignatureById.emplace(region.id, region.signature);
+        }
+    }
 
     regionRenderData_.clear();
     selectedRegions_.clear();
@@ -1611,6 +1618,7 @@ void SketchRenderer::updateRegions() {
     for (const auto& regionDef : regions) {
         RegionRenderData region;
         region.id = regionDef.id;
+        region.signature = regionDef.signature;
         region.outerPolygon = normalizePolygon(regionDef.outerLoop.polygon, kGeometryEpsilon);
         if (region.outerPolygon.size() < 3) {
             continue;
@@ -1662,17 +1670,39 @@ void SketchRenderer::updateRegions() {
 
     if (!regionRenderData_.empty()) {
         std::unordered_set<std::string> validIds;
+        std::unordered_map<std::string, std::string> idBySignature;
         validIds.reserve(regionRenderData_.size());
+        idBySignature.reserve(regionRenderData_.size());
         for (const auto& region : regionRenderData_) {
             validIds.insert(region.id);
+            if (!region.signature.empty()) {
+                idBySignature.emplace(region.signature, region.id);
+            }
         }
         for (const auto& id : previousSelection) {
             if (validIds.find(id) != validIds.end()) {
                 selectedRegions_.insert(id);
+                continue;
+            }
+            auto oldSignature = previousSignatureById.find(id);
+            if (oldSignature == previousSignatureById.end()) {
+                continue;
+            }
+            auto remappedId = idBySignature.find(oldSignature->second);
+            if (remappedId != idBySignature.end()) {
+                selectedRegions_.insert(remappedId->second);
             }
         }
         if (previousHover && validIds.find(*previousHover) != validIds.end()) {
             hoverRegion_ = previousHover;
+        } else if (previousHover) {
+            auto oldSignature = previousSignatureById.find(*previousHover);
+            if (oldSignature != previousSignatureById.end()) {
+                auto remappedId = idBySignature.find(oldSignature->second);
+                if (remappedId != idBySignature.end()) {
+                    hoverRegion_ = remappedId->second;
+                }
+            }
         }
     }
 }

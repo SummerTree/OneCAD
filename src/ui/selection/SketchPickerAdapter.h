@@ -16,6 +16,7 @@ namespace onecad::ui::selection {
 class SketchPickerAdapter {
 public:
     struct Options {
+        bool allowEntities = true;
         bool allowConstraints = true;
         bool allowRegions = true;
     };

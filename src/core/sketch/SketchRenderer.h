@@ -569,6 +569,7 @@ private:
     // Region data
     struct RegionRenderData {
         std::string id;
+        std::string signature;
         std::vector<Vec2d> outerPolygon;
         std::vector<std::vector<Vec2d>> holes;
         std::vector<Vec2d> triangles;

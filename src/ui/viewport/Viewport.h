@@ -149,7 +149,7 @@ signals:
     void filletToolActiveChanged(bool active);
     void shellToolActiveChanged(bool active);
     void debugTogglesChanged(bool normals, bool depth, bool wireframe, bool disableGamma, bool matcap);
-    void selectionContextChanged(int contextKind);  // 0=Default, 1=Edge, 2=Face, 3=Body
+    void selectionContextChanged(int contextKind);  // 0=Default, 1=Edge, 2=Face, 3=Body, 4=SketchRegion
     /** Request a temporary status bar message (e.g. "Point is fixed", solver error). */
     void statusMessageRequested(const QString& message);
     void constraintDeleteRequested(const QString& constraintId);

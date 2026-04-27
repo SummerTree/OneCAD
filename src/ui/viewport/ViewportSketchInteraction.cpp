@@ -645,6 +645,7 @@ app::selection::PickResult Viewport::buildModelSketchPickResult(const QPoint& sc
     const double tolerancePixels = static_cast<double>(sketch::constants::PICK_TOLERANCE_PIXELS);
 
     selection::SketchPickerAdapter::Options options;
+    options.allowEntities = false;
     options.allowConstraints = false;
     options.allowRegions = true;
 

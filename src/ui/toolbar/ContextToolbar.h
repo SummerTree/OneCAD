@@ -34,6 +34,10 @@ public slots:
     void setRevolveActive(bool active);
     void setFilletActive(bool active);
     void setShellActive(bool active);
+    void setModelActionAvailability(bool canExtrude,
+                                    bool canRevolve,
+                                    bool canFillet,
+                                    bool canShell);
 
 signals:
     void contextChanged();

@@ -73,15 +73,17 @@ PickResult SketchPickerAdapter::pick(const core::sketch::SketchRenderer& rendere
         }
     }
 
-    auto hits = renderer.pickEntities(sketchPos, toleranceWorld);
-    for (const auto& hit : hits) {
-        SelectionItem item;
-        item.kind = kindForSketchEntity(hit.type);
-        item.id = {sketchIdStr, hit.id};
-        item.isConstruction = hit.isConstruction;
-        item.priority = priorityForSketchEntity(hit.type, hit.isConstruction);
-        item.screenDistance = hit.distance / pixelScaleSafe;
-        result.hits.push_back(item);
+    if (options.allowEntities) {
+        auto hits = renderer.pickEntities(sketchPos, toleranceWorld);
+        for (const auto& hit : hits) {
+            SelectionItem item;
+            item.kind = kindForSketchEntity(hit.type);
+            item.id = {sketchIdStr, hit.id};
+            item.isConstruction = hit.isConstruction;
+            item.priority = priorityForSketchEntity(hit.type, hit.isConstruction);
+            item.screenDistance = hit.distance / pixelScaleSafe;
+            result.hits.push_back(item);
+        }
     }
 
     if (options.allowRegions) {

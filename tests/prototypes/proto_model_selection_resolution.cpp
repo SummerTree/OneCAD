@@ -107,12 +107,69 @@ void testBodyIsIgnoredBySingleClickFilter() {
     std::cout << " PASS\n";
 }
 
+void testAmbiguousSketchRegionsTriggerDeepSelect() {
+    std::cout << "Test 4: Ambiguous sketch regions trigger deep select..." << std::flush;
+
+    SelectionManager manager;
+    manager.setMode(SelectionMode::Sketch);
+    manager.setDeepSelectEnabled(true);
+
+    SelectionFilter filter;
+    filter.allowedKinds = {SelectionKind::SketchRegion};
+    manager.setFilter(filter);
+
+    PickResult pick;
+    pick.hits.push_back(makeItem(SelectionKind::SketchRegion, "sketch-1", "region-inner", 2, 0.0, 0.0));
+    pick.hits.push_back(makeItem(SelectionKind::SketchRegion, "sketch-1", "region-ring", 2, 0.5, 0.0));
+
+    const auto action = manager.handleClick(pick, {}, QPoint(150, 150));
+    assert(action.needsDeepSelect);
+    assert(!action.selectionChanged);
+    assert(action.candidates.size() == 2);
+    assert(action.candidates[0].id.elementId == "region-inner");
+    assert(action.candidates[1].id.elementId == "region-ring");
+
+    std::cout << " PASS\n";
+}
+
+void testModelModeSketchEdgesAndPointsAreBlocked() {
+    std::cout << "Test 5: Model mode blocks sketch points and edges..." << std::flush;
+
+    SelectionManager manager;
+    manager.setMode(SelectionMode::Model);
+    manager.setDeepSelectEnabled(false);
+
+    SelectionFilter filter;
+    filter.allowedKinds = {
+        SelectionKind::SketchRegion,
+        SelectionKind::Vertex,
+        SelectionKind::Edge,
+        SelectionKind::Face,
+        SelectionKind::Body
+    };
+    manager.setFilter(filter);
+
+    PickResult pick;
+    pick.hits.push_back(makeItem(SelectionKind::SketchPoint, "sketch-1", "point-1", 0, 0.0, 0.0));
+    pick.hits.push_back(makeItem(SelectionKind::SketchEdge, "sketch-1", "edge-1", 1, 0.0, 0.0));
+    pick.hits.push_back(makeItem(SelectionKind::SketchRegion, "sketch-1", "region-1", 2, 0.0, 0.0));
+
+    const auto top = manager.topCandidate(pick);
+    assert(top.has_value());
+    assert(top->kind == SelectionKind::SketchRegion);
+    assert(top->id.elementId == "region-1");
+
+    std::cout << " PASS\n";
+}
+
 } // namespace
 
 int main() {
     testFrontMostAreaWinsWithoutDeepSelect();
     testRepeatedClickDoesNotCycleWhenDeepSelectDisabled();
     testBodyIsIgnoredBySingleClickFilter();
+    testAmbiguousSketchRegionsTriggerDeepSelect();
+    testModelModeSketchEdgesAndPointsAreBlocked();
 
     std::cout << "Model selection resolution prototype passed.\n";
     return 0;

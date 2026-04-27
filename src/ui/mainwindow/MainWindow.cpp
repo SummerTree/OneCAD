@@ -760,12 +760,33 @@ void MainWindow::setupToolBar() {
             if (!m_toolbar || !m_viewport || m_viewport->isInSketchMode()) {
                 return;
             }
+            using app::selection::SelectionKind;
+
+            const auto modelSelection = m_viewport->modelSelection();
+            const auto sketchSelection = m_viewport->sketchSelection();
+            const bool hasSingleModelSelection = modelSelection.size() == 1 && sketchSelection.empty();
+            const bool hasSingleSketchRegion = sketchSelection.size() == 1 && modelSelection.empty() &&
+                sketchSelection.front().kind == SelectionKind::SketchRegion;
+            const bool hasFace = hasSingleModelSelection &&
+                modelSelection.front().kind == SelectionKind::Face;
+            const bool hasEdge = hasSingleModelSelection &&
+                modelSelection.front().kind == SelectionKind::Edge;
+            const bool hasBody = hasSingleModelSelection &&
+                modelSelection.front().kind == SelectionKind::Body;
+
+            m_toolbar->setModelActionAvailability(
+                hasFace || hasSingleSketchRegion,
+                hasFace || hasSingleSketchRegion,
+                hasEdge,
+                hasBody);
+
             // Map int context to ContextToolbar::Context
             switch (context) {
                 case 1:
                     m_toolbar->setContext(ContextToolbar::Context::Edge);
                     break;
                 case 2:
+                case 4:
                     m_toolbar->setContext(ContextToolbar::Context::Face);
                     break;
                 case 3:
