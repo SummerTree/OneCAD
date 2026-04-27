@@ -1212,6 +1212,64 @@ bool ConstraintSolver::translateConstraint(SketchConstraint* constraint, int tag
         return false;
     }
 
+    if (auto* pointOnCurve = dynamic_cast<PointOnCurveConstraint*>(constraint)) {
+        auto* point = getPoint(pointOnCurve->pointId());
+        if (!point) {
+            return false;
+        }
+
+        auto pointObj = makePoint(point);
+
+        if (auto* line = getLine(pointOnCurve->curveId())) {
+            SketchPoint* start = nullptr;
+            SketchPoint* end = nullptr;
+            if (!lineEndpoints(pointsById_, line, start, end)) {
+                return false;
+            }
+
+            if (pointOnCurve->position() == CurvePosition::Start) {
+                auto startObj = makePoint(start);
+                gcsSystem_->addConstraintP2PCoincident(pointObj, startObj, tagId, true);
+                return true;
+            }
+            if (pointOnCurve->position() == CurvePosition::End) {
+                auto endObj = makePoint(end);
+                gcsSystem_->addConstraintP2PCoincident(pointObj, endObj, tagId, true);
+                return true;
+            }
+
+            GCS::Line lineObj = makeLine(start, end);
+            gcsSystem_->addConstraintPointOnLine(pointObj, lineObj, tagId, true);
+            return true;
+        }
+
+        if (pointOnCurve->position() != CurvePosition::Arbitrary) {
+            return false;
+        }
+
+        if (auto* circle = getCircle(pointOnCurve->curveId())) {
+            SketchPoint* center = nullptr;
+            if (!circleCenter(pointsById_, circle, center)) {
+                return false;
+            }
+            GCS::Circle circleObj = makeCircle(center, circle);
+            gcsSystem_->addConstraintPointOnCircle(pointObj, circleObj, tagId, true);
+            return true;
+        }
+
+        if (auto* arc = getArc(pointOnCurve->curveId())) {
+            SketchPoint* center = nullptr;
+            if (!arcCenter(pointsById_, arc, center)) {
+                return false;
+            }
+            GCS::Arc arcObj = makeArc(center, arc);
+            gcsSystem_->addConstraintPointOnArc(pointObj, arcObj, tagId, true);
+            return true;
+        }
+
+        return false;
+    }
+
     if (auto* fixed = dynamic_cast<FixedConstraint*>(constraint)) {
         auto* p = getPoint(fixed->pointId());
         if (!p) {

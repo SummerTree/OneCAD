@@ -19,8 +19,7 @@ using onecad::core::sketch::Sketch;
 bool isCurveType(EntityType type) {
     return type == EntityType::Line ||
            type == EntityType::Arc ||
-           type == EntityType::Circle ||
-           type == EntityType::Ellipse;
+           type == EntityType::Circle;
 }
 
 bool hasLineBetweenPoints(const Sketch* sketch, const EntityID& pointA, const EntityID& pointB) {
@@ -115,8 +114,9 @@ ConstraintApplicabilityResult evaluateConstraintApplicability(
     const bool aCurve = isCurveType(typeA);
     const bool bCurve = isCurveType(typeB);
 
-    // MainWindow apply path currently accepts any two selected entities for distance.
-    result.applicableConstraints.insert(ConstraintType::Distance);
+    if ((aPoint || aLine) && (bPoint || bLine)) {
+        result.applicableConstraints.insert(ConstraintType::Distance);
+    }
 
     if (aPoint && bPoint) {
         result.applicableConstraints.insert(ConstraintType::Coincident);

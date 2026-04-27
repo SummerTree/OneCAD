@@ -28,6 +28,7 @@ void registerBuiltins() {
         ConstraintFactory::registerType<constraints::RadiusConstraint>("Radius");
         ConstraintFactory::registerType<constraints::FixedConstraint>("Fixed");
         ConstraintFactory::registerType<constraints::MidpointConstraint>("Midpoint");
+        ConstraintFactory::registerType<constraints::PointOnCurveConstraint>("PointOnCurve");
     });
 }
 

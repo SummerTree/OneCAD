@@ -53,6 +53,16 @@ target_link_libraries(proto_sketch_solver
     onecad_core
 )
 
+# Sketch constraint applicability prototype
+add_executable(proto_sketch_constraint_applicability prototypes/proto_sketch_constraint_applicability.cpp)
+target_link_libraries(proto_sketch_constraint_applicability
+    PRIVATE
+    onecad_ui
+    onecad_app
+    Qt6::Core
+)
+target_include_directories(proto_sketch_constraint_applicability PRIVATE ${CMAKE_SOURCE_DIR}/src)
+
 # Sketch Group Drag Regression Prototype
 add_executable(proto_sketch_group_drag prototypes/proto_sketch_group_drag.cpp)
 target_link_libraries(proto_sketch_group_drag
@@ -306,6 +316,7 @@ add_test(NAME proto_sketch_geometry COMMAND proto_sketch_geometry)
 add_test(NAME proto_sketch_constraints COMMAND proto_sketch_constraints)
 add_test(NAME proto_sketch_snap COMMAND proto_sketch_snap)
 add_test(NAME proto_sketch_solver COMMAND proto_sketch_solver)
+add_test(NAME proto_sketch_constraint_applicability COMMAND proto_sketch_constraint_applicability)
 add_test(NAME proto_sketch_group_drag COMMAND proto_sketch_group_drag)
 add_test(NAME proto_sketch_drag_undo COMMAND proto_sketch_drag_undo)
 add_test(NAME proto_planegcs_integration COMMAND proto_planegcs_integration)

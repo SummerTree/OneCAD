@@ -2201,6 +2201,12 @@ void MainWindow::onConstraintRequested(core::sketch::ConstraintType constraintTy
     CT type = constraintType;
     core::sketch::ConstraintID constraintId;
 
+    const auto applicability = evaluateConstraintApplicability(sketch, m_viewport->sketchSelection());
+    if (!applicability.isApplicable(type)) {
+        m_toolStatus->setText(tr("Constraint unavailable for current selection"));
+        return;
+    }
+
     switch (type) {
         case CT::Horizontal:
             if (selected.size() == 1) {
@@ -2296,7 +2302,6 @@ void MainWindow::onConstraintRequested(core::sketch::ConstraintType constraintTy
                     pointId = id;
                 } else if (entity->type() == core::sketch::EntityType::Arc ||
                            entity->type() == core::sketch::EntityType::Circle ||
-                           entity->type() == core::sketch::EntityType::Ellipse ||
                            entity->type() == core::sketch::EntityType::Line) {
                     if (!curveId.empty()) {
                         m_toolStatus->setText(tr("Point On Curve requires exactly 1 curve"));

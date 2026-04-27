@@ -22,8 +22,9 @@ class SolverAdapter {
 public:
     /**
      * @brief Populate solver with all entities and constraints from a sketch
+     * @return true if every constraint was translated
      */
-    static void populateSolver(Sketch& sketch, ConstraintSolver& solver);
+    static bool populateSolver(Sketch& sketch, ConstraintSolver& solver);
 
     /**
      * @brief Add a single constraint to the solver

@@ -67,6 +67,7 @@ private:
         QString icon;
         QString name;
         QString shortcut;
+        QString tooltip;
         QPushButton* button = nullptr;
     };
 

@@ -4,7 +4,9 @@
 #include <QJsonObject>
 
 #include <cassert>
+#include <cmath>
 #include <iostream>
+#include <memory>
 #include <numbers>
 
 using namespace onecad::core::sketch;
@@ -75,6 +77,29 @@ int main() {
 
     RadiusConstraint radius(circle, 5.0);
     assert(radius.isSatisfied(sketch, 1e-6));
+
+    auto onLinePoint = sketch.addPoint(2.5, 2.0);
+    assert(!sketch.addPointOnCurve(onLinePoint, hLine).empty());
+
+    auto ellipseCenter = sketch.addPoint(20.0, 0.0);
+    auto ellipse = sketch.addEllipse(ellipseCenter, 5.0, 2.0);
+    assert(!ellipse.empty());
+    assert(sketch.addPointOnCurve(onLinePoint, ellipse).empty());
+
+    auto arcCenter = sketch.addPoint(20.0, 20.0);
+    auto arc = sketch.addArc(arcCenter, 3.0, 0.0, std::numbers::pi_v<double> * 0.5);
+    assert(!arc.empty());
+    auto onArcPoint = sketch.addPoint(20.0 + 3.0 / std::sqrt(2.0),
+                                      20.0 + 3.0 / std::sqrt(2.0));
+    assert(!sketch.addPointOnCurve(onArcPoint, arc).empty());
+    auto arcStartPoint = sketch.addPoint(23.0, 20.0);
+    assert(sketch.addPointOnCurve(arcStartPoint, arc).empty());
+
+    auto onCirclePoint = sketch.addPoint(5.0, 0.0);
+    assert(!sketch.addPointOnCurve(onCirclePoint, circle).empty());
+
+    assert(sketch.addConstraint(std::make_unique<DiameterConstraint>(circle, 10.0)).empty());
+    assert(sketch.addConstraint(std::make_unique<ConcentricConstraint>(circle, arc)).empty());
 
     QJsonObject json;
     distance.serialize(json);

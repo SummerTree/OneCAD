@@ -141,6 +141,11 @@ struct ValidationResult {
     std::vector<EntityID> invalidEntities;
 };
 
+struct ConstraintSupportResult {
+    bool supported = true;
+    std::string reason;
+};
+
 /**
  * @brief Main sketch class
  *
@@ -294,6 +299,11 @@ public:
      * @return ConstraintID, or 0 if constraint is invalid
      */
     ConstraintID addConstraint(std::unique_ptr<SketchConstraint> constraint);
+
+    /**
+     * @brief Validate that a constraint is implemented for its referenced entities.
+     */
+    ConstraintSupportResult validateConstraintSupport(const SketchConstraint& constraint) const;
 
     /**
      * @brief Add coincident constraint between two points

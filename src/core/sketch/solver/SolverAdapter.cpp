@@ -3,9 +3,14 @@
 #include "../Sketch.h"
 #include "ConstraintSolver.h"
 
+#include <QLoggingCategory>
+#include <QString>
+
 namespace onecad::core::sketch {
 
-void SolverAdapter::populateSolver(Sketch& sketch, ConstraintSolver& solver) {
+Q_LOGGING_CATEGORY(logSolverAdapter, "onecad.core.constraintsolver.adapter")
+
+bool SolverAdapter::populateSolver(Sketch& sketch, ConstraintSolver& solver) {
     solver.clear();
 
     for (const auto& entity : sketch.getAllEntities()) {
@@ -34,9 +39,16 @@ void SolverAdapter::populateSolver(Sketch& sketch, ConstraintSolver& solver) {
         }
     }
 
+    bool ok = true;
     for (const auto& constraint : sketch.getAllConstraints()) {
-        addConstraintToSolver(constraint.get(), solver);
+        if (!addConstraintToSolver(constraint.get(), solver)) {
+            ok = false;
+            qCWarning(logSolverAdapter) << "populateSolver:constraint-translation-failed"
+                                       << (constraint ? QString::fromStdString(constraint->id()) : QStringLiteral("<null>"));
+        }
     }
+
+    return ok;
 }
 
 bool SolverAdapter::addConstraintToSolver(SketchConstraint* constraint, ConstraintSolver& solver) {

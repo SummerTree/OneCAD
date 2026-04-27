@@ -522,9 +522,9 @@ private:
 /**
  * @brief Point on curve constraint - constrains point to lie on curve
  *
- * Supports arcs, circles, ellipses, and lines.
+ * Supports lines, circles, and arcs. Ellipse support is blocked until solver support is wired.
  * Position can be Start, End, or Arbitrary:
- * - Start/End: Point fully constrained to calculated endpoint (DOF removed: 2)
+ * - Start/End: Point fully constrained to calculated endpoint (currently solver-backed for lines only)
  * - Arbitrary: Point constrained to curve but can slide (DOF removed: 1)
  */
 class PointOnCurveConstraint : public SketchConstraint {

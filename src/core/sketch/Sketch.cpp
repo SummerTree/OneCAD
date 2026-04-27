@@ -20,6 +20,64 @@ namespace onecad::core::sketch {
 
 Q_LOGGING_CATEGORY(logSketchEngine, "onecad.core.sketch")
 
+namespace {
+
+ConstraintSupportResult unsupportedConstraint(std::string reason) {
+    return ConstraintSupportResult{.supported = false, .reason = std::move(reason)};
+}
+
+bool hasType(const Sketch& sketch, const EntityID& id, EntityType type) {
+    const SketchEntity* entity = sketch.getEntity(id);
+    return entity && entity->type() == type;
+}
+
+bool hasCurveType(const Sketch& sketch, const EntityID& id) {
+    const SketchEntity* entity = sketch.getEntity(id);
+    if (!entity) {
+        return false;
+    }
+    const EntityType type = entity->type();
+    return type == EntityType::Line || type == EntityType::Arc || type == EntityType::Circle;
+}
+
+bool isDistancePairSupported(EntityType first, EntityType second) {
+    const bool firstPointOrLine = first == EntityType::Point || first == EntityType::Line;
+    const bool secondPointOrLine = second == EntityType::Point || second == EntityType::Line;
+    return firstPointOrLine && secondPointOrLine;
+}
+
+bool isEqualPairSupported(EntityType first, EntityType second) {
+    const bool firstLine = first == EntityType::Line;
+    const bool secondLine = second == EntityType::Line;
+    const bool firstCircular = first == EntityType::Arc || first == EntityType::Circle;
+    const bool secondCircular = second == EntityType::Arc || second == EntityType::Circle;
+    return (firstLine && secondLine) || (firstCircular && secondCircular);
+}
+
+bool isTangentPairSupported(EntityType first, EntityType second) {
+    const bool firstLine = first == EntityType::Line;
+    const bool secondLine = second == EntityType::Line;
+    const bool firstCircular = first == EntityType::Arc || first == EntityType::Circle;
+    const bool secondCircular = second == EntityType::Arc || second == EntityType::Circle;
+    return (firstLine && secondCircular) || (secondLine && firstCircular) ||
+           (firstCircular && secondCircular);
+}
+
+std::optional<std::string> firstUnsupportedConstraint(const Sketch& sketch) {
+    for (const auto& constraint : sketch.getAllConstraints()) {
+        if (!constraint) {
+            continue;
+        }
+        const ConstraintSupportResult support = sketch.validateConstraintSupport(*constraint);
+        if (!support.supported) {
+            return "Unsupported constraint " + constraint->id() + ": " + support.reason;
+        }
+    }
+    return std::nullopt;
+}
+
+} // namespace
+
 Sketch::Sketch(const SketchPlane& plane)
     : plane_(plane) {
 }
@@ -479,6 +537,171 @@ std::vector<SketchEntity*> Sketch::getEntitiesByType(EntityType type) {
     return results;
 }
 
+ConstraintSupportResult Sketch::validateConstraintSupport(const SketchConstraint& constraint) const {
+    using namespace onecad::core::sketch::constraints;
+
+    auto entityType = [this](const EntityID& id) -> std::optional<EntityType> {
+        const SketchEntity* entity = getEntity(id);
+        if (!entity) {
+            return std::nullopt;
+        }
+        return entity->type();
+    };
+
+    switch (constraint.type()) {
+        case ConstraintType::Coincident: {
+            const auto* c = dynamic_cast<const CoincidentConstraint*>(&constraint);
+            if (!c || !hasType(*this, c->point1(), EntityType::Point) ||
+                !hasType(*this, c->point2(), EntityType::Point)) {
+                return unsupportedConstraint("Coincident requires two points");
+            }
+            return {};
+        }
+
+        case ConstraintType::Horizontal: {
+            const auto* c = dynamic_cast<const HorizontalConstraint*>(&constraint);
+            if (!c || !hasType(*this, c->lineId(), EntityType::Line)) {
+                return unsupportedConstraint("Horizontal requires a line");
+            }
+            return {};
+        }
+
+        case ConstraintType::Vertical: {
+            const auto* c = dynamic_cast<const VerticalConstraint*>(&constraint);
+            if (!c || !hasType(*this, c->lineId(), EntityType::Line)) {
+                return unsupportedConstraint("Vertical requires a line");
+            }
+            return {};
+        }
+
+        case ConstraintType::Fixed: {
+            const auto* c = dynamic_cast<const FixedConstraint*>(&constraint);
+            if (!c || !hasType(*this, c->pointId(), EntityType::Point)) {
+                return unsupportedConstraint("Fixed requires a point");
+            }
+            return {};
+        }
+
+        case ConstraintType::Midpoint: {
+            const auto* c = dynamic_cast<const MidpointConstraint*>(&constraint);
+            if (!c || !hasType(*this, c->pointId(), EntityType::Point) ||
+                !hasType(*this, c->lineId(), EntityType::Line)) {
+                return unsupportedConstraint("Midpoint requires one point and one line");
+            }
+            return {};
+        }
+
+        case ConstraintType::OnCurve: {
+            const auto* c = dynamic_cast<const PointOnCurveConstraint*>(&constraint);
+            if (!c || !hasType(*this, c->pointId(), EntityType::Point)) {
+                return unsupportedConstraint("Point On Curve requires one point");
+            }
+            const auto curveType = entityType(c->curveId());
+            if (!curveType.has_value() || !hasCurveType(*this, c->curveId())) {
+                return unsupportedConstraint("Point On Curve supports lines, arcs, and circles only");
+            }
+            if (c->position() != CurvePosition::Arbitrary && *curveType != EntityType::Line) {
+                return unsupportedConstraint("Point On Curve endpoint positions support lines only");
+            }
+            return {};
+        }
+
+        case ConstraintType::Parallel: {
+            const auto* c = dynamic_cast<const ParallelConstraint*>(&constraint);
+            if (!c || !hasType(*this, c->line1(), EntityType::Line) ||
+                !hasType(*this, c->line2(), EntityType::Line)) {
+                return unsupportedConstraint("Parallel requires two lines");
+            }
+            return {};
+        }
+
+        case ConstraintType::Perpendicular: {
+            const auto* c = dynamic_cast<const PerpendicularConstraint*>(&constraint);
+            if (!c || !hasType(*this, c->line1(), EntityType::Line) ||
+                !hasType(*this, c->line2(), EntityType::Line)) {
+                return unsupportedConstraint("Perpendicular requires two lines");
+            }
+            return {};
+        }
+
+        case ConstraintType::Tangent: {
+            const auto* c = dynamic_cast<const TangentConstraint*>(&constraint);
+            if (!c) {
+                return unsupportedConstraint("Tangent constraint implementation missing");
+            }
+            const auto first = entityType(c->entity1());
+            const auto second = entityType(c->entity2());
+            if (!first.has_value() || !second.has_value() ||
+                !isTangentPairSupported(*first, *second)) {
+                return unsupportedConstraint("Tangent supports lines, arcs, and circles only");
+            }
+            return {};
+        }
+
+        case ConstraintType::Equal: {
+            const auto* c = dynamic_cast<const EqualConstraint*>(&constraint);
+            if (!c) {
+                return unsupportedConstraint("Equal constraint implementation missing");
+            }
+            const auto first = entityType(c->entity1());
+            const auto second = entityType(c->entity2());
+            if (!first.has_value() || !second.has_value() ||
+                !isEqualPairSupported(*first, *second)) {
+                return unsupportedConstraint("Equal supports line-line or circular curve pairs only");
+            }
+            return {};
+        }
+
+        case ConstraintType::Distance: {
+            const auto* c = dynamic_cast<const DistanceConstraint*>(&constraint);
+            if (!c) {
+                return unsupportedConstraint("Distance constraint implementation missing");
+            }
+            const auto first = entityType(c->entity1());
+            const auto second = entityType(c->entity2());
+            if (!first.has_value() || !second.has_value() ||
+                !isDistancePairSupported(*first, *second)) {
+                return unsupportedConstraint("Distance supports point/line combinations only");
+            }
+            return {};
+        }
+
+        case ConstraintType::Angle: {
+            const auto* c = dynamic_cast<const AngleConstraint*>(&constraint);
+            if (!c || !hasType(*this, c->line1(), EntityType::Line) ||
+                !hasType(*this, c->line2(), EntityType::Line)) {
+                return unsupportedConstraint("Angle requires two lines");
+            }
+            return {};
+        }
+
+        case ConstraintType::Radius: {
+            const auto* c = dynamic_cast<const RadiusConstraint*>(&constraint);
+            std::optional<EntityType> type;
+            if (c) {
+                type = entityType(c->entityId());
+            }
+            if (!type.has_value() || (*type != EntityType::Arc && *type != EntityType::Circle)) {
+                return unsupportedConstraint("Radius requires an arc or circle");
+            }
+            return {};
+        }
+
+        case ConstraintType::Concentric:
+            return unsupportedConstraint("Concentric constraint is not implemented yet");
+        case ConstraintType::Diameter:
+            return unsupportedConstraint("Diameter constraint is not implemented yet; use Radius");
+        case ConstraintType::HorizontalDistance:
+            return unsupportedConstraint("Horizontal Distance constraint is not implemented yet");
+        case ConstraintType::VerticalDistance:
+            return unsupportedConstraint("Vertical Distance constraint is not implemented yet");
+        case ConstraintType::Symmetric:
+            return unsupportedConstraint("Symmetric constraint is not implemented yet");
+    }
+
+    return unsupportedConstraint("Unknown constraint type");
+}
+
 ConstraintID Sketch::addConstraint(std::unique_ptr<SketchConstraint> constraint) {
     if (!constraint) {
         qCWarning(logSketchEngine) << "addConstraint:null";
@@ -502,6 +725,14 @@ ConstraintID Sketch::addConstraint(std::unique_ptr<SketchConstraint> constraint)
                                       << "constraintType=" << static_cast<int>(constraint->type());
             return {};
         }
+    }
+
+    const ConstraintSupportResult support = validateConstraintSupport(*constraint);
+    if (!support.supported) {
+        qCWarning(logSketchEngine) << "addConstraint:unsupported"
+                                  << "type=" << static_cast<int>(constraint->type())
+                                  << "reason=" << QString::fromStdString(support.reason);
+        return {};
     }
 
     ConstraintID id = constraint->id();
@@ -719,7 +950,10 @@ ConstraintID Sketch::addPointOnCurve(EntityID pointId, EntityID curveId,
 
     auto curveType = curve->type();
     if (curveType != EntityType::Arc && curveType != EntityType::Circle &&
-        curveType != EntityType::Ellipse && curveType != EntityType::Line) {
+        curveType != EntityType::Line) {
+        qCWarning(logSketchEngine) << "addPointOnCurve:unsupported-curve"
+                                  << QString::fromStdString(curveId)
+                                  << "type=" << static_cast<int>(curveType);
         return {};
     }
 
@@ -727,6 +961,12 @@ ConstraintID Sketch::addPointOnCurve(EntityID pointId, EntityID curveId,
     CurvePosition finalPosition = position;
     if (position == CurvePosition::Arbitrary && curveType == EntityType::Arc) {
         finalPosition = detectArcPosition(pointId, curveId);
+        if (finalPosition != CurvePosition::Arbitrary) {
+            qCWarning(logSketchEngine) << "addPointOnCurve:unsupported-arc-endpoint"
+                                      << "point=" << QString::fromStdString(pointId)
+                                      << "arc=" << QString::fromStdString(curveId);
+            return {};
+        }
     }
 
     return addConstraint(std::make_unique<constraints::PointOnCurveConstraint>(
@@ -886,6 +1126,14 @@ SolveResult Sketch::solve() {
 
     if (constraints_.empty()) {
         result.success = true;
+        return result;
+    }
+
+    if (const auto unsupported = firstUnsupportedConstraint(*this)) {
+        result.success = false;
+        result.errorMessage = *unsupported;
+        qCWarning(logSketchEngine) << "solve:unsupported-constraint"
+                                  << QString::fromStdString(*unsupported);
         return result;
     }
 
@@ -1098,6 +1346,14 @@ SolveResult Sketch::solveWithGroupDrag(
         return result;
     }
 
+    if (const auto unsupported = firstUnsupportedConstraint(*this)) {
+        result.errorMessage = *unsupported;
+        enforceAtomicReject("Group drag rejected by unsupported constraint");
+        qCWarning(logSketchEngine) << "solveWithGroupDrag:unsupported-constraint"
+                                  << QString::fromStdString(*unsupported);
+        return result;
+    }
+
     if (!solver_ || solverDirty_) {
         rebuildSolver();
     }
@@ -1164,6 +1420,17 @@ SolveResult Sketch::solveWithDrag(EntityID draggedPoint, const Vec2d& targetPos)
     if (constraints_.empty()) {
         point->setPosition(targetPos.x, targetPos.y);
         result.success = true;
+        return result;
+    }
+
+    if (const auto unsupported = firstUnsupportedConstraint(*this)) {
+        result.success = false;
+        result.errorMessage = *unsupported;
+        qCWarning(logSketchEngine) << "solveWithDrag:unsupported-constraint"
+                                  << QString::fromStdString(*unsupported);
+        if (isDraggingPoint_) {
+            dragSessionHadFailure_ = true;
+        }
         return result;
     }
 
@@ -1299,6 +1566,20 @@ ValidationResult Sketch::validate() const {
                 result.valid = false;
                 result.errors.push_back("Ellipse radii too small: " + ellipse->id());
                 result.invalidEntities.push_back(ellipse->id());
+            }
+        }
+    }
+
+    for (const auto& constraint : constraints_) {
+        if (!constraint) {
+            continue;
+        }
+        const ConstraintSupportResult support = validateConstraintSupport(*constraint);
+        if (!support.supported) {
+            result.valid = false;
+            result.errors.push_back("Unsupported constraint " + constraint->id() + ": " + support.reason);
+            for (const auto& entityId : constraint->referencedEntities()) {
+                result.invalidEntities.push_back(entityId);
             }
         }
     }
@@ -1474,9 +1755,9 @@ std::unique_ptr<Sketch> Sketch::fromJson(const std::string& json) {
             if (!constraint) {
                 return nullptr;
             }
-            ConstraintID id = constraint->id();
-            sketch->constraintIndex_[id] = sketch->constraints_.size();
-            sketch->constraints_.push_back(std::move(constraint));
+            if (sketch->addConstraint(std::move(constraint)).empty()) {
+                return nullptr;
+            }
         }
     }
 
@@ -1677,7 +1958,13 @@ void Sketch::rebuildSolver() {
                              << "entities=" << entities_.size()
                              << "constraints=" << constraints_.size();
     solver_ = std::make_unique<ConstraintSolver>();
-    SolverAdapter::populateSolver(*this, *solver_);
+    const bool populated = SolverAdapter::populateSolver(*this, *solver_);
+    if (!populated) {
+        qCWarning(logSketchEngine) << "rebuildSolver:constraint-translation-failed";
+        solver_.reset();
+        solverDirty_ = true;
+        return;
+    }
 
     solverDirty_ = false;
     qCDebug(logSketchEngine) << "rebuildSolver:done";

@@ -90,9 +90,11 @@ void SketchModePanel::setupUi() {
     };
 
     for (const auto& [type, icon, name, shortcut] : geometricConstraints) {
-        QPushButton* btn = createButton(icon, name, shortcut,
-            tr("Apply %1 constraint [%2]").arg(name, shortcut));
-        m_constraintButtons.push_back({type, icon, name, shortcut, btn});
+        const QString tooltip = shortcut.isEmpty()
+            ? tr("Apply %1 constraint").arg(name)
+            : tr("Apply %1 constraint [%2]").arg(name, shortcut);
+        QPushButton* btn = createButton(icon, name, shortcut, tooltip);
+        m_constraintButtons.push_back({type, icon, name, shortcut, tooltip, btn});
         m_layout->addWidget(btn);
 
         connect(btn, &QPushButton::clicked, this, [this, type]() {
@@ -123,7 +125,7 @@ void SketchModePanel::setupUi() {
             ? tr("Apply %1 constraint").arg(name)
             : tr("Apply %1 constraint [%2]").arg(name, shortcut);
         QPushButton* btn = createButton(icon, name, shortcut, tooltip);
-        m_constraintButtons.push_back({type, icon, name, shortcut, btn});
+        m_constraintButtons.push_back({type, icon, name, shortcut, tooltip, btn});
         m_layout->addWidget(btn);
 
         connect(btn, &QPushButton::clicked, this, [this, type]() {
@@ -143,7 +145,7 @@ void SketchModePanel::setupUi() {
         tr("Lock/Fix"), "F",
         tr("Fix selected point [F]"));
     m_constraintButtons.push_back({CT::Fixed, QString::fromUtf8("\xF0\x9F\x94\x92"),
-                                   tr("Lock/Fix"), "F", fixBtn});
+                                   tr("Lock/Fix"), "F", tr("Fix selected point [F]"), fixBtn});
     m_layout->addWidget(fixBtn);
 
     connect(fixBtn, &QPushButton::clicked, this, [this]() {
@@ -183,6 +185,9 @@ void SketchModePanel::updateButtonStates() {
             const bool enabled = (m_sketch != nullptr) &&
                                  (m_applicableConstraints.find(cb.type) != m_applicableConstraints.end());
             cb.button->setEnabled(enabled);
+            cb.button->setToolTip(enabled
+                ? cb.tooltip
+                : tr("Not available for the current selection"));
         }
     }
 }

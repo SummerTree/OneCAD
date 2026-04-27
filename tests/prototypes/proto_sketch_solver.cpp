@@ -114,6 +114,32 @@ void testFixedPointDragNoMovement() {
     assert(approx(end.y, start.y, 1e-6));
 }
 
+void testPointOnCurveSolverTranslation() {
+    Sketch sketch;
+    auto lineStart = sketch.addPoint(0.0, 0.0);
+    auto lineEnd = sketch.addPoint(10.0, 0.0);
+    auto line = sketch.addLine(lineStart, lineEnd);
+    auto linePoint = sketch.addPoint(5.0, 0.0);
+    assert(!line.empty());
+    assert(!sketch.addPointOnCurve(linePoint, line).empty());
+
+    auto circleCenter = sketch.addPoint(20.0, 0.0);
+    auto circle = sketch.addCircle(circleCenter, 5.0);
+    auto circlePoint = sketch.addPoint(25.0, 0.0);
+    assert(!circle.empty());
+    assert(!sketch.addPointOnCurve(circlePoint, circle).empty());
+
+    auto arcCenter = sketch.addPoint(40.0, 0.0);
+    auto arc = sketch.addArc(arcCenter, 5.0, 0.0, std::numbers::pi_v<double> * 0.5);
+    const double arcCoord = 40.0 + 5.0 / std::sqrt(2.0);
+    auto arcPoint = sketch.addPoint(arcCoord, 5.0 / std::sqrt(2.0));
+    assert(!arc.empty());
+    assert(!sketch.addPointOnCurve(arcPoint, arc).empty());
+
+    SolveResult result = sketch.solve();
+    assert(result.success);
+}
+
 } // namespace
 
 int main() {
@@ -129,6 +155,9 @@ int main() {
     auto arcCenter = sketch.addPoint(-2.0, 2.0);
     auto arc = sketch.addArc(arcCenter, 3.0, 0.0, std::numbers::pi_v<double> * 0.5);
     (void)arc;
+
+    assert(sketch.addDistance(p1, circle, 5.0).empty());
+    assert(sketch.addDistance(line, circle, 5.0).empty());
 
     auto distanceId = sketch.addDistance(p1, p2, 10.0);
     auto radiusId = sketch.addRadius(circle, 2.5);
@@ -276,6 +305,7 @@ int main() {
     testHorizontalConstraintDrag();
     testCoincidentFixedDrag();
     testFixedPointDragNoMovement();
+    testPointOnCurveSolverTranslation();
 
     Sketch largeDrag;
     auto ld1 = largeDrag.addPoint(0.0, 0.0);
