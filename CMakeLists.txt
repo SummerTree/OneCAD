@@ -18,7 +18,9 @@ find_package(Qt6 COMPONENTS Core Gui Widgets OpenGLWidgets Svg REQUIRED)
 # --- Dependencies ---
 
 # 1. Eigen3
-find_package(Eigen3 3.3 REQUIRED NO_MODULE)
+# NOTE: Homebrew currently ships Eigen 5.x which is API-compatible with Eigen 3.x
+# for this project, but CMake package compatibility can reject a strict 3.3 request.
+find_package(Eigen3 REQUIRED NO_MODULE)
 
 # 2. OpenCASCADE (OCCT)
 find_package(OpenCASCADE)
@@ -54,12 +56,12 @@ enable_testing()
 
 # --- Subdirectories ---
 add_subdirectory(third_party/planegcs)
-add_subdirectory(src/app)
-add_subdirectory(src/core)
 add_subdirectory(src/kernel)
+add_subdirectory(src/core)
 add_subdirectory(src/render)
-add_subdirectory(src/ui)
+add_subdirectory(src/app)
 add_subdirectory(src/io)
+add_subdirectory(src/ui)
 add_subdirectory(tests)
 
 # --- macOS App Icon ---

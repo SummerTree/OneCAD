@@ -10,6 +10,7 @@
  */
 
 #include "app/commands/AddOperationCommand.h"
+#include "app/commands/UpdateOperationParamsCommand.h"
 #include "app/document/Document.h"
 #include "app/history/DependencyGraph.h"
 #include "app/history/RegenerationEngine.h"
@@ -33,6 +34,7 @@
 #include <QCoreApplication>
 #include <QUuid>
 
+#include <algorithm>
 #include <cassert>
 #include <cmath>
 #include <iostream>
@@ -57,6 +59,14 @@ double shapeVolume(const TopoDS_Shape& shape) {
     GProp_GProps props;
     BRepGProp::VolumeProperties(shape, props);
     return props.Mass();
+}
+
+int solidCount(const TopoDS_Shape& shape) {
+    int count = 0;
+    for (TopExp_Explorer exp(shape, TopAbs_SOLID); exp.More(); exp.Next()) {
+        ++count;
+    }
+    return count;
 }
 
 bool shapeValid(const TopoDS_Shape& shape) {
@@ -1268,6 +1278,186 @@ void testFacePatchReplayDeterministic() {
     std::cout << " PASS\n";
 }
 
+void testLinearPatternFuseAndCompound() {
+    std::cout << "Test 22: Linear pattern fuse and non-fuse results are valid..." << std::flush;
+
+    {
+        app::Document doc;
+        const auto [sketchId, regionId] = createSquareSketchRegion(doc, 10.0);
+        const std::string bodyId = newId();
+
+        app::OperationRecord extrude;
+        extrude.opId = newId();
+        extrude.type = app::OperationType::Extrude;
+        extrude.input = app::SketchRegionRef{sketchId, regionId};
+        extrude.params = app::ExtrudeParams{5.0, 0.0, app::ExtrudeMode::Blind, app::BooleanMode::NewBody};
+        extrude.resultBodyIds.push_back(bodyId);
+        assert(executeAddOperation(doc, extrude));
+
+        app::OperationRecord pattern;
+        pattern.opId = newId();
+        pattern.type = app::OperationType::LinearPattern;
+        pattern.input = app::BodyRef{bodyId};
+        app::LinearPatternParams params;
+        params.sourceBodyId = bodyId;
+        params.dirX = 1.0;
+        params.spacing = 15.0;
+        params.count = 3;
+        params.fuseResult = false;
+        pattern.params = params;
+        pattern.resultBodyIds.push_back(bodyId);
+        assert(executeAddOperation(doc, pattern));
+
+        const TopoDS_Shape* result = doc.getBodyShape(bodyId);
+        assert(result && !result->IsNull());
+        assert(shapeValid(*result));
+        assert(solidCount(*result) == 3);
+        assert(nearlyEqual(shapeVolume(*result), 1500.0, 1e-2));
+    }
+
+    {
+        app::Document doc;
+        const auto [sketchId, regionId] = createSquareSketchRegion(doc, 10.0);
+        const std::string bodyId = newId();
+
+        app::OperationRecord extrude;
+        extrude.opId = newId();
+        extrude.type = app::OperationType::Extrude;
+        extrude.input = app::SketchRegionRef{sketchId, regionId};
+        extrude.params = app::ExtrudeParams{5.0, 0.0, app::ExtrudeMode::Blind, app::BooleanMode::NewBody};
+        extrude.resultBodyIds.push_back(bodyId);
+        assert(executeAddOperation(doc, extrude));
+
+        app::OperationRecord pattern;
+        pattern.opId = newId();
+        pattern.type = app::OperationType::LinearPattern;
+        pattern.input = app::BodyRef{bodyId};
+        app::LinearPatternParams params;
+        params.sourceBodyId = bodyId;
+        params.dirY = 1.0;
+        params.dirX = 0.0;
+        params.spacing = 8.0;
+        params.count = 3;
+        params.fuseResult = true;
+        pattern.params = params;
+        pattern.resultBodyIds.push_back(bodyId);
+        assert(executeAddOperation(doc, pattern));
+
+        const TopoDS_Shape* result = doc.getBodyShape(bodyId);
+        assert(result && !result->IsNull());
+        assert(shapeValid(*result));
+        assert(solidCount(*result) == 1);
+        assert(nearlyEqual(shapeVolume(*result), 1300.0, 1e-2));
+    }
+
+    std::cout << " PASS\n";
+}
+
+void testLinearPatternTracksSourceDependency() {
+    std::cout << "Test 23: Linear pattern tracks source-body dependency..." << std::flush;
+
+    app::Document doc;
+    const auto [sketchId, regionId] = createSquareSketchRegion(doc, 10.0);
+    const std::string bodyId = newId();
+
+    app::OperationRecord extrude;
+    extrude.opId = newId();
+    extrude.type = app::OperationType::Extrude;
+    extrude.input = app::SketchRegionRef{sketchId, regionId};
+    extrude.params = app::ExtrudeParams{5.0, 0.0, app::ExtrudeMode::Blind, app::BooleanMode::NewBody};
+    extrude.resultBodyIds.push_back(bodyId);
+    assert(executeAddOperation(doc, extrude));
+
+    app::OperationRecord pattern;
+    pattern.opId = newId();
+    pattern.type = app::OperationType::LinearPattern;
+    pattern.input = app::BodyRef{bodyId};
+    app::LinearPatternParams params;
+    params.sourceBodyId = bodyId;
+    params.dirX = 1.0;
+    params.dirY = 0.0;
+    params.dirZ = 0.0;
+    params.spacing = 15.0;
+    params.count = 3;
+    params.fuseResult = false;
+    pattern.params = params;
+    pattern.resultBodyIds.push_back(bodyId);
+    assert(executeAddOperation(doc, pattern));
+
+    const auto downstream = app::history::RegenerationEngine(&doc).graph().getDownstream(extrude.opId);
+    assert(std::find(downstream.begin(), downstream.end(), pattern.opId) != downstream.end());
+
+    app::ExtrudeParams updated = std::get<app::ExtrudeParams>(extrude.params);
+    updated.distance = 8.0;
+    app::commands::UpdateOperationParamsCommand update(&doc, extrude.opId, updated);
+    assert(update.execute());
+
+    const TopoDS_Shape* result = doc.getBodyShape(bodyId);
+    assert(result && !result->IsNull());
+    assert(shapeValid(*result));
+    assert(solidCount(*result) == 3);
+    assert(nearlyEqual(shapeVolume(*result), 2400.0, 1e-2));
+
+    std::cout << " PASS\n";
+}
+
+void testCircularPatternCompoundAndDependency() {
+    std::cout << "Test 24: Circular pattern compound keeps all instances and tracks source..." << std::flush;
+
+    app::Document doc;
+    const auto [sketchId, regionId] = createSquareSketchRegion(doc, 10.0);
+    const std::string bodyId = newId();
+
+    app::OperationRecord extrude;
+    extrude.opId = newId();
+    extrude.type = app::OperationType::Extrude;
+    extrude.input = app::SketchRegionRef{sketchId, regionId};
+    extrude.params = app::ExtrudeParams{5.0, 0.0, app::ExtrudeMode::Blind, app::BooleanMode::NewBody};
+    extrude.resultBodyIds.push_back(bodyId);
+    assert(executeAddOperation(doc, extrude));
+
+    app::OperationRecord pattern;
+    pattern.opId = newId();
+    pattern.type = app::OperationType::CircularPattern;
+    pattern.input = app::BodyRef{bodyId};
+    app::CircularPatternParams params;
+    params.sourceBodyId = bodyId;
+    params.axisX = 0.0;
+    params.axisY = 0.0;
+    params.axisZ = 0.0;
+    params.axisDirX = 0.0;
+    params.axisDirY = 0.0;
+    params.axisDirZ = 1.0;
+    params.angleDeg = 360.0;
+    params.count = 4;
+    params.fuseResult = false;
+    pattern.params = params;
+    pattern.resultBodyIds.push_back(bodyId);
+    assert(executeAddOperation(doc, pattern));
+
+    const TopoDS_Shape* result = doc.getBodyShape(bodyId);
+    assert(result && !result->IsNull());
+    assert(shapeValid(*result));
+    assert(solidCount(*result) == 4);
+    assert(nearlyEqual(shapeVolume(*result), 2000.0, 1e-2));
+
+    const auto downstream = app::history::RegenerationEngine(&doc).graph().getDownstream(extrude.opId);
+    assert(std::find(downstream.begin(), downstream.end(), pattern.opId) != downstream.end());
+
+    app::ExtrudeParams updated = std::get<app::ExtrudeParams>(extrude.params);
+    updated.distance = 8.0;
+    app::commands::UpdateOperationParamsCommand update(&doc, extrude.opId, updated);
+    assert(update.execute());
+
+    result = doc.getBodyShape(bodyId);
+    assert(result && !result->IsNull());
+    assert(shapeValid(*result));
+    assert(solidCount(*result) == 4);
+    assert(nearlyEqual(shapeVolume(*result), 3200.0, 1e-2));
+
+    std::cout << " PASS\n";
+}
+
 int main(int argc, char* argv[]) {
     QCoreApplication app(argc, argv);
 
@@ -1294,6 +1484,9 @@ int main(int argc, char* argv[]) {
     testCoplanarPatchExtrudeUsesWholeTopArea();
     testAddOperationTransactionalRollbackOnRegenFailure();
     testFacePatchReplayDeterministic();
+    testLinearPatternFuseAndCompound();
+    testLinearPatternTracksSourceDependency();
+    testCircularPatternCompoundAndDependency();
 
     std::cout << "\n=== All tests passed! ===\n\n";
     return 0;

@@ -231,12 +231,33 @@ SceneMeshStore::Mesh TessellationCache::buildMesh(const std::string& bodyId,
                                                   kernel::elementmap::ElementMap& elementMap,
                                                   const std::unordered_map<std::string, std::array<float, 4>>* faceColors) const {
     SceneMeshStore::Mesh mesh;
+    tryBuildMesh(bodyId, shape, elementMap, mesh, faceColors, nullptr);
+    return mesh;
+}
+
+bool TessellationCache::tryBuildMesh(const std::string& bodyId,
+                                     const TopoDS_Shape& shape,
+                                     kernel::elementmap::ElementMap& elementMap,
+                                     SceneMeshStore::Mesh& meshOut,
+                                     const std::unordered_map<std::string, std::array<float, 4>>* faceColors,
+                                     std::string* errorOut) const {
+    SceneMeshStore::Mesh mesh;
     mesh.bodyId = bodyId;
     mesh.modelMatrix.setToIdentity();
 
+    auto fail = [&](const std::string& message) {
+        if (errorOut) {
+            *errorOut = message;
+        }
+        meshOut = std::move(mesh);
+        return false;
+    };
+
     if (shape.IsNull()) {
-        return mesh;
+        return fail("Cannot tessellate null shape");
     }
+
+    try {
 
     // Compute adaptive deflection based on bounding box
     double linearDeflection = settings_.linearDeflection;
@@ -260,7 +281,7 @@ SceneMeshStore::Mesh TessellationCache::buildMesh(const std::string& bodyId,
                                     settings_.parallel, settings_.angularDeflection, true);
     mesher.Perform();
     if (!mesher.IsDone()) {
-        return mesh;
+        return fail("OCCT mesher failed");
     }
 
     // Build edge-to-faces ancestor map to identify visible (sharp) edges
@@ -279,7 +300,9 @@ SceneMeshStore::Mesh TessellationCache::buildMesh(const std::string& bodyId,
 
     std::unordered_map<TopoDS_Face, std::string, TopTools_ShapeMapHasher, TopTools_ShapeMapHasher> faceIdByShape;
 
+    int faceCount = 0;
     for (TopExp_Explorer faceExp(shape, TopAbs_FACE); faceExp.More(); faceExp.Next()) {
+        ++faceCount;
         TopoDS_Face face = TopoDS::Face(faceExp.Current());
         TopLoc_Location location;
         Handle(Poly_Triangulation) triangulation = BRep_Tool::Triangulation(face, location);
@@ -369,7 +392,20 @@ SceneMeshStore::Mesh TessellationCache::buildMesh(const std::string& bodyId,
     // Compute smooth normals with vertex splitting at crease edges
     computeSmoothNormals(mesh);
 
-    return mesh;
+    if (faceCount == 0) {
+        return fail("Shape has no faces to tessellate");
+    }
+    if (mesh.triangles.empty()) {
+        return fail("Tessellation produced no triangles");
+    }
+
+    meshOut = std::move(mesh);
+    return true;
+    } catch (const Standard_Failure& failure) {
+        return fail(std::string("OCCT tessellation error: ") + failure.GetMessageString());
+    } catch (...) {
+        return fail("Tessellation failed");
+    }
 }
 
 SceneMeshStore::FaceTopology TessellationCache::buildFaceTopology(

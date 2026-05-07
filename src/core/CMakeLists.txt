@@ -31,11 +31,6 @@ add_library(onecad_core STATIC
     loop/FaceBuilder.cpp
     loop/RegionUtils.cpp
     modeling/BooleanOperation.cpp
-    modeling/CoplanarFacePatch.cpp
-    modeling/FaceExtrudeProfileBuilder.cpp
-    modeling/FacePatchResolver.cpp
-    modeling/EdgeChainer.cpp
-    modeling/SelectionTopologyResolver.cpp
 )
 
 target_include_directories(onecad_core
@@ -46,6 +41,7 @@ target_include_directories(onecad_core
 
 target_link_libraries(onecad_core
     PUBLIC
+    onecad_kernel
     Qt6::Core
     Qt6::Gui  # For QMatrix4x4 in SketchRenderer.h public API
     ${OpenCASCADE_LIBRARIES}

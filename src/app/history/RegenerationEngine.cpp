@@ -20,11 +20,14 @@
 #include <BRepAlgoAPI_Fuse.hxx>
 #include <BRepAlgoAPI_Cut.hxx>
 #include <BRepAlgoAPI_Common.hxx>
+#include <BRepBuilderAPI_MakeEdge.hxx>
 #include <BRepFilletAPI_MakeFillet.hxx>
 #include <BRepFilletAPI_MakeChamfer.hxx>
 #include <BRepOffsetAPI_MakeThickSolid.hxx>
 #include <BRepPrimAPI_MakePrism.hxx>
 #include <BRepPrimAPI_MakeRevol.hxx>
+#include <BRep_Builder.hxx>
+#include <BRepCheck_Analyzer.hxx>
 #include <BRepOffsetAPI_DraftAngle.hxx>
 #include <BRepAdaptor_Curve.hxx>
 #include <BRepAdaptor_Surface.hxx>
@@ -33,6 +36,7 @@
 #include <TopExp.hxx>
 #include <TopExp_Explorer.hxx>
 #include <TopoDS.hxx>
+#include <TopoDS_Compound.hxx>
 #include <TopTools_IndexedDataMapOfShapeListOfShape.hxx>
 #include <TopTools_IndexedMapOfShape.hxx>
 #include <BRepBuilderAPI_Transform.hxx>
@@ -114,6 +118,64 @@ bool faceBelongsToBody(const TopoDS_Shape& body, const TopoDS_Face& face) {
         }
     }
     return false;
+}
+
+bool checkedShapeResult(const TopoDS_Shape& shape,
+                        const std::string& context,
+                        std::string& errorOut) {
+    if (shape.IsNull()) {
+        errorOut = context + " produced null shape";
+        return false;
+    }
+    BRepCheck_Analyzer analyzer(shape);
+    if (!analyzer.IsValid()) {
+        errorOut = context + " produced invalid shape";
+        return false;
+    }
+    return true;
+}
+
+TopoDS_Shape checkedBooleanResult(const TopoDS_Shape& target,
+                                  const TopoDS_Shape& tool,
+                                  BooleanMode mode,
+                                  const std::string& context,
+                                  std::string& errorOut) {
+    if (target.IsNull() || tool.IsNull()) {
+        errorOut = context + " boolean input is null";
+        return {};
+    }
+
+    TopoDS_Shape result;
+    if (mode == BooleanMode::Add) {
+        BRepAlgoAPI_Fuse fuse(target, tool);
+        if (!fuse.IsDone()) {
+            errorOut = context + " fuse failed";
+            return {};
+        }
+        result = fuse.Shape();
+    } else if (mode == BooleanMode::Cut) {
+        BRepAlgoAPI_Cut cut(target, tool);
+        if (!cut.IsDone()) {
+            errorOut = context + " cut failed";
+            return {};
+        }
+        result = cut.Shape();
+    } else if (mode == BooleanMode::Intersect) {
+        BRepAlgoAPI_Common common(target, tool);
+        if (!common.IsDone()) {
+            errorOut = context + " intersect failed";
+            return {};
+        }
+        result = common.Shape();
+    } else {
+        errorOut = context + " unsupported boolean mode";
+        return {};
+    }
+
+    if (!checkedShapeResult(result, context + " boolean", errorOut)) {
+        return {};
+    }
+    return result;
 }
 
 bool planarFacePlaneAndNormal(const TopoDS_Face& face, gp_Pln& planeOut, gp_Dir& normalOut) {
@@ -656,7 +718,13 @@ bool RegenerationEngine::executeOperation(const OperationRecord& op, std::string
 
     // Apply result to document
     for (const auto& bodyId : op.resultBodyIds) {
-        applyBodyResult(bodyId, result, op.opId);
+        if (!applyBodyResult(bodyId, result, op.opId, errorOut)) {
+            qCWarning(logRegen) << "executeOperation:apply-body-failed"
+                                << "opId=" << QString::fromStdString(op.opId)
+                                << "bodyId=" << QString::fromStdString(bodyId)
+                                << "error=" << QString::fromStdString(errorOut);
+            return false;
+        }
     }
 
     qCDebug(logRegen) << "executeOperation:done"
@@ -901,21 +969,9 @@ TopoDS_Shape RegenerationEngine::buildExtrude(const OperationRecord& op, std::st
             return {};
         }
 
-        if (params.booleanMode == BooleanMode::Add) {
-            BRepAlgoAPI_Fuse fuse(*targetOpt, result);
-            if (fuse.IsDone()) {
-                result = fuse.Shape();
-            }
-        } else if (params.booleanMode == BooleanMode::Cut) {
-            BRepAlgoAPI_Cut cut(*targetOpt, result);
-            if (cut.IsDone()) {
-                result = cut.Shape();
-            }
-        } else if (params.booleanMode == BooleanMode::Intersect) {
-            BRepAlgoAPI_Common common(*targetOpt, result);
-            if (common.IsDone()) {
-                result = common.Shape();
-            }
+        result = checkedBooleanResult(*targetOpt, result, params.booleanMode, "Extrude", errorOut);
+        if (result.IsNull()) {
+            return {};
         }
     }
 
@@ -1119,21 +1175,9 @@ TopoDS_Shape RegenerationEngine::buildRevolve(const OperationRecord& op, std::st
             return {};
         }
 
-        if (params.booleanMode == BooleanMode::Add) {
-            BRepAlgoAPI_Fuse fuse(*targetOpt, result);
-            if (fuse.IsDone()) {
-                result = fuse.Shape();
-            }
-        } else if (params.booleanMode == BooleanMode::Cut) {
-            BRepAlgoAPI_Cut cut(*targetOpt, result);
-            if (cut.IsDone()) {
-                result = cut.Shape();
-            }
-        } else if (params.booleanMode == BooleanMode::Intersect) {
-            BRepAlgoAPI_Common common(*targetOpt, result);
-            if (common.IsDone()) {
-                result = common.Shape();
-            }
+        result = checkedBooleanResult(*targetOpt, result, params.booleanMode, "Revolve", errorOut);
+        if (result.IsNull()) {
+            return {};
         }
     }
 
@@ -1542,18 +1586,22 @@ void RegenerationEngine::restoreBackupState() {
     }
 }
 
-void RegenerationEngine::applyBodyResult(const std::string& bodyId, const TopoDS_Shape& shape,
-                                          const std::string& opId) {
+bool RegenerationEngine::applyBodyResult(const std::string& bodyId, const TopoDS_Shape& shape,
+                                          const std::string& opId, std::string& errorOut) {
     if (!doc_) {
-        return;
+        errorOut = "Document is not available";
+        return false;
     }
 
     if (doc_->getBodyShape(bodyId)) {
-        doc_->updateBodyShape(bodyId, shape, true, opId);
-    } else {
-        doc_->addBodyWithId(bodyId, shape);
-        doc_->elementMap().rebindBody(bodyId, shape, opId);
+        return doc_->updateBodyShape(bodyId, shape, true, opId, &errorOut);
     }
+
+    if (!doc_->addBodyWithId(bodyId, shape, {}, &errorOut)) {
+        return false;
+    }
+    doc_->elementMap().rebindBody(bodyId, shape, opId);
+    return true;
 }
 
 TopoDS_Shape RegenerationEngine::buildLinearPattern(const OperationRecord& op, std::string& errorOut) {
@@ -1566,6 +1614,10 @@ TopoDS_Shape RegenerationEngine::buildLinearPattern(const OperationRecord& op, s
 
     if (p.count < 2) {
         errorOut = "Pattern count must be >= 2";
+        return {};
+    }
+    if (std::abs(p.spacing) < 1e-9) {
+        errorOut = "Pattern spacing must be non-zero";
         return {};
     }
 
@@ -1586,6 +1638,12 @@ TopoDS_Shape RegenerationEngine::buildLinearPattern(const OperationRecord& op, s
     double nz = p.dirZ / len;
 
     TopoDS_Shape result = *sourceShape;
+    TopoDS_Compound compound;
+    BRep_Builder builder;
+    if (!p.fuseResult) {
+        builder.MakeCompound(compound);
+        builder.Add(compound, *sourceShape);
+    }
     for (int i = 1; i < p.count; ++i) {
         gp_Trsf trsf;
         trsf.SetTranslation(gp_Vec(nx * p.spacing * i, ny * p.spacing * i, nz * p.spacing * i));
@@ -1603,12 +1661,11 @@ TopoDS_Shape RegenerationEngine::buildLinearPattern(const OperationRecord& op, s
             }
             result = fuse.Shape();
         } else {
-            // Without fuse, just return the last transformed shape
-            result = xform.Shape();
+            builder.Add(compound, xform.Shape());
         }
     }
 
-    return result;
+    return p.fuseResult ? result : compound;
     } catch (const Standard_Failure& e) {
         errorOut = std::string("OCCT error in linear pattern: ") + e.GetMessageString();
         return {};
@@ -1688,24 +1745,69 @@ TopoDS_Shape RegenerationEngine::buildSweep(const OperationRecord& op, std::stri
 
     // Build path wire from path sketch
     TopoDS_Wire pathWire;
-    if (!p.pathSketchId.empty()) {
+    if (!p.pathEdgeId.empty()) {
+        auto edgeOpt = resolveEdge(p.pathEdgeId);
+        if (!edgeOpt) {
+            errorOut = "Sweep: path edge not found: " + p.pathEdgeId;
+            return {};
+        }
+        TopoDS_Edge edge = TopoDS::Edge(*edgeOpt);
+        BRepBuilderAPI_MakeWire wireMaker;
+        wireMaker.Add(edge);
+        if (!wireMaker.IsDone()) {
+            errorOut = "Sweep: failed to build path wire from edge";
+            return {};
+        }
+        pathWire = wireMaker.Wire();
+    } else if (!p.pathSketchId.empty()) {
         auto* pathSketch = doc_->getSketch(p.pathSketchId);
         if (!pathSketch) {
             errorOut = "Sweep: path sketch not found";
             return {};
         }
-        // Build a wire from all sketch edges
         BRepBuilderAPI_MakeWire wireMaker;
-        // Use the sketch's face builder to get edges
-        std::string pathFaceErr;
-        // Detect regions and use the first wire
-        auto pathFace = buildFaceFromSketchRegion(p.pathSketchId, p.pathEdgeId, pathFaceErr);
-        if (pathFace.has_value()) {
-            TopExp_Explorer pathWireExp(pathFace.value(), TopAbs_WIRE);
-            if (pathWireExp.More()) {
-                pathWire = TopoDS::Wire(pathWireExp.Current());
+        int edgeCount = 0;
+        const auto& pathPlane = pathSketch->getPlane();
+        for (const auto& entity : pathSketch->getAllEntities()) {
+            if (!entity || entity->isConstruction() || entity->type() == core::sketch::EntityType::Point) {
+                continue;
             }
+            if (entity->type() != core::sketch::EntityType::Line) {
+                errorOut = "Sweep: path sketch supports line entities only";
+                return {};
+            }
+            const auto* line = dynamic_cast<const core::sketch::SketchLine*>(entity.get());
+            if (!line) {
+                continue;
+            }
+            const auto* start = pathSketch->getEntityAs<core::sketch::SketchPoint>(line->startPointId());
+            const auto* end = pathSketch->getEntityAs<core::sketch::SketchPoint>(line->endPointId());
+            if (!start || !end) {
+                errorOut = "Sweep: path line has unresolved endpoints";
+                return {};
+            }
+            const auto p1 = pathPlane.toWorld({start->position().X(), start->position().Y()});
+            const auto p2 = pathPlane.toWorld({end->position().X(), end->position().Y()});
+            BRepBuilderAPI_MakeEdge edgeMaker(gp_Pnt(p1.x, p1.y, p1.z), gp_Pnt(p2.x, p2.y, p2.z));
+            if (!edgeMaker.IsDone() || edgeMaker.Edge().IsNull()) {
+                errorOut = "Sweep: failed to build path edge";
+                return {};
+            }
+            wireMaker.Add(edgeMaker.Edge());
+            if (!wireMaker.IsDone()) {
+                errorOut = "Sweep: path sketch edges do not form a wire";
+                return {};
+            }
+            ++edgeCount;
         }
+        if (edgeCount == 0) {
+            errorOut = "Sweep: path sketch has no usable edges";
+            return {};
+        }
+        pathWire = wireMaker.Wire();
+    } else {
+        errorOut = "Sweep: path edge or sketch is required";
+        return {};
     }
 
     if (pathWire.IsNull()) {
@@ -1719,7 +1821,12 @@ TopoDS_Shape RegenerationEngine::buildSweep(const OperationRecord& op, std::stri
         return {};
     }
 
-    return pipe.Shape();
+    TopoDS_Shape result = pipe.Shape();
+    if (result.IsNull()) {
+        errorOut = "Sweep pipe produced null shape";
+        return {};
+    }
+    return result;
     } catch (const Standard_Failure& e) {
         errorOut = std::string("OCCT error in sweep: ") + e.GetMessageString();
         return {};
@@ -1752,6 +1859,12 @@ TopoDS_Shape RegenerationEngine::buildCircularPattern(const OperationRecord& op,
     double stepAngle = (p.angleDeg / p.count) * M_PI / 180.0;
 
     TopoDS_Shape result = *sourceShape;
+    TopoDS_Compound compound;
+    BRep_Builder builder;
+    if (!p.fuseResult) {
+        builder.MakeCompound(compound);
+        builder.Add(compound, *sourceShape);
+    }
     for (int i = 1; i < p.count; ++i) {
         gp_Trsf trsf;
         trsf.SetRotation(axis, stepAngle * i);
@@ -1761,19 +1874,29 @@ TopoDS_Shape RegenerationEngine::buildCircularPattern(const OperationRecord& op,
             return {};
         }
 
+        TopoDS_Shape instance = xform.Shape();
+        if (instance.IsNull()) {
+            errorOut = "Circular pattern transform produced null shape at instance " + std::to_string(i);
+            return {};
+        }
+
         if (p.fuseResult) {
-            BRepAlgoAPI_Fuse fuse(result, xform.Shape());
+            BRepAlgoAPI_Fuse fuse(result, instance);
             if (!fuse.IsDone()) {
                 errorOut = "Circular pattern fuse failed at instance " + std::to_string(i);
                 return {};
             }
             result = fuse.Shape();
+            if (result.IsNull()) {
+                errorOut = "Circular pattern fuse produced null shape at instance " + std::to_string(i);
+                return {};
+            }
         } else {
-            result = xform.Shape();
+            builder.Add(compound, instance);
         }
     }
 
-    return result;
+    return p.fuseResult ? result : compound;
     } catch (const Standard_Failure& e) {
         errorOut = std::string("OCCT error in circular pattern: ") + e.GetMessageString();
         return {};

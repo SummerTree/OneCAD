@@ -9,7 +9,6 @@
 #include "../../app/document/OperationRecord.h"
 #include "../../app/history/RegenerationEngine.h"
 #include "../../core/sketch/Sketch.h"
-#include "../../render/tessellation/TessellationCache.h"
 #include "../viewport/Viewport.h"
 
 #include <QDoubleSpinBox>
@@ -19,7 +18,10 @@
 #include <QFormLayout>
 #include <QPushButton>
 #include <QDialogButtonBox>
+#include <QCheckBox>
 #include <QLoggingCategory>
+#include <QMessageBox>
+#include <QSpinBox>
 
 namespace onecad::ui {
 
@@ -126,19 +128,39 @@ void EditParameterDialog::loadCurrentParams() {
     for (const auto& op : document_->operations()) {
         if (op.opId == opId_) {
             if (op.type == app::OperationType::Extrude) {
-                isExtrude_ = true;
+                mode_ = Mode::Extrude;
                 if (std::holds_alternative<app::ExtrudeParams>(op.params)) {
                     buildExtrudeUi(std::get<app::ExtrudeParams>(op.params));
                 }
             } else if (op.type == app::OperationType::Revolve) {
-                isExtrude_ = false;
+                mode_ = Mode::Revolve;
                 if (std::holds_alternative<app::RevolveParams>(op.params)) {
                     buildRevolveUi(std::get<app::RevolveParams>(op.params));
+                }
+            } else if (op.type == app::OperationType::LinearPattern) {
+                mode_ = Mode::LinearPattern;
+                if (std::holds_alternative<app::LinearPatternParams>(op.params)) {
+                    buildLinearPatternUi(std::get<app::LinearPatternParams>(op.params));
                 }
             }
             break;
         }
     }
+
+    initializePreviewState();
+}
+
+bool EditParameterDialog::initializePreviewState() {
+    if (!document_) {
+        return false;
+    }
+    if (previewDocument_ && previewEngine_) {
+        return true;
+    }
+
+    previewDocument_ = makePreviewDocument(*document_);
+    previewEngine_ = std::make_unique<app::history::RegenerationEngine>(previewDocument_.get());
+    return previewDocument_ != nullptr && previewEngine_ != nullptr;
 }
 
 void EditParameterDialog::buildExtrudeUi(const app::ExtrudeParams& params) {
@@ -182,6 +204,46 @@ void EditParameterDialog::buildRevolveUi(const app::RevolveParams& params) {
     connect(angleSpinbox_, QOverload<double>::of(&QDoubleSpinBox::valueChanged),
             this, &EditParameterDialog::onValueChanged);
     formLayout->addRow(tr("Angle:"), angleSpinbox_);
+
+    paramsLayout_->addLayout(formLayout);
+}
+
+void EditParameterDialog::buildLinearPatternUi(const app::LinearPatternParams& params) {
+    auto* formLayout = new QFormLayout;
+
+    spacingSpinbox_ = new QDoubleSpinBox;
+    spacingSpinbox_->setRange(kMinDistance, kMaxDistance);
+    spacingSpinbox_->setValue(params.spacing);
+    spacingSpinbox_->setSuffix(" mm");
+    spacingSpinbox_->setDecimals(3);
+    spacingSpinbox_->setSingleStep(1.0);
+    connect(spacingSpinbox_, QOverload<double>::of(&QDoubleSpinBox::valueChanged),
+            this, &EditParameterDialog::onValueChanged);
+    formLayout->addRow(tr("Spacing:"), spacingSpinbox_);
+
+    countSpinbox_ = new QSpinBox;
+    countSpinbox_->setRange(2, 64);
+    countSpinbox_->setValue(params.count);
+    connect(countSpinbox_, QOverload<int>::of(&QSpinBox::valueChanged),
+            this, &EditParameterDialog::onValueChanged);
+    formLayout->addRow(tr("Count:"), countSpinbox_);
+
+    fuseCheck_ = new QCheckBox(tr("Fuse result"));
+    fuseCheck_->setChecked(params.fuseResult);
+    connect(fuseCheck_, &QCheckBox::toggled, this, [this](bool) { onValueChanged(); });
+    formLayout->addRow(QString(), fuseCheck_);
+
+    auto* sourceLabel = new QLabel(QString::fromStdString(params.sourceBodyId));
+    sourceLabel->setWordWrap(true);
+    formLayout->addRow(tr("Source Body:"), sourceLabel);
+
+    auto* directionLabel = new QLabel(
+        tr("(%1, %2, %3)")
+            .arg(params.dirX, 0, 'f', 2)
+            .arg(params.dirY, 0, 'f', 2)
+            .arg(params.dirZ, 0, 'f', 2));
+    directionLabel->setWordWrap(true);
+    formLayout->addRow(tr("Direction:"), directionLabel);
 
     paramsLayout_->addLayout(formLayout);
 }
@@ -232,8 +294,31 @@ app::RevolveParams EditParameterDialog::getRevolveParams() const {
     return params;
 }
 
+app::LinearPatternParams EditParameterDialog::getLinearPatternParams() const {
+    app::LinearPatternParams params;
+    params.spacing = spacingSpinbox_ ? spacingSpinbox_->value() : 10.0;
+    params.count = countSpinbox_ ? countSpinbox_->value() : 2;
+    params.fuseResult = fuseCheck_ ? fuseCheck_->isChecked() : true;
+
+    if (document_) {
+        for (const auto& op : document_->operations()) {
+            if (op.opId == opId_ && std::holds_alternative<app::LinearPatternParams>(op.params)) {
+                const auto& orig = std::get<app::LinearPatternParams>(op.params);
+                params.sourceBodyId = orig.sourceBodyId;
+                params.dirX = orig.dirX;
+                params.dirY = orig.dirY;
+                params.dirZ = orig.dirZ;
+                break;
+            }
+        }
+    }
+    return params;
+}
+
 void EditParameterDialog::onValueChanged() {
     hasChanges_ = true;
+    previewValid_ = true;
+    previewError_.clear();
     debounceTimer_->start();
 }
 
@@ -244,40 +329,54 @@ void EditParameterDialog::updatePreview() {
 
     // Create temporary params variant
     app::OperationParams newParams;
-    if (isExtrude_) {
-        newParams = getExtrudeParams();
-    } else {
-        newParams = getRevolveParams();
+    switch (mode_) {
+        case Mode::Extrude:
+            newParams = getExtrudeParams();
+            break;
+        case Mode::Revolve:
+            newParams = getRevolveParams();
+            break;
+        case Mode::LinearPattern:
+            newParams = getLinearPatternParams();
+            break;
     }
 
-    auto previewDoc = makePreviewDocument(*document_);
-    auto* op = previewDoc->findOperation(opId_);
-    if (!op) {
-        qCWarning(logEditParamsDialog) << "updatePreview:operation-not-found"
-                                       << QString::fromStdString(opId_);
-        return;
-    }
-    op->params = newParams;
-
-    app::history::RegenerationEngine engine(previewDoc.get());
-    auto result = engine.regenerateAll();
-    if (result.status == app::history::RegenStatus::CriticalFailure) {
-        qCWarning(logEditParamsDialog) << "updatePreview:critical-regeneration-failure"
-                                       << "opId=" << QString::fromStdString(opId_);
+    if (!initializePreviewState()) {
+        previewValid_ = false;
+        previewError_ = tr("Could not initialize preview.");
         clearPreview();
         return;
     }
 
-    render::TessellationCache tessellator;
-    std::vector<render::SceneMeshStore::Mesh> meshes;
-    for (const auto& bodyId : previewDoc->getBodyIds()) {
-        const TopoDS_Shape* shape = previewDoc->getBodyShape(bodyId);
-        if (!shape || shape->IsNull()) {
-            continue;
-        }
-        meshes.push_back(tessellator.buildMesh(bodyId, *shape, previewDoc->elementMap()));
+    auto* op = previewDocument_->findOperation(opId_);
+    if (!op) {
+        qCWarning(logEditParamsDialog) << "updatePreview:operation-not-found"
+                                        << QString::fromStdString(opId_);
+        previewValid_ = false;
+        previewError_ = tr("Operation not found.");
+        clearPreview();
+        return;
     }
+    op->params = newParams;
+
+    auto result = previewEngine_->regenerateAll();
+    if (result.status != app::history::RegenStatus::Success) {
+        previewValid_ = false;
+        if (!result.failedOps.empty()) {
+            previewError_ = QString::fromStdString(result.failedOps.front().errorMessage);
+        } else {
+            previewError_ = tr("Regeneration failed.");
+        }
+        qCWarning(logEditParamsDialog) << "updatePreview:regeneration-failure"
+                                        << "opId=" << QString::fromStdString(opId_);
+        clearPreview();
+        return;
+    }
+
+    const std::vector<render::SceneMeshStore::Mesh> meshes = previewDocument_->meshStore().meshes();
     viewport_->setModelPreviewMeshes(meshes);
+    previewValid_ = true;
+    previewError_.clear();
     qCDebug(logEditParamsDialog) << "updatePreview:done"
                                  << "opId=" << QString::fromStdString(opId_)
                                  << "meshCount=" << meshes.size();
@@ -292,8 +391,16 @@ void EditParameterDialog::clearPreview() {
 }
 
 void EditParameterDialog::accept() {
+    if (!previewValid_) {
+        QMessageBox::warning(this, tr("Cannot Apply Parameters"),
+                             previewError_.isEmpty() ? tr("Preview failed.") : previewError_);
+        return;
+    }
     if (hasChanges_) {
-        applyChanges();
+        if (!applyChanges()) {
+            QMessageBox::warning(this, tr("Cannot Apply Parameters"), tr("Regeneration failed."));
+            return;
+        }
     }
     clearPreview();
     QDialog::accept();
@@ -304,26 +411,41 @@ void EditParameterDialog::reject() {
     QDialog::reject();
 }
 
-void EditParameterDialog::applyChanges() {
-    if (!document_) return;
+bool EditParameterDialog::applyChanges() {
+    if (!document_) return false;
 
     // Update operation params
     app::OperationParams newParams;
-    if (isExtrude_) {
-        newParams = getExtrudeParams();
-    } else {
-        newParams = getRevolveParams();
+    switch (mode_) {
+        case Mode::Extrude:
+            newParams = getExtrudeParams();
+            break;
+        case Mode::Revolve:
+            newParams = getRevolveParams();
+            break;
+        case Mode::LinearPattern:
+            newParams = getLinearPatternParams();
+            break;
     }
 
     auto command = std::make_unique<app::commands::UpdateOperationParamsCommand>(
         document_, opId_, newParams);
+    bool success = false;
     if (commandProcessor_) {
-        commandProcessor_->execute(std::move(command));
+        success = commandProcessor_->execute(std::move(command));
     } else {
-        command->execute();
+        success = command->execute();
     }
 
+    if (!success) {
+        qCWarning(logEditParamsDialog) << "applyChanges:failed"
+                                       << "opId=" << QString::fromStdString(opId_);
+        return false;
+    }
+
+    hasChanges_ = false;
     emit parametersChanged(QString::fromStdString(opId_));
+    return true;
 }
 
 } // namespace onecad::ui

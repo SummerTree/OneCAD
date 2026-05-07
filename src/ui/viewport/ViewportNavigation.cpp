@@ -194,7 +194,7 @@ bool Viewport::intersectScreenPointWithPlane(const QPointF& screenPos,
 
     const float aspectRatio = static_cast<float>(m_width) / static_cast<float>(m_height);
     const QMatrix4x4 view = m_camera->viewMatrix();
-    const QMatrix4x4 projection = m_camera->projectionMatrix(aspectRatio);
+    const QMatrix4x4 projection = buildProjectionMatrix(aspectRatio);
     const QMatrix4x4 viewProjection = projection * view;
 
     bool invertible = false;

@@ -8,6 +8,7 @@ namespace onecad::ui {
 bool Viewport::activateRevolveTool() {
     if (m_inSketchMode || !m_selectionManager || !m_modelingToolManager) {
         setRevolveToolActive(false);
+        setLinearPatternToolActive(false);
         setFilletToolActive(false);
         setShellToolActive(false);
         return false;
@@ -15,6 +16,7 @@ bool Viewport::activateRevolveTool() {
 
     if (m_revolveToolActive) {
         setExtrudeToolActive(false);
+        setLinearPatternToolActive(false);
         setFilletToolActive(false);
         setShellToolActive(false);
         return true;
@@ -26,6 +28,7 @@ bool Viewport::activateRevolveTool() {
          selection.front().kind == app::selection::SelectionKind::Face)) {
         m_modelingToolManager->activateRevolve(selection.front());
         setExtrudeToolActive(false);
+        setLinearPatternToolActive(false);
         setFilletToolActive(false);
         setShellToolActive(false);
         const bool activated = m_modelingToolManager->hasActiveTool();
@@ -34,6 +37,7 @@ bool Viewport::activateRevolveTool() {
     }
 
     setRevolveToolActive(false);
+    setLinearPatternToolActive(false);
     setFilletToolActive(false);
     setShellToolActive(false);
     return false;
@@ -46,6 +50,15 @@ void Viewport::setRevolveToolActive(bool active) {
     m_revolveToolActive = active;
     updateModelSelectionFilter();
     emit revolveToolActiveChanged(active);
+}
+
+void Viewport::setLinearPatternToolActive(bool active) {
+    if (m_linearPatternToolActive == active) {
+        return;
+    }
+    m_linearPatternToolActive = active;
+    updateModelSelectionFilter();
+    emit linearPatternToolActiveChanged(active);
 }
 
 } // namespace onecad::ui

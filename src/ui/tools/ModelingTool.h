@@ -36,6 +36,7 @@ public:
     virtual bool handleMousePress(const QPoint& screenPos, Qt::MouseButton button) = 0;
     virtual bool handleMouseMove(const QPoint& screenPos) = 0;
     virtual bool handleMouseRelease(const QPoint& screenPos, Qt::MouseButton button) = 0;
+    virtual bool confirm() { return false; }
 
     virtual std::optional<Indicator> indicator() const { return std::nullopt; }
 };

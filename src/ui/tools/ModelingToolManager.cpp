@@ -6,6 +6,7 @@
 #include "RevolveTool.h"
 #include "FilletChamferTool.h"
 #include "ShellTool.h"
+#include "LinearPatternTool.h"
 
 #include "../viewport/Viewport.h"
 
@@ -17,6 +18,7 @@ ModelingToolManager::ModelingToolManager(Viewport* viewport, QObject* parent)
     revolveTool_ = std::make_unique<RevolveTool>(viewport_, document_);
     filletTool_ = std::make_unique<FilletChamferTool>(viewport_, document_);
     shellTool_ = std::make_unique<ShellTool>(viewport_, document_);
+    linearPatternTool_ = std::make_unique<LinearPatternTool>(viewport_, document_);
 }
 
 ModelingToolManager::~ModelingToolManager() = default;
@@ -35,6 +37,9 @@ void ModelingToolManager::setDocument(app::Document* document) {
     if (shellTool_) {
         shellTool_->setDocument(document_);
     }
+    if (linearPatternTool_) {
+        linearPatternTool_->setDocument(document_);
+    }
 }
 
 void ModelingToolManager::setCommandProcessor(app::commands::CommandProcessor* processor) {
@@ -50,6 +55,9 @@ void ModelingToolManager::setCommandProcessor(app::commands::CommandProcessor* p
     }
     if (shellTool_) {
         shellTool_->setCommandProcessor(commandProcessor_);
+    }
+    if (linearPatternTool_) {
+        linearPatternTool_->setCommandProcessor(commandProcessor_);
     }
 }
 
@@ -132,6 +140,23 @@ void ModelingToolManager::activateShell(const app::selection::SelectionItem& sel
     activeTool_->begin(selection);
 }
 
+void ModelingToolManager::activateLinearPattern(const app::selection::SelectionItem& selection) {
+    if (!linearPatternTool_) return;
+
+    app::selection::SelectionKey key{selection.kind, selection.id};
+    if (activeTool_ == linearPatternTool_.get() && activeSelection_ == key && activeTool_->isActive()) {
+        return;
+    }
+
+    if (activeTool_ && activeTool_ != linearPatternTool_.get()) {
+        activeTool_->cancel();
+    }
+
+    activeSelection_ = key;
+    activeTool_ = linearPatternTool_.get();
+    activeTool_->begin(selection);
+}
+
 void ModelingToolManager::cancelActiveTool() {
     if (activeTool_) {
         activeTool_->cancel();
@@ -143,6 +168,9 @@ void ModelingToolManager::cancelActiveTool() {
 void ModelingToolManager::onSelectionChanged(const std::vector<app::selection::SelectionItem>& selection) {
     if (activeTool_ == revolveTool_.get()) {
         revolveTool_->onSelectionChanged(selection);
+    }
+    if (activeTool_ == linearPatternTool_.get()) {
+        linearPatternTool_->onSelectionChanged(selection);
     }
 }
 
@@ -165,6 +193,17 @@ bool ModelingToolManager::confirmShellFaceSelection() {
     if (activeTool_ == shellTool_.get() && shellTool_ && shellTool_->isActive()) {
         shellTool_->confirmFaceSelection();
         return true;
+    }
+    return false;
+}
+
+bool ModelingToolManager::confirmLinearPattern() {
+    if (activeTool_ == linearPatternTool_.get() && linearPatternTool_ && linearPatternTool_->isActive()) {
+        if (linearPatternTool_->confirm()) {
+            activeTool_ = nullptr;
+            activeSelection_ = {};
+            return true;
+        }
     }
     return false;
 }

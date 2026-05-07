@@ -85,7 +85,6 @@ void SketchModePanel::setupUi() {
         {CT::Coincident, QString::fromUtf8("\u25CF"), tr("Coincident"), "C"},
         {CT::Equal, QString::fromUtf8("="), tr("Equal"), "E"},
         {CT::Midpoint, QString::fromUtf8("\u22C2"), tr("Midpoint"), "M"},
-        {CT::Concentric, QString::fromUtf8("\u25CE"), tr("Concentric"), "O"},
         {CT::OnCurve, QString::fromUtf8("\u25CB\u2192"), tr("Point On Curve"), ""},
     };
 
@@ -117,7 +116,6 @@ void SketchModePanel::setupUi() {
         {CT::Distance, QString::fromUtf8("\u2194"), tr("Distance"), "D"},
         {CT::Angle, QString::fromUtf8("\u2220"), tr("Angle"), "A"},
         {CT::Radius, QString::fromUtf8("R"), tr("Radius"), "R"},
-        {CT::Diameter, QString::fromUtf8("\u2300"), tr("Diameter"), ""},
     };
 
     for (const auto& [type, icon, name, shortcut] : dimensionalConstraints) {

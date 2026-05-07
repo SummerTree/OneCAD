@@ -134,6 +134,8 @@ public:
     void setPreviewHiddenBody(const std::string& bodyId);
     void clearPreviewHiddenBody();
     void resetTransientState();
+    QMatrix4x4 currentViewProjection() const;
+    QSize currentViewportSize() const;
 
 signals:
     void mousePositionChanged(double x, double y, double z);
@@ -146,6 +148,7 @@ signals:
     void openSketchForEditRequested(const QString& sketchId);
     void extrudeToolActiveChanged(bool active);
     void revolveToolActiveChanged(bool active);
+    void linearPatternToolActiveChanged(bool active);
     void filletToolActiveChanged(bool active);
     void shellToolActiveChanged(bool active);
     void debugTogglesChanged(bool normals, bool depth, bool wireframe, bool disableGamma, bool matcap);
@@ -180,6 +183,7 @@ public slots:
     void clearSuppressedConstraintMarkers();
     bool activateExtrudeTool();
     bool activateRevolveTool();
+    bool activateLinearPatternTool();
     bool activateFilletTool();
     bool activateShellTool();
     void setDebugToggles(bool normals, bool depth, bool wireframe, bool disableGamma, bool matcap);
@@ -246,6 +250,10 @@ private:
         QVector3D gradientDir{ 0.0f, 1.0f, 0.0f };
         float gradientStrength = 0.08f;
     };
+    struct RenderClipPlanes {
+        float nearPlane = 0.1f;
+        float farPlane = 100000.0f;
+    };
 
     void updateModelSelectionFilter();
     void handleModelSelectionChanged();
@@ -282,6 +290,9 @@ private:
     void drawPlaneSelectionOverlay(const QMatrix4x4& viewProjection);
     void drawModelSelectionOverlay(const QMatrix4x4& viewProjection);
     void drawModelToolOverlay(const QMatrix4x4& viewProjection);
+    RenderClipPlanes computeRenderClipPlanes(float aspectRatio) const;
+    QMatrix4x4 buildProjectionMatrix(float aspectRatio,
+                                     RenderClipPlanes* outClipPlanes = nullptr) const;
     QMatrix4x4 buildViewProjection() const;
     QSize viewportSize() const;
     void syncModelMeshes();
@@ -311,6 +322,7 @@ private:
     void animateCamera(const CameraState& targetState);
     void setExtrudeToolActive(bool active);
     void setRevolveToolActive(bool active);
+    void setLinearPatternToolActive(bool active);
     void setFilletToolActive(bool active);
     void setShellToolActive(bool active);
 
@@ -323,6 +335,7 @@ private:
     app::commands::CommandProcessor* m_commandProcessor = nullptr;
     bool m_extrudeToolActive = false;
     bool m_revolveToolActive = false;
+    bool m_linearPatternToolActive = false;
     bool m_filletToolActive = false;
     bool m_shellToolActive = false;
     ViewCube* m_viewCube = nullptr;

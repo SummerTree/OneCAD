@@ -114,6 +114,26 @@ target_link_libraries(proto_sketch_tool_dimensions
     onecad_core
 )
 
+# Sketch region candidate prototype
+add_executable(proto_sketch_region_candidates prototypes/proto_sketch_region_candidates.cpp)
+target_link_libraries(proto_sketch_region_candidates
+    PRIVATE
+    onecad_core
+)
+target_include_directories(proto_sketch_region_candidates PRIVATE ${CMAKE_SOURCE_DIR}/src)
+
+# Sketch plane viewport regression prototype
+add_executable(proto_sketch_plane_viewport prototypes/proto_sketch_plane_viewport.cpp)
+target_link_libraries(proto_sketch_plane_viewport
+    PRIVATE
+    onecad_core
+    onecad_render
+    onecad_ui
+    Qt6::Core
+    Qt6::Gui
+)
+target_include_directories(proto_sketch_plane_viewport PRIVATE ${CMAKE_SOURCE_DIR}/src)
+
 # Viewport Compilation Test
 add_executable(test_compile test_compile.cpp)
 target_link_libraries(test_compile
@@ -324,6 +344,8 @@ add_test(NAME proto_loop_detector COMMAND proto_loop_detector)
 add_test(NAME proto_face_builder COMMAND proto_face_builder)
 add_test(NAME proto_sketch_fixed_and_move COMMAND proto_sketch_fixed_and_move)
 add_test(NAME proto_sketch_tool_dimensions COMMAND proto_sketch_tool_dimensions)
+add_test(NAME proto_sketch_region_candidates COMMAND proto_sketch_region_candidates)
+add_test(NAME proto_sketch_plane_viewport COMMAND proto_sketch_plane_viewport)
 add_test(NAME proto_model_picker COMMAND proto_model_picker)
 add_test(NAME proto_tessellation_cache COMMAND proto_tessellation_cache)
 add_test(NAME proto_pickmesh_integration COMMAND proto_pickmesh_integration)

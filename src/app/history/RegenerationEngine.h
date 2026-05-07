@@ -256,8 +256,8 @@ private:
     /**
      * @brief Add or update a body in the document.
      */
-    void applyBodyResult(const std::string& bodyId, const TopoDS_Shape& shape,
-                         const std::string& opId);
+    bool applyBodyResult(const std::string& bodyId, const TopoDS_Shape& shape,
+                         const std::string& opId, std::string& errorOut);
 
     Document* doc_;
     DependencyGraph graph_;

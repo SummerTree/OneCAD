@@ -265,16 +265,25 @@ std::string Document::addBody(const TopoDS_Shape& shape) {
 
 bool Document::addBodyWithId(const std::string& id,
                              const TopoDS_Shape& shape,
-                             const std::string& name) {
+                             const std::string& name,
+                             std::string* errorOut) {
     if (shape.IsNull() || id.empty()) {
+        if (errorOut) {
+            *errorOut = shape.IsNull() ? "Cannot add null body shape" : "Body ID is empty";
+        }
         return false;
     }
     if (bodies_.find(id) != bodies_.end()) {
+        if (errorOut) {
+            *errorOut = "Body already exists: " + id;
+        }
         return false;
     }
 
     std::string finalName = name;
     auto nameIt = bodyNames_.find(id);
+    const bool hadPreviousName = nameIt != bodyNames_.end();
+    const std::string previousName = hadPreviousName ? nameIt->second : std::string{};
     if (finalName.empty()) {
         if (nameIt != bodyNames_.end()) {
             finalName = nameIt->second;
@@ -288,6 +297,8 @@ bool Document::addBodyWithId(const std::string& id,
     BodyEntry entry;
     entry.shape = shape;
     auto visibilityIt = bodyVisibilityCache_.find(id);
+    const bool hadCachedVisibility = visibilityIt != bodyVisibilityCache_.end();
+    const bool cachedVisibility = hadCachedVisibility ? visibilityIt->second : true;
     if (visibilityIt != bodyVisibilityCache_.end()) {
         entry.visible = visibilityIt->second;
         bodyVisibilityCache_.erase(visibilityIt);
@@ -295,7 +306,23 @@ bool Document::addBodyWithId(const std::string& id,
     bodies_[id] = entry;
 
     elementMap_.rebindBody(id, shape);
-    updateBodyMesh(id, shape, false);
+    std::string meshError;
+    if (!updateBodyMesh(id, shape, false, &meshError)) {
+        bodies_.erase(id);
+        elementMap_.removeElementsForBody(id);
+        if (hadPreviousName) {
+            bodyNames_[id] = previousName;
+        } else {
+            bodyNames_.erase(id);
+        }
+        if (hadCachedVisibility) {
+            bodyVisibilityCache_[id] = cachedVisibility;
+        }
+        if (errorOut) {
+            *errorOut = meshError.empty() ? "Failed to tessellate body" : meshError;
+        }
+        return false;
+    }
 
     setModified(true);
     emit bodyAdded(QString::fromStdString(id));
@@ -303,18 +330,50 @@ bool Document::addBodyWithId(const std::string& id,
 }
 
 bool Document::updateBodyShape(const std::string& id, const TopoDS_Shape& shape,
-                               bool emitSignal, const std::string& opId) {
+                               bool emitSignal, const std::string& opId,
+                               std::string* errorOut) {
     if (shape.IsNull()) {
+        if (errorOut) {
+            *errorOut = "Cannot update body with null shape";
+        }
         return false;
     }
     auto it = bodies_.find(id);
     if (it == bodies_.end()) {
+        if (errorOut) {
+            *errorOut = "Body not found: " + id;
+        }
         return false;
+    }
+
+    const TopoDS_Shape oldShape = it->second.shape;
+    const std::string oldElementMap = elementMap_.toString();
+    std::optional<render::SceneMeshStore::Mesh> oldMesh;
+    if (sceneMeshStore_) {
+        if (const auto* mesh = sceneMeshStore_->findMesh(id)) {
+            oldMesh = *mesh;
+        }
     }
 
     it->second.shape = shape;
     elementMap_.rebindBody(id, shape, opId);
-    updateBodyMesh(id, shape, emitSignal);
+    std::string meshError;
+    if (!updateBodyMesh(id, shape, emitSignal, &meshError)) {
+        it->second.shape = oldShape;
+        elementMap_.fromString(oldElementMap);
+        elementMap_.rebindBody(id, oldShape);
+        if (sceneMeshStore_) {
+            if (oldMesh.has_value()) {
+                sceneMeshStore_->setBodyMesh(id, *oldMesh);
+            } else {
+                sceneMeshStore_->removeBody(id);
+            }
+        }
+        if (errorOut) {
+            *errorOut = meshError.empty() ? "Failed to tessellate body" : meshError;
+        }
+        return false;
+    }
     setModified(true);
     return true;
 }
@@ -936,18 +995,23 @@ bool Document::hasBodyFaceColors(const std::string& bodyId) const {
     return bodyFaceColors_.find(bodyId) != bodyFaceColors_.end();
 }
 
-void Document::updateBodyMesh(const std::string& bodyId,
+bool Document::updateBodyMesh(const std::string& bodyId,
                               const TopoDS_Shape& shape,
-                              bool emitSignal) {
+                              bool emitSignal,
+                              std::string* errorOut) {
     if (!sceneMeshStore_ || !tessellationCache_) {
-        return;
+        return true;
     }
     const FaceColorMap* colors = getBodyFaceColors(bodyId);
-    render::SceneMeshStore::Mesh mesh = tessellationCache_->buildMesh(bodyId, shape, elementMap_, colors);
+    render::SceneMeshStore::Mesh mesh;
+    if (!tessellationCache_->tryBuildMesh(bodyId, shape, elementMap_, mesh, colors, errorOut)) {
+        return false;
+    }
     sceneMeshStore_->setBodyMesh(bodyId, std::move(mesh));
     if (emitSignal) {
         emit bodyUpdated(QString::fromStdString(bodyId));
     }
+    return true;
 }
 
 void Document::rebuildElementMap() {

@@ -102,9 +102,11 @@ public:
 
     // Body management
     std::string addBody(const TopoDS_Shape& shape);
-    bool addBodyWithId(const std::string& id, const TopoDS_Shape& shape, const std::string& name = {});
+    bool addBodyWithId(const std::string& id, const TopoDS_Shape& shape,
+                       const std::string& name = {}, std::string* errorOut = nullptr);
     bool updateBodyShape(const std::string& id, const TopoDS_Shape& shape,
-                         bool emitSignal = true, const std::string& opId = {});
+                         bool emitSignal = true, const std::string& opId = {},
+                         std::string* errorOut = nullptr);
     const TopoDS_Shape* getBodyShape(const std::string& id) const;
     std::optional<core::sketch::SketchPlane> getSketchPlaneForFace(const std::string& bodyId,
                                                                     const std::string& faceId) const;
@@ -201,7 +203,8 @@ private:
     };
 
     void registerBodyElements(const std::string& bodyId, const TopoDS_Shape& shape);
-    void updateBodyMesh(const std::string& bodyId, const TopoDS_Shape& shape, bool emitSignal = true);
+    bool updateBodyMesh(const std::string& bodyId, const TopoDS_Shape& shape,
+                        bool emitSignal = true, std::string* errorOut = nullptr);
     void rebuildElementMap();
 
     std::unordered_map<std::string, std::unique_ptr<core::sketch::Sketch>> sketches_;

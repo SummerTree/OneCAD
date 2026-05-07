@@ -13,9 +13,15 @@
 #include "SketchEllipse.h"
 #include "SketchLine.h"
 #include "SketchPoint.h"
+#include "../loop/FaceBuilder.h"
 #include "../loop/LoopDetector.h"
 #include "../loop/RegionUtils.h"
 
+#include <BRepMesh_IncrementalMesh.hxx>
+#include <BRep_Tool.hxx>
+#include <Poly_Triangle.hxx>
+#include <Poly_Triangulation.hxx>
+#include <TopLoc_Location.hxx>
 #include <QMatrix4x4>
 #include <QOpenGLBuffer>
 #include <QOpenGLFunctions>
@@ -30,6 +36,7 @@
 #include <limits>
 #include <memory>
 #include <numbers>
+#include <unordered_map>
 #include <unordered_set>
 
 namespace onecad::core::sketch {
@@ -574,6 +581,51 @@ bool polygonContainsPolygon(const std::vector<Vec2d>& outer,
     return true;
 }
 
+bool buildTrianglesFromFace(const loop::Face& faceDef,
+                            const Sketch& sketch,
+                            std::vector<Vec2d>& outTriangles) {
+    outTriangles.clear();
+
+    loop::FaceBuilder builder;
+    const auto faceResult = builder.buildFace(faceDef, sketch);
+    if (!faceResult.success || faceResult.face.IsNull()) {
+        return false;
+    }
+
+    BRepMesh_IncrementalMesh mesher(faceResult.face, 0.05, false, 0.5, true);
+    mesher.Perform();
+    if (!mesher.IsDone()) {
+        return false;
+    }
+
+    TopLoc_Location location;
+    Handle(Poly_Triangulation) triangulation = BRep_Tool::Triangulation(faceResult.face, location);
+    if (triangulation.IsNull()) {
+        return false;
+    }
+
+    const gp_Trsf& transform = location.Transformation();
+    const auto& plane = sketch.getPlane();
+    outTriangles.reserve(static_cast<size_t>(triangulation->NbTriangles()) * 3);
+
+    for (int i = 1; i <= triangulation->NbTriangles(); ++i) {
+        int n1 = 0;
+        int n2 = 0;
+        int n3 = 0;
+        triangulation->Triangle(i).Get(n1, n2, n3);
+
+        const gp_Pnt p1 = triangulation->Node(n1).Transformed(transform);
+        const gp_Pnt p2 = triangulation->Node(n2).Transformed(transform);
+        const gp_Pnt p3 = triangulation->Node(n3).Transformed(transform);
+
+        outTriangles.push_back(plane.toSketch({p1.X(), p1.Y(), p1.Z()}));
+        outTriangles.push_back(plane.toSketch({p2.X(), p2.Y(), p2.Z()}));
+        outTriangles.push_back(plane.toSketch({p3.X(), p3.Y(), p3.Z()}));
+    }
+
+    return !outTriangles.empty();
+}
+
 QMatrix4x4 buildSketchModelMatrix(const SketchPlane& plane) {
     QVector3D origin(plane.origin.x, plane.origin.y, plane.origin.z);
     QVector3D normal(plane.normal.x, plane.normal.y, plane.normal.z);
@@ -626,6 +678,8 @@ public:
     void buildVBOs(const std::vector<EntityRenderData>& entities,
                    const std::vector<SketchRenderer::RegionRenderData>& regions,
                    const SketchRenderStyle& style,
+                   RegionDisplayMode regionDisplayMode,
+                   bool suppressRegionFill,
                    const std::unordered_map<EntityID, SelectionState>& selections,
                    const std::unordered_set<std::string>& selectedRegions,
                    std::optional<std::string> hoverRegion,
@@ -841,6 +895,8 @@ void SketchRendererImpl::buildVBOs(
     const std::vector<EntityRenderData>& entities,
     const std::vector<SketchRenderer::RegionRenderData>& regions,
     const SketchRenderStyle& style,
+    RegionDisplayMode regionDisplayMode,
+    bool suppressRegionFill,
     const std::unordered_map<EntityID, SelectionState>& selections,
     const std::unordered_set<std::string>& selectedRegions,
     std::optional<std::string> hoverRegion,
@@ -873,29 +929,39 @@ void SketchRendererImpl::buildVBOs(
     double dashLength = style.dashLength * std::max(pixelScale, 1e-9);
     double gapLength = style.gapLength * std::max(pixelScale, 1e-9);
 
-    for (size_t i = 0; i < regions.size(); ++i) {
-        const auto& region = regions[i];
-        if (viewport.size.x > 0.0 && viewport.size.y > 0.0) {
-            if (!viewport.intersects(region.boundsMin, region.boundsMax)) {
+    if (!suppressRegionFill) {
+        for (size_t i = 0; i < regions.size(); ++i) {
+            const auto& region = regions[i];
+            if (region.triangles.empty()) {
                 continue;
             }
-        }
+            if (viewport.size.x > 0.0 && viewport.size.y > 0.0) {
+                if (!viewport.intersects(region.boundsMin, region.boundsMax)) {
+                    continue;
+                }
+            }
 
-        float alpha = style.regionOpacity;
-        if (selectedRegions.find(region.id) != selectedRegions.end()) {
-            alpha = style.regionSelectedOpacity;
-        } else if (hoverRegion && *hoverRegion == region.id) {
-            alpha = style.regionHoverOpacity;
-        }
+            float alpha =
+                (regionDisplayMode == RegionDisplayMode::AssistAll) ? style.regionOpacity : 0.0f;
+            if (selectedRegions.find(region.id) != selectedRegions.end()) {
+                alpha = style.regionSelectedOpacity;
+            } else if (hoverRegion && *hoverRegion == region.id) {
+                alpha = style.regionHoverOpacity;
+            }
 
-        Vec3d color = style.colors.regionFill;
-        for (const auto& v : region.triangles) {
-            regionData.push_back(static_cast<float>(v.x));
-            regionData.push_back(static_cast<float>(v.y));
-            regionData.push_back(static_cast<float>(color.x));
-            regionData.push_back(static_cast<float>(color.y));
-            regionData.push_back(static_cast<float>(color.z));
-            regionData.push_back(alpha);
+            if (alpha <= 0.0f) {
+                continue;
+            }
+
+            Vec3d color = style.colors.regionFill;
+            for (const auto& v : region.triangles) {
+                regionData.push_back(static_cast<float>(v.x));
+                regionData.push_back(static_cast<float>(v.y));
+                regionData.push_back(static_cast<float>(color.x));
+                regionData.push_back(static_cast<float>(color.y));
+                regionData.push_back(static_cast<float>(color.z));
+                regionData.push_back(alpha);
+            }
         }
     }
 
@@ -1289,14 +1355,12 @@ void SketchRendererImpl::render(const QMatrix4x4& mvp, const SketchRenderStyle& 
     glGetIntegerv(GL_DEPTH_FUNC, &prevDepthFunc);
     glDepthFunc(GL_LEQUAL);
 
-    if (regionVertexCount_ > 0) {
-        glDepthMask(GL_FALSE);
+    glDepthMask(GL_FALSE);
 
+    if (regionVertexCount_ > 0) {
         regionVAO_->bind();
         glDrawArrays(GL_TRIANGLES, 0, regionVertexCount_);
         regionVAO_->release();
-
-        glDepthMask(GL_TRUE);
     }
 
     glEnable(GL_LINE_SMOOTH);
@@ -1332,6 +1396,7 @@ void SketchRendererImpl::render(const QMatrix4x4& mvp, const SketchRenderStyle& 
     glDisable(GL_LINE_SMOOTH);
     glDisable(GL_BLEND);
     glLineWidth(1.0f);
+    glDepthMask(GL_TRUE);
     glDepthFunc(prevDepthFunc);
 
     lineShader_->release();
@@ -1349,11 +1414,13 @@ void SketchRendererImpl::renderPoints(const QMatrix4x4& mvp) {
     GLint prevDepthFunc = GL_LESS;
     glGetIntegerv(GL_DEPTH_FUNC, &prevDepthFunc);
     glDepthFunc(GL_LEQUAL);
+    glDepthMask(GL_FALSE);
 
     pointVAO_->bind();
     glDrawArrays(GL_POINTS, 0, pointVertexCount_);
     pointVAO_->release();
 
+    glDepthMask(GL_TRUE);
     glDepthFunc(prevDepthFunc);
     glDisable(GL_PROGRAM_POINT_SIZE);
     glDisable(GL_BLEND);
@@ -1403,9 +1470,11 @@ void SketchRendererImpl::renderPreview(const QMatrix4x4& mvp,
     GLint prevDepthFunc = GL_LESS;
     glGetIntegerv(GL_DEPTH_FUNC, &prevDepthFunc);
     glDepthFunc(GL_LEQUAL);
+    glDepthMask(GL_FALSE);
 
     glDrawArrays(GL_LINES, 0, static_cast<int>(data.size() / 6));
 
+    glDepthMask(GL_TRUE);
     glDepthFunc(prevDepthFunc);
     glDisable(GL_BLEND);
     glLineWidth(1.0f);
@@ -1638,15 +1707,10 @@ void SketchRenderer::updateRegions() {
             region.holes.push_back(std::move(hole));
         }
 
-        if (!triangulatePolygonWithHoles(region.outerPolygon, region.holes, region.triangles)) {
-            region.triangles.clear();
-            if (!triangulateSimplePolygon(region.outerPolygon, region.triangles)) {
-                continue;
-            }
-        }
-        if (region.triangles.empty()) {
-            continue;
-        }
+        loop::Face face;
+        face.outerLoop = regionDef.outerLoop;
+        face.innerLoops = regionDef.holes;
+        buildTrianglesFromFace(face, *sketch_, region.triangles);
 
         region.boundsMin = region.outerPolygon.front();
         region.boundsMax = region.outerPolygon.front();
@@ -1666,6 +1730,24 @@ void SketchRenderer::updateRegions() {
         }
 
         regionRenderData_.push_back(std::move(region));
+    }
+
+    for (auto& region : regionRenderData_) {
+        int containmentDepth = 0;
+        for (const auto& candidate : regionRenderData_) {
+            if (candidate.id == region.id) {
+                continue;
+            }
+            if (candidate.area <= region.area) {
+                continue;
+            }
+            if (!polygonContainsPolygon(candidate.outerPolygon, region.outerPolygon,
+                                        kGeometryEpsilon)) {
+                continue;
+            }
+            containmentDepth++;
+        }
+        region.containmentDepth = containmentDepth;
     }
 
     if (!regionRenderData_.empty()) {
@@ -1708,11 +1790,18 @@ void SketchRenderer::updateRegions() {
 }
 
 std::optional<std::string> SketchRenderer::pickRegion(const Vec2d& sketchPos) const {
-    double bestArea = std::numeric_limits<double>::infinity();
-    std::optional<std::string> bestRegion;
+    const auto candidates = pickRegionCandidates(sketchPos);
+    if (candidates.empty()) {
+        return std::nullopt;
+    }
+    return candidates.front().id;
+}
 
-    for (size_t i = 0; i < regionRenderData_.size(); ++i) {
-        const auto& region = regionRenderData_[i];
+std::vector<RegionPickHit> SketchRenderer::pickRegionCandidates(const Vec2d& sketchPos) const {
+    std::vector<RegionPickHit> hits;
+    hits.reserve(regionRenderData_.size());
+
+    for (const auto& region : regionRenderData_) {
         if (sketchPos.x < region.boundsMin.x || sketchPos.x > region.boundsMax.x ||
             sketchPos.y < region.boundsMin.y || sketchPos.y > region.boundsMax.y) {
             continue;
@@ -1730,13 +1819,49 @@ std::optional<std::string> SketchRenderer::pickRegion(const Vec2d& sketchPos) co
         if (inHole) {
             continue;
         }
-        if (region.area < bestArea) {
-            bestArea = region.area;
-            bestRegion = region.id;
-        }
+
+        hits.push_back({region.id, region.area, region.containmentDepth, !region.holes.empty()});
     }
 
-    return bestRegion;
+    std::sort(hits.begin(), hits.end(), [](const RegionPickHit& a, const RegionPickHit& b) {
+        if (a.area != b.area) {
+            return a.area < b.area;
+        }
+        if (a.containmentDepth != b.containmentDepth) {
+            return a.containmentDepth > b.containmentDepth;
+        }
+        return a.id < b.id;
+    });
+    return hits;
+}
+
+std::optional<RegionPickHit> SketchRenderer::getRegionPickHit(const std::string& regionId) const {
+    if (regionId.empty()) {
+        return std::nullopt;
+    }
+    for (const auto& region : regionRenderData_) {
+        if (region.id == regionId) {
+            return RegionPickHit{region.id, region.area, region.containmentDepth,
+                                 !region.holes.empty()};
+        }
+    }
+    return std::nullopt;
+}
+
+void SketchRenderer::setRegionDisplayMode(RegionDisplayMode mode) {
+    if (regionDisplayMode_ == mode) {
+        return;
+    }
+    regionDisplayMode_ = mode;
+    vboDirty_ = true;
+}
+
+void SketchRenderer::setRegionFillSuppressed(bool suppressed) {
+    if (suppressRegionFill_ == suppressed) {
+        return;
+    }
+    suppressRegionFill_ = suppressed;
+    vboDirty_ = true;
 }
 
 void SketchRenderer::setRegionHover(std::optional<std::string> regionId) {
@@ -2245,7 +2370,8 @@ void SketchRenderer::buildVBOs() {
         visibleConstraints.push_back(std::move(renderData));
     }
 
-    impl_->buildVBOs(entityRenderData_, regionRenderData_, renderStyle, entitySelections_,
+    impl_->buildVBOs(entityRenderData_, regionRenderData_, renderStyle,
+                     regionDisplayMode_, suppressRegionFill_, entitySelections_,
                      selectedRegions_, hoverRegion_, hoverEntity_,
                      viewport_, pixelScale_, visibleConstraints,
                      ghostConstraints_, snapActive, snapType, snapPos, snapSize, snapColor,

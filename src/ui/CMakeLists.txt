@@ -18,6 +18,8 @@ add_library(onecad_ui STATIC
     tools/ModelingToolManager.cpp
     tools/ExtrudeTool.cpp
     tools/RevolveTool.cpp
+    tools/LinearPatternTool.cpp
+    tools/PatternOptionsOverlay.cpp
     tools/FilletChamferTool.cpp
     tools/ShellTool.cpp
     sketch/ConstraintPanel.cpp

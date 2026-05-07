@@ -1,4 +1,5 @@
 #include "Viewport.h"
+#include "ViewportCommon.h"
 #include "../../render/BodyRenderer.h"
 #include "../../render/Camera3D.h"
 #include "../../render/Grid3D.h"
@@ -60,6 +61,8 @@
 #include <TopoDS_Vertex.hxx>
 #include <TopoDS_Edge.hxx>
 #include <BRep_Tool.hxx>
+#include <BRepBndLib.hxx>
+#include <Bnd_Box.hxx>
 #include <gp_Pnt.hxx>
 
 namespace onecad {
@@ -67,6 +70,7 @@ namespace ui {
 
 namespace sketch = core::sketch;
 namespace sketchTools = core::sketch::tools;
+using namespace viewport_common;
 Q_LOGGING_CATEGORY(logUiInput, "onecad.ui.input")
 
 namespace {
@@ -205,6 +209,7 @@ Viewport::Viewport(QWidget* parent)
     {
         app::selection::SelectionFilter filter;
         filter.allowedKinds = {
+            app::selection::SelectionKind::Body,
             app::selection::SelectionKind::Vertex,
             app::selection::SelectionKind::Edge,
             app::selection::SelectionKind::Face
@@ -303,6 +308,7 @@ void Viewport::resetTransientState() {
     }
     setExtrudeToolActive(false);
     setRevolveToolActive(false);
+    setLinearPatternToolActive(false);
     setFilletToolActive(false);
     setShellToolActive(false);
 
@@ -1251,6 +1257,7 @@ void Viewport::mouseReleaseEvent(QMouseEvent* event) {
                 m_modelingToolManager->cancelActiveTool();
                 setExtrudeToolActive(false);
                 setRevolveToolActive(false);
+                setLinearPatternToolActive(false);
                 setFilletToolActive(false);
                 setShellToolActive(false);
             }
@@ -1505,6 +1512,7 @@ bool Viewport::event(QEvent* event) {
 bool Viewport::activateExtrudeTool() {
     if (m_inSketchMode || !m_selectionManager || !m_modelingToolManager) {
         setExtrudeToolActive(false);
+        setLinearPatternToolActive(false);
         setFilletToolActive(false);
         setShellToolActive(false);
         return false;
@@ -1512,6 +1520,7 @@ bool Viewport::activateExtrudeTool() {
 
     if (m_extrudeToolActive) {
         setRevolveToolActive(false);
+        setLinearPatternToolActive(false);
         setFilletToolActive(false);
         setShellToolActive(false);
         return true;
@@ -1522,6 +1531,7 @@ bool Viewport::activateExtrudeTool() {
         selection.front().kind == app::selection::SelectionKind::SketchRegion) {
         m_modelingToolManager->activateExtrude(selection.front());
         setRevolveToolActive(false);
+        setLinearPatternToolActive(false);
         setFilletToolActive(false);
         setShellToolActive(false);
         const bool activated = m_modelingToolManager->hasActiveTool();
@@ -1530,6 +1540,7 @@ bool Viewport::activateExtrudeTool() {
     }
 
     setExtrudeToolActive(false);
+    setLinearPatternToolActive(false);
     setFilletToolActive(false);
     setShellToolActive(false);
     return false;
@@ -1606,6 +1617,12 @@ void Viewport::keyPressEvent(QKeyEvent* event) {
                 event->accept();
                 return;
             }
+            if (m_modelingToolManager->confirmLinearPattern()) {
+                setLinearPatternToolActive(false);
+                update();
+                event->accept();
+                return;
+            }
         }
     }
 
@@ -1615,6 +1632,7 @@ void Viewport::keyPressEvent(QKeyEvent* event) {
         m_modelingToolManager->cancelActiveTool();
         setExtrudeToolActive(false);
         setRevolveToolActive(false);
+        setLinearPatternToolActive(false);
         setFilletToolActive(false);
         setShellToolActive(false);
         event->accept();
@@ -1638,9 +1656,124 @@ QMatrix4x4 Viewport::buildViewProjection() const {
         return QMatrix4x4();
     }
     float aspectRatio = static_cast<float>(m_width) / static_cast<float>(m_height);
-    QMatrix4x4 projection = m_camera->projectionMatrix(aspectRatio);
+    QMatrix4x4 projection = buildProjectionMatrix(aspectRatio);
     QMatrix4x4 view = m_camera->viewMatrix();
     return projection * view;
+}
+
+Viewport::RenderClipPlanes Viewport::computeRenderClipPlanes(float aspectRatio) const {
+    RenderClipPlanes clipPlanes;
+    if (!m_camera) {
+        return clipPlanes;
+    }
+
+    clipPlanes.nearPlane = m_camera->nearPlane();
+    clipPlanes.farPlane = m_camera->farPlane();
+
+    if (m_camera->projectionType() != render::Camera3D::ProjectionType::Perspective ||
+        m_width <= 0 || m_height <= 0) {
+        return clipPlanes;
+    }
+
+    const QVector3D cameraPosition = m_camera->position();
+    float nearestPlaneDistance = std::numeric_limits<float>::max();
+
+    // Sample sketch plane distances
+    std::vector<sketch::SketchPlane> planes;
+    if (m_inSketchMode && m_activeSketch) {
+        planes.push_back(m_activeSketch->getPlane());
+    } else if (m_document) {
+        const auto visibleSketches = visibleModelSketchIds();
+        planes.reserve(visibleSketches.size());
+        for (const auto& sketchId : visibleSketches) {
+            const auto* sketchModel = m_document->getSketch(sketchId);
+            if (!sketchModel) {
+                continue;
+            }
+            planes.push_back(sketchModel->getPlane());
+        }
+    }
+
+    if (!planes.empty()) {
+        const QMatrix4x4 baseProjection = m_camera->projectionMatrix(aspectRatio);
+        const QMatrix4x4 baseViewProjection = baseProjection * m_camera->viewMatrix();
+        for (const auto& plane : planes) {
+            const PlaneDepthRangeInfo depthRange = samplePerspectivePlaneDepthRange(
+                baseViewProjection,
+                cameraPosition,
+                QVector3D(plane.origin.x, plane.origin.y, plane.origin.z),
+                QVector3D(plane.normal.x, plane.normal.y, plane.normal.z)
+            );
+            if (!depthRange.hasIntersection) {
+                continue;
+            }
+            nearestPlaneDistance = std::min(nearestPlaneDistance, depthRange.minDistance);
+        }
+    }
+
+    // Adaptive near/far from visible body bounding boxes
+    if (m_document) {
+        for (const auto& bodyId : m_document->getBodyIds()) {
+            if (!m_document->isBodyVisible(bodyId)) continue;
+            const auto* shape = m_document->getBodyShape(bodyId);
+            if (!shape || shape->IsNull()) continue;
+            Bnd_Box box;
+            BRepBndLib::Add(*shape, box);
+            if (box.IsVoid()) continue;
+            double xmin, ymin, zmin, xmax, ymax, zmax;
+            box.Get(xmin, ymin, zmin, xmax, ymax, zmax);
+            QVector3D bCenter(static_cast<float>((xmin + xmax) * 0.5),
+                              static_cast<float>((ymin + ymax) * 0.5),
+                              static_cast<float>((zmin + zmax) * 0.5));
+            float bRadius = QVector3D(static_cast<float>(xmax - xmin),
+                                      static_cast<float>(ymax - ymin),
+                                      static_cast<float>(zmax - zmin)).length() * 0.5f;
+            float distToCenter = (cameraPosition - bCenter).length();
+            float bodyNear = std::max(1.0f, distToCenter - bRadius);
+            float bodyFar = distToCenter + bRadius + 100.0f;
+            nearestPlaneDistance = std::min(nearestPlaneDistance, bodyNear);
+            clipPlanes.farPlane = std::max(clipPlanes.farPlane, bodyFar);
+        }
+    }
+
+    if (nearestPlaneDistance >= std::numeric_limits<float>::max() * 0.5f) {
+        return clipPlanes;
+    }
+
+    constexpr float kAdaptiveNearFactor = 0.25f;
+    constexpr float kAdaptiveNearMin = 1.0f;
+    const float adaptiveNear = std::max(kAdaptiveNearMin, nearestPlaneDistance * kAdaptiveNearFactor);
+    clipPlanes.nearPlane = std::min(clipPlanes.nearPlane, adaptiveNear);
+    clipPlanes.farPlane = std::max(clipPlanes.farPlane, clipPlanes.nearPlane + 1.0f);
+    return clipPlanes;
+}
+
+QMatrix4x4 Viewport::buildProjectionMatrix(float aspectRatio,
+                                           RenderClipPlanes* outClipPlanes) const {
+    if (!m_camera) {
+        if (outClipPlanes) {
+            *outClipPlanes = {};
+        }
+        return QMatrix4x4();
+    }
+
+    const RenderClipPlanes clipPlanes = computeRenderClipPlanes(aspectRatio);
+    if (outClipPlanes) {
+        *outClipPlanes = clipPlanes;
+    }
+
+    QMatrix4x4 projection;
+    if (m_camera->projectionType() == render::Camera3D::ProjectionType::Orthographic) {
+        const float halfHeight = m_camera->orthoScale() * 0.5f;
+        const float halfWidth = halfHeight * aspectRatio;
+        projection.ortho(-halfWidth, halfWidth,
+                         -halfHeight, halfHeight,
+                         clipPlanes.nearPlane, clipPlanes.farPlane);
+    } else {
+        projection.perspective(m_camera->fov(), aspectRatio,
+                               clipPlanes.nearPlane, clipPlanes.farPlane);
+    }
+    return projection;
 }
 
 QSize Viewport::viewportSize() const {
@@ -1710,6 +1843,15 @@ std::vector<app::selection::SelectionItem> Viewport::sketchSelection() const {
 int Viewport::suppressedConstraintMarkerCount() const {
     return static_cast<int>(m_suppressedConstraintMarkers.size());
 }
+
+QMatrix4x4 Viewport::currentViewProjection() const {
+    return buildViewProjection();
+}
+
+QSize Viewport::currentViewportSize() const {
+    return viewportSize();
+}
+
 void Viewport::handleModelSelectionChanged() {
     if (m_inSketchMode || !m_selectionManager || !m_modelingToolManager) {
         return;
@@ -1743,6 +1885,9 @@ void Viewport::handleModelSelectionChanged() {
     emit selectionContextChanged(context);
 
     if (m_revolveToolActive) {
+        return;
+    }
+    if (m_linearPatternToolActive) {
         return;
     }
     if (m_shellToolActive) {
@@ -1779,6 +1924,7 @@ void Viewport::handleModelSelectionChanged() {
 
     if (canExtrude) {
         m_modelingToolManager->activateExtrude(selection.front());
+        setLinearPatternToolActive(false);
         setFilletToolActive(false);
         setShellToolActive(false);
         setExtrudeToolActive(m_modelingToolManager->hasActiveTool());
@@ -1787,6 +1933,7 @@ void Viewport::handleModelSelectionChanged() {
 
     m_modelingToolManager->cancelActiveTool();
     setExtrudeToolActive(false);
+    setLinearPatternToolActive(false);
     setFilletToolActive(false);
     setShellToolActive(false);
 }
@@ -1866,6 +2013,31 @@ QStringList Viewport::buildDeepSelectLabels(
     QStringList labels;
     labels.reserve(static_cast<int>(candidates.size()));
 
+    std::unordered_map<std::string, core::sketch::RegionPickHit> sketchRegionInfoById;
+    std::unordered_map<std::string, int> sketchRegionBaseCounts;
+    std::unordered_map<std::string, int> sketchRegionBaseIndex;
+
+    if (m_inSketchMode && m_sketchRenderer) {
+        for (const auto& item : candidates) {
+            if (item.kind != app::selection::SelectionKind::SketchRegion) {
+                continue;
+            }
+            auto info = m_sketchRenderer->getRegionPickHit(item.id.elementId);
+            if (!info.has_value()) {
+                continue;
+            }
+            sketchRegionInfoById.emplace(item.id.elementId, *info);
+
+            std::string baseLabel = "Profile";
+            if (info->hasHoles) {
+                baseLabel = "Ring profile";
+            } else if (info->containmentDepth > 0) {
+                baseLabel = "Inner profile";
+            }
+            sketchRegionBaseCounts[baseLabel]++;
+        }
+    }
+
     for (const auto& item : candidates) {
         QString label;
         switch (item.kind) {
@@ -1876,7 +2048,28 @@ QStringList Viewport::buildDeepSelectLabels(
                 label = tr("Sketch Edge");
                 break;
             case app::selection::SelectionKind::SketchRegion:
-                label = tr("Sketch Region");
+                if (auto it = sketchRegionInfoById.find(item.id.elementId);
+                    it != sketchRegionInfoById.end()) {
+                    const auto& info = it->second;
+                    std::string baseLabel = "Profile";
+                    if (info.hasHoles) {
+                        baseLabel = "Ring profile";
+                    } else if (info.containmentDepth > 0) {
+                        baseLabel = "Inner profile";
+                    }
+
+                    int labelIndex = ++sketchRegionBaseIndex[baseLabel];
+                    if (baseLabel == "Profile") {
+                        label = tr("Profile %1").arg(labelIndex);
+                    } else if (sketchRegionBaseCounts[baseLabel] > 1) {
+                        label = QString::fromStdString(baseLabel) + " " +
+                                QString::number(labelIndex);
+                    } else {
+                        label = QString::fromStdString(baseLabel);
+                    }
+                } else {
+                    label = tr("Sketch Region");
+                }
                 break;
             case app::selection::SelectionKind::SketchConstraint:
                 label = tr("Sketch Constraint");
@@ -1898,7 +2091,8 @@ QStringList Viewport::buildDeepSelectLabels(
                 break;
         }
 
-        if (!item.id.elementId.empty()) {
+        if (item.kind != app::selection::SelectionKind::SketchRegion &&
+            !item.id.elementId.empty()) {
             label += " (" + QString::fromStdString(item.id.elementId) + ")";
         }
         labels.append(label);
@@ -2025,6 +2219,7 @@ void Viewport::updateModelSelectionFilter() {
 
     app::selection::SelectionFilter filter;
     filter.allowedKinds = {
+        app::selection::SelectionKind::Body,
         app::selection::SelectionKind::Vertex,
         app::selection::SelectionKind::Edge,
         app::selection::SelectionKind::Face

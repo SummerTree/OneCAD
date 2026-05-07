@@ -13,8 +13,8 @@
 namespace onecad::render {
 
 namespace {
-constexpr float kPolygonOffsetFactor = 0.5f;
-constexpr float kPolygonOffsetUnits = 0.5f;
+constexpr float kPolygonOffsetFactor = 2.0f;
+constexpr float kPolygonOffsetUnits = 4.0f;
 
 QVector3D normalizeOrFallback(const QVector3D& v, const QVector3D& fallback) {
     if (v.lengthSquared() < 1e-6f) {

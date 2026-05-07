@@ -30,9 +30,11 @@ bool UpdateOperationParamsCommand::execute() {
     if (!document_->updateOperationParams(opId_, newParams_)) {
         return false;
     }
-    if (!regenerateDocument(document_)) {
+    if (!regenerateDocumentStrict(document_)) {
         document_->updateOperationParams(opId_, oldParams_);
-        regenerateDocument(document_);
+        if (!regenerateDocumentStrict(document_)) {
+            regenerateDocument(document_);
+        }
         return false;
     }
     return true;
@@ -45,9 +47,11 @@ bool UpdateOperationParamsCommand::undo() {
     if (!document_->updateOperationParams(opId_, oldParams_)) {
         return false;
     }
-    if (!regenerateDocument(document_)) {
+    if (!regenerateDocumentStrict(document_)) {
         document_->updateOperationParams(opId_, newParams_);
-        regenerateDocument(document_);
+        if (!regenerateDocumentStrict(document_)) {
+            regenerateDocument(document_);
+        }
         return false;
     }
     return true;

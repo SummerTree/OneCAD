@@ -12,7 +12,9 @@
 #include <string>
 
 class QDoubleSpinBox;
+class QCheckBox;
 class QLabel;
+class QSpinBox;
 class QVBoxLayout;
 
 namespace onecad {
@@ -20,6 +22,7 @@ namespace app {
 class Document;
 struct OperationRecord;
 struct ExtrudeParams;
+struct LinearPatternParams;
 struct RevolveParams;
 namespace commands {
 class CommandProcessor;
@@ -34,9 +37,9 @@ namespace ui {
 class Viewport;
 
 /**
- * @brief Dialog for editing Extrude/Revolve parameters with live preview.
+ * @brief Dialog for editing operation parameters with live preview.
  *
- * v1: Only supports Extrude and Revolve operations.
+ * v1: Supports Extrude, Revolve, and Linear Pattern operations.
  * Uses debounced preview (100ms) on spinbox value changes.
  */
 class EditParameterDialog : public QDialog {
@@ -65,27 +68,43 @@ private slots:
 private:
     void setupUi();
     void loadCurrentParams();
-    void applyChanges();
+    bool initializePreviewState();
+    bool applyChanges();
     void clearPreview();
     void buildExtrudeUi(const app::ExtrudeParams& params);
     void buildRevolveUi(const app::RevolveParams& params);
+    void buildLinearPatternUi(const app::LinearPatternParams& params);
     app::ExtrudeParams getExtrudeParams() const;
     app::RevolveParams getRevolveParams() const;
+    app::LinearPatternParams getLinearPatternParams() const;
 
     app::Document* document_ = nullptr;
     Viewport* viewport_ = nullptr;
     app::commands::CommandProcessor* commandProcessor_ = nullptr;
     std::string opId_;
     QTimer* debounceTimer_ = nullptr;
+    std::unique_ptr<app::Document> previewDocument_;
+    std::unique_ptr<app::history::RegenerationEngine> previewEngine_;
 
     // Parameter controls
     QVBoxLayout* paramsLayout_ = nullptr;
     QDoubleSpinBox* distanceSpinbox_ = nullptr;   // Extrude
     QDoubleSpinBox* draftAngleSpinbox_ = nullptr; // Extrude
     QDoubleSpinBox* angleSpinbox_ = nullptr;      // Revolve
+    QDoubleSpinBox* spacingSpinbox_ = nullptr;    // Linear pattern
+    QSpinBox* countSpinbox_ = nullptr;            // Linear pattern
+    QCheckBox* fuseCheck_ = nullptr;              // Linear pattern
 
-    bool isExtrude_ = false;
+    enum class Mode {
+        Extrude,
+        Revolve,
+        LinearPattern
+    };
+
+    Mode mode_ = Mode::Extrude;
     bool hasChanges_ = false;
+    bool previewValid_ = true;
+    QString previewError_;
 };
 
 } // namespace ui

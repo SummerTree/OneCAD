@@ -17,6 +17,7 @@ target_include_directories(onecad_render
 
 target_link_libraries(onecad_render
     PUBLIC
+    onecad_kernel
     Qt6::Core
     Qt6::Gui
     Qt6::OpenGLWidgets

@@ -1,8 +1,9 @@
 #include "SelectionTopologyResolver.h"
 
-#include "EdgeChainer.h"
 #include "TopologyVisibility.h"
+#include "geometry/EdgeChainer.h"
 
+#include <BRep_Tool.hxx>
 #include <TopExp.hxx>
 #include <TopExp_Explorer.hxx>
 #include <TopTools_IndexedDataMapOfShapeListOfShape.hxx>

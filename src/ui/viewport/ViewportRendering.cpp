@@ -119,7 +119,8 @@ void Viewport::paintGL() {
     glDepthFunc(GL_LESS);
 
     float aspectRatio = static_cast<float>(m_width) / static_cast<float>(m_height);
-    QMatrix4x4 projection = m_camera->projectionMatrix(aspectRatio);
+    RenderClipPlanes clipPlanes;
+    QMatrix4x4 projection = buildProjectionMatrix(aspectRatio, &clipPlanes);
     QMatrix4x4 view = m_camera->viewMatrix();
     QMatrix4x4 viewProjection = projection * view;
 
@@ -265,8 +266,8 @@ void Viewport::paintGL() {
         style.wireframeOnly = m_wireframeOnly;
         style.disableGamma = m_disableGamma;
         style.useMatcap = m_useMatcap;
-        style.nearPlane = m_camera->nearPlane();
-        style.farPlane = m_camera->farPlane();
+        style.nearPlane = clipPlanes.nearPlane;
+        style.farPlane = clipPlanes.farPlane;
         style.isOrtho = (m_camera->projectionType() == render::Camera3D::ProjectionType::Orthographic);
 
         // Dynamic quality: reduce during navigation for better responsiveness
@@ -282,18 +283,16 @@ void Viewport::paintGL() {
     if (m_inSketchMode && m_activeSketch && m_sketchRenderer) {
         // In sketch mode: render only the active sketch with tool preview
         const auto& plane = m_activeSketch->getPlane();
-        QVector3D target = m_camera->target();
-        sketch::Vec3d target3d{target.x(), target.y(), target.z()};
-        sketch::Vec2d center = plane.toSketch(target3d);
-
-        sketch::Viewport sketchViewport;
-        sketchViewport.center = center;
-        sketchViewport.size = {
-            static_cast<double>(m_width) * ratio * pixelScale,
-            static_cast<double>(m_height) * ratio * pixelScale
-        };
-        sketchViewport.zoom = pixelScale > 0.0 ? 1.0 / pixelScale : 1.0;
-        m_sketchRenderer->setViewport(sketchViewport);
+        const SketchPlaneViewportInfo sketchViewportInfo = buildSketchViewportForPlane(
+            plane,
+            *m_camera,
+            viewProjection,
+            m_width,
+            m_height,
+            ratio,
+            pixelScale
+        );
+        m_sketchRenderer->setViewport(sketchViewportInfo.viewport);
         m_sketchRenderer->setPixelScale(pixelScale);
 
         // Render tool preview
@@ -423,9 +422,6 @@ void Viewport::paintGL() {
             ghostStyle.regionSelectedOpacity *= 0.6f;
             m_sketchRenderer->setStyle(ghostStyle);
 
-            QVector3D target = m_camera->target();
-            sketch::Vec3d target3d{target.x(), target.y(), target.z()};
-
             for (const auto& sketchId : visibleSketchIds) {
                 auto* sketchModel = m_document->getSketch(sketchId);
                 if (!sketchModel) {
@@ -436,16 +432,16 @@ void Viewport::paintGL() {
                 applySketchOverlayStateForSketch(sketchId);
 
                 const auto& plane = sketchModel->getPlane();
-                sketch::Vec2d center = plane.toSketch(target3d);
-
-                sketch::Viewport sketchViewport;
-                sketchViewport.center = center;
-                sketchViewport.size = {
-                    static_cast<double>(m_width) * ratio * pixelScale,
-                    static_cast<double>(m_height) * ratio * pixelScale
-                };
-                sketchViewport.zoom = pixelScale > 0.0 ? 1.0 / pixelScale : 1.0;
-                m_sketchRenderer->setViewport(sketchViewport);
+                const SketchPlaneViewportInfo sketchViewportInfo = buildSketchViewportForPlane(
+                    plane,
+                    *m_camera,
+                    viewProjection,
+                    m_width,
+                    m_height,
+                    ratio,
+                    pixelScale
+                );
+                m_sketchRenderer->setViewport(sketchViewportInfo.viewport);
                 m_sketchRenderer->setPixelScale(pixelScale);
                 m_sketchRenderer->render(view, projection);
             }

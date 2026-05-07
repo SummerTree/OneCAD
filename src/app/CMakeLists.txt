@@ -35,6 +35,7 @@ target_include_directories(onecad_app
 target_link_libraries(onecad_app
     PUBLIC
     Qt6::Core
+    onecad_kernel
     onecad_core
     onecad_render
 )

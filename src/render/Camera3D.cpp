@@ -61,6 +61,17 @@ void Camera3D::orbit(float deltaYaw, float deltaPitch) {
     offset.setZ(dist * qSin(phi));
     
     m_position = m_target + offset;
+
+    // Recompute up from world-Z projected perpendicular to view direction
+    QVector3D worldUp(0.0f, 0.0f, 1.0f);
+    QVector3D viewDir = (m_target - m_position).normalized();
+    QVector3D rightVec = QVector3D::crossProduct(viewDir, worldUp);
+    if (rightVec.lengthSquared() < 1e-6f) {
+        // At pole: keep current up (avoid degenerate cross product)
+        return;
+    }
+    rightVec.normalize();
+    m_up = QVector3D::crossProduct(rightVec, viewDir).normalized();
 }
 
 void Camera3D::pan(float deltaX, float deltaY) {

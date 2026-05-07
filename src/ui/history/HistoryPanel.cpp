@@ -52,10 +52,8 @@ void HistoryPanel::setupUi() {
     panelLayout->setContentsMargins(12, 12, 12, 12);
     panelLayout->setSpacing(10);
 
-    panelLayout->addWidget(treeWidget_);
-
     mainLayout->addWidget(panel_);
-    treeWidget_ = new QTreeWidget;
+    treeWidget_ = new QTreeWidget(panel_);
     treeWidget_->setObjectName("NavigatorTree");
     treeWidget_->setHeaderHidden(true);
     treeWidget_->setIndentation(12);
@@ -75,8 +73,6 @@ void HistoryPanel::setupUi() {
             this, &HistoryPanel::onCustomContextMenu);
 
     panelLayout->addWidget(treeWidget_);
-
-    mainLayout->addWidget(panel_);
 
     setMinimumWidth(expandedWidth_);
     setMaximumWidth(expandedWidth_);
@@ -370,6 +366,7 @@ QString HistoryPanel::getOperationName(app::OperationType type) const {
         case app::OperationType::Chamfer: return "Chamfer";
         case app::OperationType::Shell: return "Shell";
         case app::OperationType::Boolean: return "Boolean";
+        case app::OperationType::LinearPattern: return "Linear Pattern";
         default: return "Operation";
     }
 }
@@ -418,6 +415,17 @@ QString HistoryPanel::getOperationDetails(const app::OperationRecord& op) const 
                 }
             }
             break;
+        case app::OperationType::LinearPattern:
+            if (std::holds_alternative<app::LinearPatternParams>(op.params)) {
+                const auto& p = std::get<app::LinearPatternParams>(op.params);
+                params = QString("%1x @ %2mm").arg(p.count).arg(p.spacing, 0, 'f', 1);
+            }
+            break;
+        case app::OperationType::CircularPattern:
+        case app::OperationType::Loft:
+        case app::OperationType::Sweep:
+        case app::OperationType::MirrorBody:
+            break;
     }
 
     return params;
@@ -427,6 +435,7 @@ QString HistoryPanel::operationIconPath(app::OperationType type) const {
     switch (type) {
         case app::OperationType::Extrude: return ":/icons/ic_extrude.svg";
         case app::OperationType::Revolve: return ":/icons/ic_revolve.svg";
+        case app::OperationType::LinearPattern: return ":/icons/ic_pattern_linear.svg";
         case app::OperationType::Fillet: return ":/icons/ic_fillet.svg";
         case app::OperationType::Chamfer: return ":/icons/ic_chamfer.svg";
         case app::OperationType::Shell: return ":/icons/ic_shell.svg";
@@ -437,7 +446,8 @@ QString HistoryPanel::operationIconPath(app::OperationType type) const {
 
 bool HistoryPanel::isEditableType(app::OperationType type) const {
     return type == app::OperationType::Extrude ||
-           type == app::OperationType::Revolve;
+           type == app::OperationType::Revolve ||
+           type == app::OperationType::LinearPattern;
 }
 
 bool HistoryPanel::isReplayOnly(const std::string& opId) const {

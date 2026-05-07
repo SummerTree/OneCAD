@@ -3,6 +3,7 @@
 
 #include "../../core/sketch/Sketch.h"
 #include "../../core/sketch/SketchRenderer.h"
+#include "../../render/Camera3D.h"
 #include "../theme/ThemeManager.h"
 
 #include <QMatrix4x4>
@@ -12,6 +13,7 @@
 #include <QVector3D>
 #include <QVector4D>
 
+#include <algorithm>
 #include <array>
 #include <cmath>
 #include <limits>
@@ -37,6 +39,22 @@ struct PlaneSelectionVisual {
     core::sketch::SketchPlane plane;
     QString label;
     QColor color;
+};
+
+struct SketchPlaneViewportInfo {
+    core::sketch::Viewport viewport;
+    QRectF bounds;
+    QRectF fallbackBounds;
+    QRectF frustumBounds;
+    bool hasFrustumBounds = false;
+    bool usesFrustumBounds = false;
+    float depthScale = 1.0f;
+};
+
+struct PlaneDepthRangeInfo {
+    bool hasIntersection = false;
+    float minDistance = std::numeric_limits<float>::max();
+    float maxDistance = 0.0f;
 };
 
 // Inline helpers
@@ -224,6 +242,166 @@ inline bool computePlaneBoundsOnPlane(const QMatrix4x4& viewProjection,
     *outBounds = QRectF(QPointF(minPoint.x(), minPoint.y()),
                         QPointF(maxPoint.x(), maxPoint.y())).normalized();
     return true;
+}
+
+inline PlaneDepthRangeInfo samplePerspectivePlaneDepthRange(
+    const QMatrix4x4& viewProjection,
+    const QVector3D& cameraPosition,
+    const QVector3D& planeOrigin,
+    const QVector3D& planeNormal) {
+
+    PlaneDepthRangeInfo info;
+    bool invertible = false;
+    const QMatrix4x4 inverse = viewProjection.inverted(&invertible);
+    if (!invertible) {
+        return info;
+    }
+
+    constexpr float kSamples[3] = {-1.0f, 0.0f, 1.0f};
+    constexpr float kEpsilon = 1e-6f;
+    QVector3D normalizedNormal = planeNormal;
+    if (normalizedNormal.lengthSquared() < 1e-8f) {
+        return info;
+    }
+    normalizedNormal.normalize();
+
+    for (float x : kSamples) {
+        for (float y : kSamples) {
+            const QVector4D nearPoint = inverse * QVector4D(x, y, -1.0f, 1.0f);
+            const QVector4D farPoint = inverse * QVector4D(x, y, 1.0f, 1.0f);
+            if (std::abs(nearPoint.w()) < kEpsilon || std::abs(farPoint.w()) < kEpsilon) {
+                continue;
+            }
+
+            const QVector3D nearWorld = nearPoint.toVector3D() / nearPoint.w();
+            const QVector3D farWorld = farPoint.toVector3D() / farPoint.w();
+            QVector3D rayDirection = farWorld - cameraPosition;
+            if (rayDirection.lengthSquared() < 1e-8f) {
+                rayDirection = farWorld - nearWorld;
+            }
+            if (rayDirection.lengthSquared() < 1e-8f) {
+                continue;
+            }
+            rayDirection.normalize();
+
+            const float denom = QVector3D::dotProduct(rayDirection, normalizedNormal);
+            if (std::abs(denom) < kEpsilon) {
+                continue;
+            }
+
+            const float t = QVector3D::dotProduct(planeOrigin - cameraPosition, normalizedNormal) / denom;
+            if (!std::isfinite(t) || t <= 0.0f) {
+                continue;
+            }
+
+            info.hasIntersection = true;
+            info.minDistance = std::min(info.minDistance, t);
+            info.maxDistance = std::max(info.maxDistance, t);
+        }
+    }
+
+    return info;
+}
+
+inline SketchPlaneViewportInfo buildSketchViewportForPlane(
+    const core::sketch::SketchPlane& plane,
+    const render::Camera3D& camera,
+    const QMatrix4x4& viewProjection,
+    int viewportWidth,
+    int viewportHeight,
+    qreal devicePixelRatio,
+    double pixelScale) {
+
+    SketchPlaneViewportInfo info;
+    if (viewportWidth <= 0 || viewportHeight <= 0) {
+        info.viewport.zoom = 1.0;
+        return info;
+    }
+
+    const double safePixelScale = (pixelScale > 0.0) ? pixelScale : 1.0;
+    const double safeDevicePixelRatio = (devicePixelRatio > 0.0) ? devicePixelRatio : 1.0;
+    const double maxDimension = static_cast<double>(qMax(viewportWidth, viewportHeight));
+    const double viewExtent = 0.5 * maxDimension * safeDevicePixelRatio * safePixelScale;
+
+    const PlaneAxes axes = buildPlaneAxes(plane);
+    const QVector3D planeOrigin(plane.origin.x, plane.origin.y, plane.origin.z);
+    const QVector3D cameraPosition = camera.position();
+    const QVector3D cameraTarget = camera.target();
+    const QVector3D cameraForward = camera.forward();
+    const float cameraDistance = camera.distance();
+
+    float planeDistance = cameraDistance;
+    QVector3D planeAnchorWorld = planeOrigin;
+    const bool hasPlaneHit = intersectRayWithPlane(cameraPosition,
+                                                   cameraForward,
+                                                   planeOrigin,
+                                                   axes.normal,
+                                                   &planeAnchorWorld,
+                                                   &planeDistance);
+    if (!hasPlaneHit) {
+        const float targetSignedDistance = QVector3D::dotProduct(cameraTarget - planeOrigin,
+                                                                 axes.normal);
+        planeAnchorWorld = cameraTarget - axes.normal * targetSignedDistance;
+    }
+
+    if (camera.projectionType() == render::Camera3D::ProjectionType::Perspective &&
+        cameraDistance > 1e-4f) {
+        info.depthScale = planeDistance / cameraDistance;
+    }
+    info.depthScale = std::clamp(info.depthScale, kGridDepthScaleMin, kGridDepthScaleMax);
+
+    const QVector2D planeAnchor = worldToPlaneCoords(planeAnchorWorld,
+                                                     planeOrigin,
+                                                     axes.xAxis,
+                                                     axes.yAxis);
+    const float viewHalf = static_cast<float>(viewExtent) * info.depthScale;
+    const core::sketch::Vec2d legacyCenter = plane.toSketch(
+        {cameraTarget.x(), cameraTarget.y(), cameraTarget.z()}
+    );
+    const QRectF legacyBounds(
+        QPointF(legacyCenter.x - static_cast<double>(viewportWidth) * safeDevicePixelRatio * safePixelScale * 0.5,
+                legacyCenter.y - static_cast<double>(viewportHeight) * safeDevicePixelRatio * safePixelScale * 0.5),
+        QPointF(legacyCenter.x + static_cast<double>(viewportWidth) * safeDevicePixelRatio * safePixelScale * 0.5,
+                legacyCenter.y + static_cast<double>(viewportHeight) * safeDevicePixelRatio * safePixelScale * 0.5)
+    );
+    info.fallbackBounds = QRectF(QPointF(planeAnchor.x() - viewHalf, planeAnchor.y() - viewHalf),
+                                 QPointF(planeAnchor.x() + viewHalf, planeAnchor.y() + viewHalf))
+                              .normalized();
+    info.bounds = info.fallbackBounds;
+
+    QRectF frustumBounds;
+    info.hasFrustumBounds = computePlaneBoundsOnPlane(viewProjection,
+                                                      planeOrigin,
+                                                      axes.normal,
+                                                      axes.xAxis,
+                                                      axes.yAxis,
+                                                      &frustumBounds);
+    if (info.hasFrustumBounds) {
+        info.frustumBounds = frustumBounds.normalized();
+
+        const float maxHalf = 0.5f * static_cast<float>(qMax(info.frustumBounds.width(),
+                                                             info.frustumBounds.height()));
+        const QVector2D frustumCenter(static_cast<float>(info.frustumBounds.center().x()),
+                                      static_cast<float>(info.frustumBounds.center().y()));
+        const float centerDistance = (frustumCenter - planeAnchor).length();
+        const float maxAllowed = viewHalf * kGridBoundsMaxScale;
+
+        if (maxHalf <= maxAllowed && centerDistance <= maxAllowed) {
+            info.usesFrustumBounds = true;
+            info.bounds = info.frustumBounds;
+        }
+    }
+    info.bounds = info.bounds.united(legacyBounds.normalized());
+
+    constexpr double kMinViewportSize = 1e-6;
+    info.viewport.center = {info.bounds.center().x(), info.bounds.center().y()};
+    info.viewport.size = {std::max(info.bounds.width(), kMinViewportSize),
+                          std::max(info.bounds.height(), kMinViewportSize)};
+
+    const double unitsPerPixelY =
+        info.viewport.size.y / (static_cast<double>(viewportHeight) * safeDevicePixelRatio);
+    info.viewport.zoom = unitsPerPixelY > 1e-9 ? 1.0 / unitsPerPixelY : 1.0;
+    return info;
 }
 
 inline std::array<PlaneSelectionVisual, 3> planeSelections(const ThemeViewportPlaneColors& colors) {

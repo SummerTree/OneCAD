@@ -307,6 +307,27 @@ void DependencyGraph::extractDependencies(const OperationRecord& op, FeatureNode
         const auto& p = std::get<BooleanParams>(op.params);
         node.inputBodyIds.insert(p.targetBodyId);
         node.inputBodyIds.insert(p.toolBodyId);
+    } else if (std::holds_alternative<LinearPatternParams>(op.params)) {
+        const auto& p = std::get<LinearPatternParams>(op.params);
+        if (!p.sourceBodyId.empty()) {
+            node.inputBodyIds.insert(p.sourceBodyId);
+        }
+    } else if (std::holds_alternative<CircularPatternParams>(op.params)) {
+        const auto& p = std::get<CircularPatternParams>(op.params);
+        if (!p.sourceBodyId.empty()) {
+            node.inputBodyIds.insert(p.sourceBodyId);
+        }
+    } else if (std::holds_alternative<SweepParams>(op.params)) {
+        const auto& p = std::get<SweepParams>(op.params);
+        if (!p.profileSketchId.empty()) {
+            node.inputSketchIds.insert(p.profileSketchId);
+        }
+        if (!p.pathSketchId.empty()) {
+            node.inputSketchIds.insert(p.pathSketchId);
+        }
+        if (!p.pathEdgeId.empty()) {
+            node.inputEdgeIds.insert(p.pathEdgeId);
+        }
     }
 }
 

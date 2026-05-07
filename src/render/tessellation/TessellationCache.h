@@ -34,6 +34,12 @@ public:
                                    const TopoDS_Shape& shape,
                                    kernel::elementmap::ElementMap& elementMap,
                                    const std::unordered_map<std::string, std::array<float, 4>>* faceColors = nullptr) const;
+    bool tryBuildMesh(const std::string& bodyId,
+                      const TopoDS_Shape& shape,
+                      kernel::elementmap::ElementMap& elementMap,
+                      SceneMeshStore::Mesh& meshOut,
+                      const std::unordered_map<std::string, std::array<float, 4>>* faceColors = nullptr,
+                      std::string* errorOut = nullptr) const;
 
 private:
     using VisibleEdgeSet = std::unordered_set<TopoDS_Edge, TopTools_ShapeMapHasher, TopTools_ShapeMapHasher>;

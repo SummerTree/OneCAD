@@ -104,6 +104,7 @@ void Viewport::beginPlaneSelection() {
     }
     setExtrudeToolActive(false);
     setRevolveToolActive(false);
+    setLinearPatternToolActive(false);
     setFilletToolActive(false);
     setShellToolActive(false);
     if (m_deepSelectPopup && m_deepSelectPopup->isVisible()) {
@@ -148,6 +149,7 @@ void Viewport::enterSketchMode(sketch::Sketch* sketch) {
     }
     setExtrudeToolActive(false);
     setRevolveToolActive(false);
+    setLinearPatternToolActive(false);
 
     m_activeSketch = sketch;
     m_activeSketchId.clear();
@@ -313,7 +315,7 @@ sketch::Vec2d Viewport::screenToSketchPlane(const QPoint& screenPos,
 
     float aspectRatio = static_cast<float>(m_width) / static_cast<float>(m_height);
     QMatrix4x4 view = m_camera->viewMatrix();
-    QMatrix4x4 projection = m_camera->projectionMatrix(aspectRatio);
+    QMatrix4x4 projection = buildProjectionMatrix(aspectRatio);
     QMatrix4x4 viewProj = projection * view;
     bool invertible = false;
     QMatrix4x4 invViewProj = viewProj.inverted(&invertible);
@@ -430,6 +432,21 @@ void Viewport::applySketchOverlayStateForSketch(const std::string& sketchId) {
     if (!m_sketchRenderer) {
         return;
     }
+
+    bool suppressRegionFill = false;
+    if (m_inSketchMode) {
+        suppressRegionFill =
+            (m_sketchInteractionState == SketchInteractionState::PointSingleDragging) ||
+            (m_sketchInteractionState == SketchInteractionState::PointGroupDragging) ||
+            (m_sketchInteractionState == SketchInteractionState::SketchMoving);
+        if (!suppressRegionFill && m_toolManager && m_toolManager->hasActiveTool()) {
+            auto* activeTool = m_toolManager->activeTool();
+            suppressRegionFill = activeTool && activeTool->isActive();
+        }
+    }
+
+    m_sketchRenderer->setRegionDisplayMode(sketch::RegionDisplayMode::HoverFirst);
+    m_sketchRenderer->setRegionFillSuppressed(suppressRegionFill);
 
     m_sketchRenderer->clearSelection();
     m_sketchRenderer->clearRegionSelection();
@@ -607,7 +624,7 @@ bool Viewport::buildScreenRay(const QPointF& screenPos,
     }
 
     const float aspectRatio = static_cast<float>(m_width) / static_cast<float>(m_height);
-    const QMatrix4x4 viewProjection = m_camera->projectionMatrix(aspectRatio) * m_camera->viewMatrix();
+    const QMatrix4x4 viewProjection = buildProjectionMatrix(aspectRatio) * m_camera->viewMatrix();
     bool invertible = false;
     const QMatrix4x4 inverse = viewProjection.inverted(&invertible);
     if (!invertible) {
@@ -719,7 +736,7 @@ bool Viewport::pickPlaneSelection(const QPoint& screenPos, int* outIndex) const 
 
     float aspectRatio = static_cast<float>(m_width) / static_cast<float>(m_height);
     QMatrix4x4 view = m_camera->viewMatrix();
-    QMatrix4x4 projection = m_camera->projectionMatrix(aspectRatio);
+    QMatrix4x4 projection = buildProjectionMatrix(aspectRatio);
     QMatrix4x4 viewProjection = projection * view;
 
     bool invertible = false;

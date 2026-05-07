@@ -104,9 +104,21 @@ struct SketchRenderStyle {
     float gapLength = 3.0f;
 
     // Region fill opacity
-    float regionOpacity = 0.1f;
-    float regionHoverOpacity = 0.3f;
-    float regionSelectedOpacity = 0.5f;
+    float regionOpacity = 0.0f;
+    float regionHoverOpacity = 0.22f;
+    float regionSelectedOpacity = 0.34f;
+};
+
+enum class RegionDisplayMode {
+    HoverFirst,
+    AssistAll
+};
+
+struct RegionPickHit {
+    std::string id;
+    double area = 0.0;
+    int containmentDepth = 0;
+    bool hasHoles = false;
 };
 
 /**
@@ -317,6 +329,21 @@ public:
      * @brief Find region at position (sketch coordinates)
      */
     std::optional<std::string> pickRegion(const Vec2d& sketchPos) const;
+
+    /**
+     * @brief Find all region candidates at position ordered by pick priority.
+     */
+    std::vector<RegionPickHit> pickRegionCandidates(const Vec2d& sketchPos) const;
+
+    /**
+     * @brief Get cached metadata for a region.
+     */
+    std::optional<RegionPickHit> getRegionPickHit(const std::string& regionId) const;
+
+    void setRegionDisplayMode(RegionDisplayMode mode);
+    RegionDisplayMode regionDisplayMode() const { return regionDisplayMode_; }
+    void setRegionFillSuppressed(bool suppressed);
+    bool isRegionFillSuppressed() const { return suppressRegionFill_; }
 
     /**
      * @brief Set hovered region
@@ -576,10 +603,13 @@ private:
         Vec2d boundsMin{0.0, 0.0};
         Vec2d boundsMax{0.0, 0.0};
         double area = 0.0;
+        int containmentDepth = 0;
     };
     std::vector<RegionRenderData> regionRenderData_;
     std::unordered_set<std::string> selectedRegions_;
     std::optional<std::string> hoverRegion_;
+    RegionDisplayMode regionDisplayMode_ = RegionDisplayMode::HoverFirst;
+    bool suppressRegionFill_ = false;
 
     // DOF indicator
     int currentDOF_ = 0;

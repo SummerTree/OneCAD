@@ -29,6 +29,7 @@ class ExtrudeTool;
 class RevolveTool;
 class FilletChamferTool;
 class ShellTool;
+class LinearPatternTool;
 
 class ModelingToolManager : public QObject {
     Q_OBJECT
@@ -47,6 +48,7 @@ public:
     void activateRevolve(const app::selection::SelectionItem& selection);
     void activateFillet(const app::selection::SelectionItem& selection);
     void activateShell(const app::selection::SelectionItem& selection);
+    void activateLinearPattern(const app::selection::SelectionItem& selection);
     void cancelActiveTool();
 
     // Pass selection changes to active tool (needed for Revolve's Axis selection)
@@ -55,6 +57,7 @@ public:
     bool toggleFilletMode();
     bool toggleShellOpenFace(const app::selection::SelectionItem& selection);
     bool confirmShellFaceSelection();
+    bool confirmLinearPattern();
     std::optional<std::string> activeShellBodyId() const;
 
     bool handleMousePress(const QPoint& screenPos, Qt::MouseButton button);
@@ -70,6 +73,7 @@ private:
     std::unique_ptr<RevolveTool> revolveTool_;
     std::unique_ptr<FilletChamferTool> filletTool_;
     std::unique_ptr<ShellTool> shellTool_;
+    std::unique_ptr<LinearPatternTool> linearPatternTool_;
     ModelingTool* activeTool_ = nullptr;
     app::selection::SelectionKey activeSelection_{};
 };

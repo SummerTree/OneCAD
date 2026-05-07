@@ -87,13 +87,14 @@ PickResult SketchPickerAdapter::pick(const core::sketch::SketchRenderer& rendere
     }
 
     if (options.allowRegions) {
-        auto region = renderer.pickRegion(sketchPos);
-        if (region.has_value()) {
+        const auto regions = renderer.pickRegionCandidates(sketchPos);
+        for (size_t i = 0; i < regions.size(); ++i) {
+            const auto& region = regions[i];
             SelectionItem item;
             item.kind = SelectionKind::SketchRegion;
-            item.id = {sketchIdStr, *region};
+            item.id = {sketchIdStr, region.id};
             item.priority = 2;
-            item.screenDistance = 0.0;
+            item.screenDistance = static_cast<double>(i) * 0.5;
             result.hits.push_back(item);
         }
     }

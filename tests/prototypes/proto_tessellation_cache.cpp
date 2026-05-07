@@ -1,7 +1,12 @@
 #include "app/document/Document.h"
+#include "render/tessellation/TessellationCache.h"
 
+#include <BRepBuilderAPI_MakeVertex.hxx>
 #include <BRepPrimAPI_MakeBox.hxx>
 #include <BRepPrimAPI_MakeCylinder.hxx>
+#include <TopAbs_ShapeEnum.hxx>
+#include <TopExp_Explorer.hxx>
+#include <gp_Pnt.hxx>
 #include <QCoreApplication>
 #include <exception>
 #include <iostream>
@@ -84,6 +89,60 @@ int main(int argc, char** argv) {
     if (groupCount != 3) {
         std::cerr << "Expected 3 face groups for cylinder (top, bottom, side), got "
                   << groupCount << ".\n";
+        return 1;
+    }
+
+    onecad::render::TessellationCache tessellator;
+    onecad::render::SceneMeshStore::Mesh badMesh;
+    onecad::kernel::elementmap::ElementMap badMap;
+    std::string error;
+    TopoDS_Shape vertexShape = BRepBuilderAPI_MakeVertex(gp_Pnt(0.0, 0.0, 0.0)).Shape();
+    if (tessellator.tryBuildMesh("bad", vertexShape, badMap, badMesh, nullptr, &error)) {
+        std::cerr << "Vertex tessellation unexpectedly succeeded.\n";
+        return 1;
+    }
+    if (error.empty()) {
+        std::cerr << "Tessellation failure did not report an error.\n";
+        return 1;
+    }
+
+    const auto* originalMesh = store.findMesh(bodyId);
+    if (!originalMesh) {
+        std::cerr << "Original mesh missing before rollback test.\n";
+        return 1;
+    }
+    const std::size_t originalTriangles = originalMesh->triangles.size();
+    if (document.updateBodyShape(bodyId, vertexShape)) {
+        std::cerr << "Document accepted non-tessellatable body update.\n";
+        return 1;
+    }
+    const auto* restoredMesh = store.findMesh(bodyId);
+    if (!restoredMesh || restoredMesh->triangles.size() != originalTriangles) {
+        std::cerr << "Failed tessellation update did not preserve old mesh.\n";
+        return 1;
+    }
+    const TopoDS_Shape* restoredShape = document.getBodyShape(bodyId);
+    if (!restoredShape || restoredShape->IsNull()) {
+        std::cerr << "Failed tessellation update did not preserve old shape.\n";
+        return 1;
+    }
+    TopExp_Explorer restoredFaceExp(*restoredShape, TopAbs_FACE);
+    if (!restoredFaceExp.More()) {
+        std::cerr << "Restored shape has no face for ElementMap rollback check.\n";
+        return 1;
+    }
+    const auto restoredFaceIds = document.elementMap().findIdsByShape(restoredFaceExp.Current());
+    if (restoredFaceIds.empty()) {
+        std::cerr << "Failed tessellation update did not restore ElementMap face bindings.\n";
+        return 1;
+    }
+    const auto* restoredFaceEntry = document.elementMap().find(restoredFaceIds.front());
+    if (!restoredFaceEntry || restoredFaceEntry->shape.IsNull()) {
+        std::cerr << "Restored ElementMap face entry has no bound shape.\n";
+        return 1;
+    }
+    if (!document.addBody(vertexShape).empty()) {
+        std::cerr << "Document accepted non-tessellatable body add.\n";
         return 1;
     }
 

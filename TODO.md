@@ -94,3 +94,10 @@
 - [x] AppImage packaging (.desktop file + CMake install rules)
 - [x] PlatformPaths utility (QStandardPaths-based cross-platform paths)
 - [x] Linux apt deps in Makefile (apt-get install for Qt6/OCCT/Eigen3/GL)
+
+## Active: MVP Stabilization Commit Slices
+
+- [ ] Slice 1: Kernel target + moved topology/modeling helpers
+- [ ] Slice 2: Document/regeneration/tessellation rollback safety
+- [ ] Slice 3: Selection/topology promotion + viewport picking regressions
+- [ ] Slice 4: Beginner MVP UI gating + Sketch→Extrude→Edit stabilization

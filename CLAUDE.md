@@ -5,7 +5,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Build & Run
 
 ```bash
-make init              # Install deps (macOS/Homebrew) + configure CMake
+make init              # Install deps (macOS/Homebrew or Linux/apt) + configure CMake
 make run               # Build + run
 make test              # Build + run 3 core prototype tests (elementmap, tnaming, custom_map)
 
@@ -35,11 +35,15 @@ src/
 │   └── selection/     # SelectionManager (sketch/model modes, deep select)
 ├── core/
 │   ├── sketch/        # Entities, tools, solver, constraints, SnapManager, AutoConstrainer
-│   ├── modeling/      # CoplanarFacePatch, FaceExtrudeProfileBuilder, EdgeChainer, BooleanOperation
+│   ├── modeling/      # BooleanOperation (real); other headers are forwarding shims to src/kernel/
 │   └── loop/          # LoopDetector (region detection from closed sketch loops)
-├── kernel/            # OCCT wrappers, ElementMap (topological naming)
-├── render/            # Camera3D, Grid3D, OpenGL 4.1 Core, SketchRenderer
-├── ui/                # Qt6 widgets: Viewport, ContextToolbar, ViewCube, ModelNavigator
+├── kernel/
+│   ├── elementmap/    # ElementMap (topological naming) — see src/kernel/AGENTS.md
+│   ├── geometry/      # EdgeChainer (tangent-continuous chain expansion)
+│   ├── modeling/      # FaceExtrudeProfileBuilder
+│   └── topology/      # CoplanarFacePatch, FacePatchResolver, SelectionTopologyResolver, TopologyVisibility
+├── render/            # Camera3D, Grid3D, OpenGL 4.1 Core, SketchRenderer, TessellationCache
+├── ui/                # Qt6 widgets: Viewport, ContextToolbar, ViewCube, ModelNavigator, tools/ (Extrude/Revolve/Fillet/Shell/LinearPattern/Measure)
 └── io/                # Package (ZIP/Directory), HistoryIO (JSONL), DocumentIO, SketchIO, ElementMapIO
 tests/                 # ~27 standalone prototype executables for regression testing
 ```
@@ -49,7 +53,7 @@ tests/                 # ~27 standalone prototype executables for regression tes
 **Document & History** (`src/app/`):
 
 - `Document` is the central QObject storing sketches (UUID map), bodies (TopoDS_Shape), and operations (`OperationRecord` vector)
-- `OperationRecord`: opId, type (Extrude/Revolve/Fillet/Chamfer/Shell/Boolean), input (`std::variant`: SketchRegionRef/FaceRef/BodyRef), params (`std::variant` of typed params), resultBodyIds
+- `OperationRecord`: opId, type (Extrude/Revolve/Fillet/Chamfer/Shell/Boolean/LinearPattern), input (`std::variant`: SketchRegionRef/FaceRef/BodyRef), params (`std::variant` of typed params), resultBodyIds
 - `DependencyGraph`: forward/backward adjacency, Kahn's topological sort, suppression propagation, failure tracking
 - `RegenerationEngine`: replays operations in topo-sorted order → produces bodies. Supports `regenerateAll()`, `regenerateFrom(opId)`, `previewFrom(opId, newParams)`
 - `KernelScheduler`: single-writer background thread for non-blocking regeneration
@@ -62,20 +66,23 @@ tests/                 # ~27 standalone prototype executables for regression tes
 - Rollback = suppress downstream ops without deletion (maintains dependency links)
 - Applied op count tracks insertion cursor (≤ total ops; ops beyond cursor are drafts)
 
-**Topological Naming** (`src/kernel/ElementMap`):
+**Topological Naming** (`src/kernel/elementmap/`):
 
 - Persistent, deterministic IDs for faces/edges/vertices across regeneration
 - ID scheme: `"bodyId/kind-reason-opId-hash-ordinal"`
-- Descriptor-based matching: center distance, size, surface/curve type, normal/tangent, adjacency hash
-- **Regression-sensitive**: descriptor hashing order changes can remap IDs; validate with golden comparisons
+- Descriptor (14 fields) matching: center, size, magnitude, surface/curve type, normal/tangent, adjacency hash; quantization 1e-6, FNV-1a hashing
+- **Regression-sensitive**: changing quantization, hash seeds, or descriptor field order remaps IDs — see `src/kernel/AGENTS.md` and run `proto_elementmap_rigorous` before commit
+- Not thread-safe; serialize access. Normalize TopoDS to `TopAbs_FORWARD` before reverse-binding lookup
 
-**Modeling** (`src/core/modeling/`):
+**Modeling** (split between `src/kernel/` and `src/core/modeling/`):
 
-- `CoplanarFacePatch`: extracts connected coplanar faces (normal dot 0.9999, plane dist 1e-3)
-- `FaceExtrudeProfileBuilder`: merges coplanar patch into single extrude profile
-- `FacePatchResolver`: bridges ElementMap IDs ↔ coplanar patches
-- `EdgeChainer`: builds tangent-continuous edge chains for fillet/chamfer auto-expansion
-- `BooleanOperation`: perform + detectMode (NewBody/Add/Cut/Intersect)
+- `CoplanarFacePatch` (`kernel/topology/`): extracts connected coplanar faces (normal dot 0.9999, plane dist 1e-3)
+- `FaceExtrudeProfileBuilder` (`kernel/modeling/`): merges coplanar patch into single extrude profile
+- `FacePatchResolver` (`kernel/topology/`): bridges ElementMap IDs ↔ coplanar patches
+- `SelectionTopologyResolver` (`kernel/topology/`): resolves picks to ElementMap IDs with promotion rules
+- `EdgeChainer` (`kernel/geometry/`): builds tangent-continuous edge chains for fillet/chamfer auto-expansion
+- `BooleanOperation` (`core/modeling/`): perform + detectMode (NewBody/Add/Cut/Intersect)
+- Headers in `src/core/modeling/` (except `BooleanOperation.h`) are thin forwarding shims to `src/kernel/` — edit the kernel originals
 
 **Selection** (`src/app/selection/`):
 
@@ -111,7 +118,8 @@ tests/                 # ~27 standalone prototype executables for regression tes
 - **Sketch coordinate system**: Non-standard mapping for XY plane:
   - Sketch X → World Y+ (0,1,0), Sketch Y → World X- (-1,0,0), Normal → World Z+ (0,0,1)
   - See `SketchPlane::XY()` in `src/core/sketch/Sketch.h`
-- **OCCT**: Always null-check `Handle<>` objects before dereferencing shapes
+- **OCCT**: Always null-check `Handle<>` before use. Check `IsDone()` on builders (BRepBuilderAPI, BRepAlgoAPI) before calling `Shape()`
+- **OpenGL 4.1 Core**: No fixed-function pipeline. Always pair bind/unbind (VAO, VBO, shader). Call `makeCurrent()` before GL ops. GL context is single-threaded
 - **Qt signals**: Queued for cross-thread, Direct for same-thread. Ensure parent ownership
 - **Boolean target resolution**: priority chain: explicit param → FaceRef.bodyId → sketch host body
 - **Applied op count** is distinct from total op count — allows draft ops beyond cursor
@@ -132,16 +140,32 @@ tests/                 # ~27 standalone prototype executables for regression tes
 
 ## Testing
 
-~27 prototype executables in `tests/`. Key groups:
+~27 prototype executables in `tests/`. No test framework — each is a standalone binary with assert-style checks.
 
-- **ElementMap/OCCT**: proto_custom_map, proto_tnaming, proto_elementmap_rigorous
-- **Sketch**: proto_sketch_geometry, proto_sketch_constraints, proto_sketch_snap, proto_sketch_solver, proto_sketch_group_drag, proto_sketch_drag_undo
-- **History/Regen**: proto_regeneration, proto_history_io_compat, proto_document_roundtrip_compat, proto_timeline_rollback_dirty
-- **Viewport/Selection**: proto_model_picker, proto_viewport_drag_state, proto_pickmesh_integration, proto_pick_topology_promotion
+```bash
+cmake --build build --target <name> && ./build/tests/<name>   # Build + run single
+make test                                                      # Core 3 (elementmap, tnaming, custom_map)
+ctest --test-dir build                                         # Run all registered tests
+```
 
-Build single: `cmake --build build --target <name>`
-Run single: `./build/tests/<name>`
-Run core 3: `make test`
+**Which test for which change:**
+
+| Changed subsystem   | Run these                                                    |
+| ------------------- | ------------------------------------------------------------ |
+| Kernel / ElementMap | `proto_elementmap_rigorous` (required before commit)         |
+| Sketch entities     | `proto_sketch_geometry`                                      |
+| Constraints         | `proto_sketch_constraints`                                   |
+| Solver              | `proto_sketch_solver`                                        |
+| Loop / region       | `proto_loop_detector`, `proto_face_builder`                  |
+| History / regen     | `proto_regeneration`                                         |
+| I/O                 | `proto_history_io_compat`, `proto_document_roundtrip_compat` |
+| UI compile check    | `test_compile`                                               |
+| Full pipeline       | `proto_regeneration`                                         |
+
+**Adding a new prototype:**
+
+1. Create `tests/prototypes/proto_<name>.cpp`
+2. In `tests/CMakeLists.txt`: `add_executable`, `target_link_libraries(... PRIVATE onecad_core)`, `target_include_directories`, `add_test`
 
 ## Troubleshooting
 

@@ -496,7 +496,7 @@ void ViewCube::mouseMoveEvent(QMouseEvent* event) {
         if (m_isDragging) {
             QPoint delta = event->pos() - m_lastMousePos;
             if (m_camera) {
-                m_camera->orbit(delta.x() * 0.5f, delta.y() * 0.5f);
+                m_camera->orbit(-delta.x() * 0.5f, delta.y() * 0.5f);
                 emit viewChanged();
                 update();
             }

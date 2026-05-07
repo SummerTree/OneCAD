@@ -1,7 +1,7 @@
 #include "FacePatchResolver.h"
 
-#include <TopExp_Explorer.hxx>
 #include <TopAbs_ShapeEnum.hxx>
+#include <TopExp_Explorer.hxx>
 #include <TopoDS.hxx>
 
 #include <algorithm>
