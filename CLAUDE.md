@@ -7,7 +7,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ```bash
 make init              # Install deps (macOS/Homebrew or Linux/apt) + configure CMake
 make run               # Build + run
-make test              # Build + run 3 core prototype tests (elementmap, tnaming, custom_map)
+make test              # Build + run 3 core prototype tests (proto_custom_map, proto_tnaming, proto_elementmap_rigorous)
 
 # Build + run a single test
 cmake --build build --target proto_regeneration && ./build/tests/proto_regeneration
@@ -94,6 +94,7 @@ tests/                 # ~27 standalone prototype executables for regression tes
 - `Package` abstraction: `ZipPackage` (.onecad) / `DirectoryPackage` (.onecadpkg, Git-friendly)
 - File format: manifest.json, document.json, history/ops.jsonl, history/state.json, elementmap, sketches/
 - `HistoryIO`: JSONL format (one op per line)
+- `io/step/`: `StepImporter` / `StepExporter` (OCCT STEP interchange); `io/mesh/`: `StlExporter`, `ObjExporter` (mesh export)
 
 ### Data Flow
 
@@ -129,6 +130,7 @@ tests/                 # ~27 standalone prototype executables for regression tes
 - `SPECIFICATION.md` - Full software spec (3500+ lines)
 - `SKETCH_IMPLEMENTATION_PLAN.md` - 7-phase roadmap
 - `PHASES.md` - Development phases overview
+- Per-subsystem `AGENTS.md` files in `src/kernel/`, `src/core/`, `src/render/`, `src/ui/` (read the kernel one before touching ElementMap). Note: the **root `AGENTS.md` is stale** — it claims 3D modeling/feature history/STEP I/O are unimplemented, which is no longer true; trust this file over it.
 
 ## Code Standards
 
@@ -140,7 +142,7 @@ tests/                 # ~27 standalone prototype executables for regression tes
 
 ## Testing
 
-~27 prototype executables in `tests/`. No test framework — each is a standalone binary with assert-style checks.
+~31 prototype executables in `tests/prototypes/`. No test framework — each is a standalone binary with assert-style checks.
 
 ```bash
 cmake --build build --target <name> && ./build/tests/<name>   # Build + run single

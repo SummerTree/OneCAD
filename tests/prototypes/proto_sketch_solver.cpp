@@ -140,6 +140,31 @@ void testPointOnCurveSolverTranslation() {
     assert(result.success);
 }
 
+void testNewConstraintTranslations() {
+    Sketch sketch;
+    auto p1 = sketch.addPoint(0.0, 0.0);
+    auto p2 = sketch.addPoint(7.0, -3.0);
+    auto axisA = sketch.addPoint(0.0, -5.0);
+    auto axisB = sketch.addPoint(0.0, 5.0);
+    auto axis = sketch.addLine(axisA, axisB);
+    assert(!sketch.addHorizontalDistance(p1, p2, 7.0).empty());
+    assert(!sketch.addVerticalDistance(p1, p2, -3.0).empty());
+
+    auto c1 = sketch.addPoint(20.0, 0.0);
+    auto c2 = sketch.addPoint(20.0, 0.0);
+    auto circle = sketch.addCircle(c1, 3.0);
+    auto arc = sketch.addArc(c2, 4.0, 0.0, std::numbers::pi_v<double>);
+    assert(!sketch.addDiameter(circle, 6.0).empty());
+    assert(!sketch.addConcentric(circle, arc).empty());
+
+    auto sp1 = sketch.addPoint(-2.0, 1.0);
+    auto sp2 = sketch.addPoint(2.0, 1.0);
+    assert(!sketch.addSymmetric(sp1, sp2, axis).empty());
+
+    SolveResult result = sketch.solve();
+    assert(result.success);
+}
+
 } // namespace
 
 int main() {
@@ -306,6 +331,7 @@ int main() {
     testCoincidentFixedDrag();
     testFixedPointDragNoMovement();
     testPointOnCurveSolverTranslation();
+    testNewConstraintTranslations();
 
     Sketch largeDrag;
     auto ld1 = largeDrag.addPoint(0.0, 0.0);

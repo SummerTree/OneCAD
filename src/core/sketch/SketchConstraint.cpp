@@ -24,8 +24,13 @@ void registerBuiltins() {
         ConstraintFactory::registerType<constraints::TangentConstraint>("Tangent");
         ConstraintFactory::registerType<constraints::EqualConstraint>("Equal");
         ConstraintFactory::registerType<constraints::DistanceConstraint>("Distance");
+        ConstraintFactory::registerType<constraints::HorizontalDistanceConstraint>("HorizontalDistance");
+        ConstraintFactory::registerType<constraints::VerticalDistanceConstraint>("VerticalDistance");
         ConstraintFactory::registerType<constraints::AngleConstraint>("Angle");
         ConstraintFactory::registerType<constraints::RadiusConstraint>("Radius");
+        ConstraintFactory::registerType<constraints::DiameterConstraint>("Diameter");
+        ConstraintFactory::registerType<constraints::ConcentricConstraint>("Concentric");
+        ConstraintFactory::registerType<constraints::SymmetricConstraint>("Symmetric");
         ConstraintFactory::registerType<constraints::FixedConstraint>("Fixed");
         ConstraintFactory::registerType<constraints::MidpointConstraint>("Midpoint");
         ConstraintFactory::registerType<constraints::PointOnCurveConstraint>("PointOnCurve");

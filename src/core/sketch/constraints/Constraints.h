@@ -375,6 +375,72 @@ private:
 };
 
 /**
+ * @brief Signed horizontal distance between two points (x2 - x1)
+ */
+class HorizontalDistanceConstraint : public DimensionalConstraint {
+public:
+    HorizontalDistanceConstraint(const EntityID& point1, const EntityID& point2, double distance);
+
+    ConstraintType type() const override { return ConstraintType::HorizontalDistance; }
+    std::string typeName() const override { return "HorizontalDistance"; }
+    std::string toString() const override;
+    std::string units() const override { return "mm"; }
+
+    std::vector<EntityID> referencedEntities() const override;
+    int degreesRemoved() const override { return 1; }
+
+    bool isSatisfied(const Sketch& sketch, double tolerance) const override;
+    double getError(const Sketch& sketch) const override;
+
+    void serialize(QJsonObject& json) const override;
+    bool deserialize(const QJsonObject& json) override;
+    gp_Pnt2d getIconPosition(const Sketch& sketch) const override;
+    gp_Pnt2d getDimensionTextPosition(const Sketch& sketch) const override;
+
+    const EntityID& point1() const { return m_point1; }
+    const EntityID& point2() const { return m_point2; }
+
+private:
+    friend class onecad::core::sketch::ConstraintFactory;
+    HorizontalDistanceConstraint() : DimensionalConstraint(0.0) {}
+    EntityID m_point1;
+    EntityID m_point2;
+};
+
+/**
+ * @brief Signed vertical distance between two points (y2 - y1)
+ */
+class VerticalDistanceConstraint : public DimensionalConstraint {
+public:
+    VerticalDistanceConstraint(const EntityID& point1, const EntityID& point2, double distance);
+
+    ConstraintType type() const override { return ConstraintType::VerticalDistance; }
+    std::string typeName() const override { return "VerticalDistance"; }
+    std::string toString() const override;
+    std::string units() const override { return "mm"; }
+
+    std::vector<EntityID> referencedEntities() const override;
+    int degreesRemoved() const override { return 1; }
+
+    bool isSatisfied(const Sketch& sketch, double tolerance) const override;
+    double getError(const Sketch& sketch) const override;
+
+    void serialize(QJsonObject& json) const override;
+    bool deserialize(const QJsonObject& json) override;
+    gp_Pnt2d getIconPosition(const Sketch& sketch) const override;
+    gp_Pnt2d getDimensionTextPosition(const Sketch& sketch) const override;
+
+    const EntityID& point1() const { return m_point1; }
+    const EntityID& point2() const { return m_point2; }
+
+private:
+    friend class onecad::core::sketch::ConstraintFactory;
+    VerticalDistanceConstraint() : DimensionalConstraint(0.0) {}
+    EntityID m_point1;
+    EntityID m_point2;
+};
+
+/**
  * @brief Angle constraint - fixes angle between two lines
  *
  * DOF removed: 1
@@ -517,6 +583,39 @@ private:
     ConcentricConstraint() = default;
     EntityID m_entity1;
     EntityID m_entity2;
+};
+
+/**
+ * @brief Symmetric constraint - keeps two points mirrored about an axis line
+ */
+class SymmetricConstraint : public SketchConstraint {
+public:
+    SymmetricConstraint(const EntityID& point1, const EntityID& point2, const EntityID& axisLine);
+
+    ConstraintType type() const override { return ConstraintType::Symmetric; }
+    std::string typeName() const override { return "Symmetric"; }
+    std::string toString() const override { return "Symmetric"; }
+
+    std::vector<EntityID> referencedEntities() const override;
+    int degreesRemoved() const override { return 2; }
+
+    bool isSatisfied(const Sketch& sketch, double tolerance) const override;
+    double getError(const Sketch& sketch) const override;
+
+    void serialize(QJsonObject& json) const override;
+    bool deserialize(const QJsonObject& json) override;
+    gp_Pnt2d getIconPosition(const Sketch& sketch) const override;
+
+    const EntityID& point1() const { return m_point1; }
+    const EntityID& point2() const { return m_point2; }
+    const EntityID& axisLine() const { return m_axisLine; }
+
+private:
+    friend class onecad::core::sketch::ConstraintFactory;
+    SymmetricConstraint() = default;
+    EntityID m_point1;
+    EntityID m_point2;
+    EntityID m_axisLine;
 };
 
 /**

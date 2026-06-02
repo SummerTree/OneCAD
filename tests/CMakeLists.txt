@@ -53,6 +53,13 @@ target_link_libraries(proto_sketch_solver
     onecad_core
 )
 
+# Sketch Trim Prototype
+add_executable(proto_sketch_trim prototypes/proto_sketch_trim.cpp)
+target_link_libraries(proto_sketch_trim
+    PRIVATE
+    onecad_core
+)
+
 # Sketch constraint applicability prototype
 add_executable(proto_sketch_constraint_applicability prototypes/proto_sketch_constraint_applicability.cpp)
 target_link_libraries(proto_sketch_constraint_applicability
@@ -336,6 +343,7 @@ add_test(NAME proto_sketch_geometry COMMAND proto_sketch_geometry)
 add_test(NAME proto_sketch_constraints COMMAND proto_sketch_constraints)
 add_test(NAME proto_sketch_snap COMMAND proto_sketch_snap)
 add_test(NAME proto_sketch_solver COMMAND proto_sketch_solver)
+add_test(NAME proto_sketch_trim COMMAND proto_sketch_trim)
 add_test(NAME proto_sketch_constraint_applicability COMMAND proto_sketch_constraint_applicability)
 add_test(NAME proto_sketch_group_drag COMMAND proto_sketch_group_drag)
 add_test(NAME proto_sketch_drag_undo COMMAND proto_sketch_drag_undo)

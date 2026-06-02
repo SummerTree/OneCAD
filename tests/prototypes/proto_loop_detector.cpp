@@ -77,6 +77,22 @@ int main() {
         assert(!result.faces.empty());
     }
 
+    {
+        sketch::Sketch sketch;
+        auto center = sketch.addPoint(0.0, 0.0);
+        auto ellipse = sketch.addEllipse(center, 6.0, 3.0, 0.25);
+        assert(!ellipse.empty());
+
+        loop::LoopDetectorConfig config;
+        config.planarizeIntersections = true;
+        loop::LoopDetector detector(config);
+        auto result = detector.detect(sketch);
+
+        assert(result.success);
+        assert(result.faces.size() == 1);
+        assert(result.faces.front().outerLoop.area() > 50.0);
+    }
+
     std::cout << "Loop detector prototype: OK" << std::endl;
     return 0;
 }

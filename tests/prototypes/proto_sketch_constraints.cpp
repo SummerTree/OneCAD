@@ -78,6 +78,15 @@ int main() {
     RadiusConstraint radius(circle, 5.0);
     assert(radius.isSatisfied(sketch, 1e-6));
 
+    DiameterConstraint diameter(circle, 10.0);
+    assert(diameter.isSatisfied(sketch, 1e-6));
+
+    HorizontalDistanceConstraint hDistance(p1, p2, 1.0);
+    assert(hDistance.isSatisfied(sketch, 1e-6));
+
+    VerticalDistanceConstraint vDistance(p1, p2, 0.0);
+    assert(vDistance.isSatisfied(sketch, 1e-6));
+
     auto onLinePoint = sketch.addPoint(2.5, 2.0);
     assert(!sketch.addPointOnCurve(onLinePoint, hLine).empty());
 
@@ -98,8 +107,17 @@ int main() {
     auto onCirclePoint = sketch.addPoint(5.0, 0.0);
     assert(!sketch.addPointOnCurve(onCirclePoint, circle).empty());
 
-    assert(sketch.addConstraint(std::make_unique<DiameterConstraint>(circle, 10.0)).empty());
-    assert(sketch.addConstraint(std::make_unique<ConcentricConstraint>(circle, arc)).empty());
+    assert(!sketch.addConstraint(std::make_unique<DiameterConstraint>(circle, 10.0)).empty());
+    assert(!sketch.addConstraint(std::make_unique<ConcentricConstraint>(circle, arc)).empty());
+
+    auto symA = sketch.addPoint(-1.0, 0.0);
+    auto symB = sketch.addPoint(1.0, 0.0);
+    auto axisStart = sketch.addPoint(0.0, -2.0);
+    auto axisEnd = sketch.addPoint(0.0, 2.0);
+    auto axis = sketch.addLine(axisStart, axisEnd);
+    SymmetricConstraint symmetric(symA, symB, axis);
+    assert(symmetric.isSatisfied(sketch, 1e-6));
+    assert(!sketch.addSymmetric(symA, symB, axis).empty());
 
     QJsonObject json;
     distance.serialize(json);

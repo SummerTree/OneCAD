@@ -5,6 +5,7 @@
 #include "../sketch/Sketch.h"
 #include "../sketch/SketchArc.h"
 #include "../sketch/SketchCircle.h"
+#include "../sketch/SketchEllipse.h"
 #include "../sketch/SketchLine.h"
 #include "../sketch/SketchPoint.h"
 
@@ -210,8 +211,8 @@ std::vector<sk::Vec2d> tessellateArcPoints(const sk::Vec2d& center,
 }
 
 std::vector<sk::Vec2d> tessellateCirclePoints(const sk::Vec2d& center,
-                                              double radius,
-                                              const LoopDetectorConfig& config) {
+                                               double radius,
+                                               const LoopDetectorConfig& config) {
     std::vector<sk::Vec2d> points;
     int segments = computeCircleSegments(radius, config);
     points.reserve(static_cast<size_t>(segments) + 1);
@@ -219,6 +220,28 @@ std::vector<sk::Vec2d> tessellateCirclePoints(const sk::Vec2d& center,
         double angle = (2.0 * std::numbers::pi_v<double> * i) / static_cast<double>(segments);
         points.push_back({center.x + radius * std::cos(angle),
                           center.y + radius * std::sin(angle)});
+    }
+    return points;
+}
+
+std::vector<sk::Vec2d> tessellateEllipsePoints(const sk::Vec2d& center,
+                                               double majorRadius,
+                                               double minorRadius,
+                                               double rotation,
+                                               const LoopDetectorConfig& config) {
+    std::vector<sk::Vec2d> points;
+    const double radiusForTolerance = std::max(std::abs(majorRadius), std::abs(minorRadius));
+    int segments = computeCircleSegments(radiusForTolerance, config);
+    points.reserve(static_cast<size_t>(segments) + 1);
+
+    const double cosR = std::cos(rotation);
+    const double sinR = std::sin(rotation);
+    for (int i = 0; i <= segments; ++i) {
+        double angle = (2.0 * std::numbers::pi_v<double> * i) / static_cast<double>(segments);
+        double localX = majorRadius * std::cos(angle);
+        double localY = minorRadius * std::sin(angle);
+        points.push_back({center.x + localX * cosR - localY * sinR,
+                          center.y + localX * sinR + localY * cosR});
     }
     return points;
 }
@@ -414,27 +437,27 @@ LoopDetectionResult LoopDetector::detect(const sk::Sketch& sketch,
             if (!selection.empty() && selection.find(entity->id()) == selection.end()) {
                 continue;
             }
-            if (entity->type() != sk::EntityType::Circle) {
+            if (entity->type() != sk::EntityType::Circle && entity->type() != sk::EntityType::Ellipse) {
                 continue;
             }
             if (edgesInLoops.find(entity->id()) != edgesInLoops.end()) {
                 continue;
             }
 
-            Loop circleLoop;
-            circleLoop.wire.edges.push_back(entity->id());
-            circleLoop.wire.forward.push_back(true);
-            circleLoop.wire.startPoint = entity->id();
-            circleLoop.wire.endPoint = entity->id();
-            computeLoopProperties(circleLoop, sketch);
+            Loop closedCurveLoop;
+            closedCurveLoop.wire.edges.push_back(entity->id());
+            closedCurveLoop.wire.forward.push_back(true);
+            closedCurveLoop.wire.startPoint = entity->id();
+            closedCurveLoop.wire.endPoint = entity->id();
+            computeLoopProperties(closedCurveLoop, sketch);
 
-            if (config_.validate && !validateLoop(circleLoop, sketch)) {
+            if (config_.validate && !validateLoop(closedCurveLoop, sketch)) {
                 if (!config_.findAllLoops) {
                     continue;
                 }
             }
 
-            loops.push_back(circleLoop);
+            loops.push_back(closedCurveLoop);
             edgesInLoops.insert(entity->id());
         }
     }
@@ -825,6 +848,25 @@ std::unique_ptr<AdjacencyGraph> LoopDetector::buildGraph(
                 }
                 segments.push_back({points[i], points[i + 1],
                                     circle->id() + "#seg" + std::to_string(i)});
+            }
+        } else if (entity->type() == sk::EntityType::Ellipse) {
+            auto* ellipse = dynamic_cast<const sk::SketchEllipse*>(entity.get());
+            if (!ellipse) {
+                continue;
+            }
+            auto* centerPoint = sketch.getEntityAs<sk::SketchPoint>(ellipse->centerPointId());
+            if (!centerPoint) {
+                continue;
+            }
+            sk::Vec2d centerPos = toVec2(centerPoint->position());
+            auto points = tessellateEllipsePoints(centerPos, ellipse->majorRadius(), ellipse->minorRadius(),
+                                                  ellipse->rotation(), config_);
+            for (size_t i = 0; i + 1 < points.size(); ++i) {
+                if (distanceSquared(points[i], points[i + 1]) <= tolerance * tolerance) {
+                    continue;
+                }
+                segments.push_back({points[i], points[i + 1],
+                                    ellipse->id() + "#seg" + std::to_string(i)});
             }
         }
     }
@@ -1230,6 +1272,20 @@ void LoopDetector::computeLoopProperties(Loop& loop, const sk::Sketch& sketch) c
                 loop.polygon.push_back({centerPos.x + circle->radius() * std::cos(angle),
                                         centerPos.y + circle->radius() * std::sin(angle)});
             }
+            hasCurrent = true;
+        } else if (entity->type() == sk::EntityType::Ellipse) {
+            auto* ellipse = sketch.getEntityAs<sk::SketchEllipse>(edgeId);
+            if (!ellipse) {
+                continue;
+            }
+            auto* centerPoint = sketch.getEntityAs<sk::SketchPoint>(ellipse->centerPointId());
+            if (!centerPoint) {
+                continue;
+            }
+            sk::Vec2d centerPos = toVec2(centerPoint->position());
+            auto points = tessellateEllipsePoints(centerPos, ellipse->majorRadius(), ellipse->minorRadius(),
+                                                  ellipse->rotation(), config_);
+            loop.polygon.insert(loop.polygon.end(), points.begin(), points.end());
             hasCurrent = true;
         }
     }

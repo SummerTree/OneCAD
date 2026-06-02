@@ -25,9 +25,19 @@ DimensionEditor::DimensionEditor(QWidget* parent)
 }
 
 void DimensionEditor::showForConstraint(const QString& constraintId, double currentValue,
-                                         const QString& units, const QPoint& screenPos) {
+                                          const QString& units, const QPoint& screenPos) {
     showEditorWithPolicy(Mode::Constraint,
                          ValidationPolicy::PositiveOnly,
+                         constraintId,
+                         currentValue,
+                         units,
+                          screenPos);
+}
+
+void DimensionEditor::showForSignedConstraint(const QString& constraintId, double currentValue,
+                                              const QString& units, const QPoint& screenPos) {
+    showEditorWithPolicy(Mode::Constraint,
+                         ValidationPolicy::AnyFinite,
                          constraintId,
                          currentValue,
                          units,

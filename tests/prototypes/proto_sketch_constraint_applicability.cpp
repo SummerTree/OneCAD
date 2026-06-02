@@ -32,11 +32,19 @@ int main() {
     const auto line2 = sketch.addLine(p3, p4);
     const auto circleCenter = sketch.addPoint(5.0, 5.0);
     const auto circle = sketch.addCircle(circleCenter, 2.5);
+    const auto arcCenter = sketch.addPoint(12.0, 5.0);
+    const auto arc = sketch.addArc(arcCenter, 2.5, 0.0, 1.0);
     const auto ellipseCenter = sketch.addPoint(20.0, 5.0);
     const auto ellipse = sketch.addEllipse(ellipseCenter, 5.0, 2.0);
 
     assert(!p1.empty() && !p2.empty() && !line.empty());
-    assert(!line2.empty() && !circle.empty() && !ellipse.empty());
+    assert(!line2.empty() && !circle.empty() && !arc.empty() && !ellipse.empty());
+
+    auto pointPoint = onecad::ui::evaluateConstraintApplicability(
+        &sketch,
+        {selection(SelectionKind::SketchPoint, p1), selection(SelectionKind::SketchPoint, p2)});
+    assert(pointPoint.isApplicable(ConstraintType::HorizontalDistance));
+    assert(pointPoint.isApplicable(ConstraintType::VerticalDistance));
 
     auto pointLine = onecad::ui::evaluateConstraintApplicability(
         &sketch,
@@ -63,6 +71,11 @@ int main() {
     assert(!lineCircle.isApplicable(ConstraintType::Distance));
     assert(!lineCircle.hasApplicableConstraints());
 
+    auto circleArc = onecad::ui::evaluateConstraintApplicability(
+        &sketch,
+        {selection(SelectionKind::SketchEdge, circle), selection(SelectionKind::SketchEdge, arc)});
+    assert(circleArc.isApplicable(ConstraintType::Concentric));
+
     auto lineLine = onecad::ui::evaluateConstraintApplicability(
         &sketch,
         {selection(SelectionKind::SketchEdge, line), selection(SelectionKind::SketchEdge, line2)});
@@ -70,6 +83,13 @@ int main() {
     assert(lineLine.isApplicable(ConstraintType::Parallel));
     assert(lineLine.isApplicable(ConstraintType::Perpendicular));
     assert(lineLine.isApplicable(ConstraintType::Angle));
+
+    auto symmetric = onecad::ui::evaluateConstraintApplicability(
+        &sketch,
+        {selection(SelectionKind::SketchPoint, p1),
+         selection(SelectionKind::SketchPoint, p3),
+         selection(SelectionKind::SketchEdge, line2)});
+    assert(symmetric.isApplicable(ConstraintType::Symmetric));
 
     std::cout << "Sketch constraint applicability prototype: OK" << std::endl;
     return 0;

@@ -1039,6 +1039,28 @@ bool ConstraintSolver::translateConstraint(SketchConstraint* constraint, int tag
         return false;
     }
 
+    if (auto* horizontalDistance = dynamic_cast<HorizontalDistanceConstraint*>(constraint)) {
+        auto* p1 = getPoint(horizontalDistance->point1());
+        auto* p2 = getPoint(horizontalDistance->point2());
+        if (!p1 || !p2) {
+            return false;
+        }
+        gcsSystem_->addConstraintDifference(coordPtr(p1, 1), coordPtr(p2, 1),
+                                            horizontalDistance->valuePtr(), tagId, true);
+        return true;
+    }
+
+    if (auto* verticalDistance = dynamic_cast<VerticalDistanceConstraint*>(constraint)) {
+        auto* p1 = getPoint(verticalDistance->point1());
+        auto* p2 = getPoint(verticalDistance->point2());
+        if (!p1 || !p2) {
+            return false;
+        }
+        gcsSystem_->addConstraintDifference(coordPtr(p1, 2), coordPtr(p2, 2),
+                                            verticalDistance->valuePtr(), tagId, true);
+        return true;
+    }
+
     if (auto* angle = dynamic_cast<AngleConstraint*>(constraint)) {
         auto* line1 = getLine(angle->line1());
         auto* line2 = getLine(angle->line2());
@@ -1083,6 +1105,55 @@ bool ConstraintSolver::translateConstraint(SketchConstraint* constraint, int tag
         }
 
         return false;
+    }
+
+    if (auto* diameter = dynamic_cast<DiameterConstraint*>(constraint)) {
+        auto* circle = getCircle(diameter->entityId());
+        if (circle) {
+            SketchPoint* center = nullptr;
+            if (!circleCenter(pointsById_, circle, center)) {
+                return false;
+            }
+            GCS::Circle circleObj = makeCircle(center, circle);
+            gcsSystem_->addConstraintCircleDiameter(circleObj, diameter->valuePtr(), tagId, true);
+            return true;
+        }
+
+        auto* arc = getArc(diameter->entityId());
+        if (arc) {
+            SketchPoint* center = nullptr;
+            if (!arcCenter(pointsById_, arc, center)) {
+                return false;
+            }
+            GCS::Arc arcObj = makeArc(center, arc);
+            gcsSystem_->addConstraintArcDiameter(arcObj, diameter->valuePtr(), tagId, true);
+            return true;
+        }
+
+        return false;
+    }
+
+    if (auto* concentric = dynamic_cast<ConcentricConstraint*>(constraint)) {
+        auto centerPointFor = [&](const EntityID& entityId) -> SketchPoint* {
+            SketchPoint* center = nullptr;
+            if (auto* circle = getCircle(entityId)) {
+                return circleCenter(pointsById_, circle, center) ? center : nullptr;
+            }
+            if (auto* arc = getArc(entityId)) {
+                return arcCenter(pointsById_, arc, center) ? center : nullptr;
+            }
+            return nullptr;
+        };
+
+        auto* c1 = centerPointFor(concentric->entity1());
+        auto* c2 = centerPointFor(concentric->entity2());
+        if (!c1 || !c2) {
+            return false;
+        }
+        auto gp1 = makePoint(c1);
+        auto gp2 = makePoint(c2);
+        gcsSystem_->addConstraintP2PCoincident(gp1, gp2, tagId, true);
+        return true;
     }
 
     if (auto* tangent = dynamic_cast<TangentConstraint*>(constraint)) {
@@ -1300,6 +1371,25 @@ bool ConstraintSolver::translateConstraint(SketchConstraint* constraint, int tag
         // Midpoint = point on line AND on perpendicular bisector
         gcsSystem_->addConstraintPointOnLine(gp, gcsLine, tagId, true);
         gcsSystem_->addConstraintPointOnPerpBisector(gp, gcsLine, tagId, true);
+        return true;
+    }
+
+    if (auto* symmetric = dynamic_cast<SymmetricConstraint*>(constraint)) {
+        auto* p1 = getPoint(symmetric->point1());
+        auto* p2 = getPoint(symmetric->point2());
+        auto* axis = getLine(symmetric->axisLine());
+        if (!p1 || !p2 || !axis) {
+            return false;
+        }
+        SketchPoint* axisStart = nullptr;
+        SketchPoint* axisEnd = nullptr;
+        if (!lineEndpoints(pointsById_, axis, axisStart, axisEnd)) {
+            return false;
+        }
+        auto gp1 = makePoint(p1);
+        auto gp2 = makePoint(p2);
+        GCS::Line axisLine = makeLine(axisStart, axisEnd);
+        gcsSystem_->addConstraintP2PSymmetric(gp1, gp2, axisLine, tagId, true);
         return true;
     }
 

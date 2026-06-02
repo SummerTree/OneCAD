@@ -2269,6 +2269,24 @@ void MainWindow::onConstraintRequested(core::sketch::ConstraintType constraintTy
             }
             break;
 
+        case CT::HorizontalDistance:
+            if (selected.size() == 2) {
+                constraintId = sketch->addHorizontalDistance(selected[0], selected[1], kDefaultDistanceMm);
+            } else {
+                m_toolStatus->setText(tr("Horizontal Distance requires exactly 2 points"));
+                return;
+            }
+            break;
+
+        case CT::VerticalDistance:
+            if (selected.size() == 2) {
+                constraintId = sketch->addVerticalDistance(selected[0], selected[1], kDefaultDistanceMm);
+            } else {
+                m_toolStatus->setText(tr("Vertical Distance requires exactly 2 points"));
+                return;
+            }
+            break;
+
         case CT::Angle:
             if (selected.size() == 2) {
                 constraintId = sketch->addAngle(selected[0], selected[1], kDefaultAngleDeg);
@@ -2286,6 +2304,56 @@ void MainWindow::onConstraintRequested(core::sketch::ConstraintType constraintTy
                 return;
             }
             break;
+
+        case CT::Diameter:
+            if (selected.size() == 1) {
+                constraintId = sketch->addDiameter(selected[0], kDefaultRadiusMm * 2.0);
+            } else {
+                m_toolStatus->setText(tr("Diameter requires exactly 1 circle or arc"));
+                return;
+            }
+            break;
+
+        case CT::Concentric:
+            if (selected.size() == 2) {
+                constraintId = sketch->addConcentric(selected[0], selected[1]);
+            } else {
+                m_toolStatus->setText(tr("Concentric requires exactly 2 arcs/circles"));
+                return;
+            }
+            break;
+
+        case CT::Symmetric: {
+            core::sketch::EntityID point1;
+            core::sketch::EntityID point2;
+            core::sketch::EntityID axisLine;
+            for (const auto& id : selected) {
+                auto* entity = sketch->getEntity(id);
+                if (!entity) continue;
+                if (entity->type() == core::sketch::EntityType::Point) {
+                    if (point1.empty()) {
+                        point1 = id;
+                    } else if (point2.empty()) {
+                        point2 = id;
+                    } else {
+                        m_toolStatus->setText(tr("Symmetric requires exactly 2 points"));
+                        return;
+                    }
+                } else if (entity->type() == core::sketch::EntityType::Line) {
+                    if (!axisLine.empty()) {
+                        m_toolStatus->setText(tr("Symmetric requires exactly 1 axis line"));
+                        return;
+                    }
+                    axisLine = id;
+                }
+            }
+            if (point1.empty() || point2.empty() || axisLine.empty()) {
+                m_toolStatus->setText(tr("Symmetric requires 2 points and 1 axis line"));
+                return;
+            }
+            constraintId = sketch->addSymmetric(point1, point2, axisLine);
+            break;
+        }
 
         case CT::OnCurve: {
             // Need exactly 1 point and 1 curve
@@ -2332,6 +2400,7 @@ void MainWindow::onConstraintRequested(core::sketch::ConstraintType constraintTy
         auto result = sketch->solve();
         if (result.success) {
             renderer->updateGeometry();
+            renderer->setConflictingConstraints(sketch->getConflictingConstraints());
             renderer->updateConstraints();
             m_viewport->notifySketchUpdated();
             m_viewport->update();
@@ -2341,6 +2410,8 @@ void MainWindow::onConstraintRequested(core::sketch::ConstraintType constraintTy
             m_toolStatus->setText(tr("Constraint applied - solver failed (over-constrained or conflicting)"));
             // Note: constraint was still added to sketch, just not solved
             // Could optionally remove the constraint here if desired
+            renderer->setConflictingConstraints(sketch->getConflictingConstraints());
+            renderer->updateConstraints();
         }
     } else {
         if (type == CT::Fixed && selected.size() == 1) {

@@ -138,6 +138,7 @@ void Viewport::updateSketchRenderingState() {
     int dof = m_activeSketch->getDegreesOfFreedom();
     bool overConstrained = m_activeSketch->isOverConstrained();
     m_sketchRenderer->setDOF(overConstrained ? -1 : dof);
+    m_sketchRenderer->setConflictingConstraints(m_activeSketch->getConflictingConstraints());
     m_sketchRenderer->updateConstraints();
 }
 

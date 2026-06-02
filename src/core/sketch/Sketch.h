@@ -340,9 +340,34 @@ public:
     ConstraintID addDistance(EntityID entity1, EntityID entity2, double distance);
 
     /**
+     * @brief Add signed horizontal distance constraint between two points (x2 - x1).
+     */
+    ConstraintID addHorizontalDistance(EntityID point1, EntityID point2, double distance);
+
+    /**
+     * @brief Add signed vertical distance constraint between two points (y2 - y1).
+     */
+    ConstraintID addVerticalDistance(EntityID point1, EntityID point2, double distance);
+
+    /**
      * @brief Add radius constraint to arc or circle
      */
     ConstraintID addRadius(EntityID arcOrCircle, double radius);
+
+    /**
+     * @brief Add diameter constraint to arc or circle
+     */
+    ConstraintID addDiameter(EntityID arcOrCircle, double diameter);
+
+    /**
+     * @brief Add concentric constraint between two arcs/circles
+     */
+    ConstraintID addConcentric(EntityID entity1, EntityID entity2);
+
+    /**
+     * @brief Add symmetric constraint for two points about an axis line
+     */
+    ConstraintID addSymmetric(EntityID point1, EntityID point2, EntityID axisLine);
 
     /**
      * @brief Add angle constraint between two lines
@@ -589,6 +614,7 @@ private:
     // Solver (PlaneGCS wrapper)
     std::unique_ptr<ConstraintSolver> solver_;
     bool solverDirty_ = true;  // Needs rebuild if true
+    std::vector<ConstraintID> lastConflictingConstraints_;
 
     // Cached DOF calculation
     mutable int cachedDOF_ = -1;

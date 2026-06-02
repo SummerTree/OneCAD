@@ -82,9 +82,11 @@ void SketchModePanel::setupUi() {
         {CT::Parallel, QString::fromUtf8("\u2225"), tr("Parallel"), "P"},
         {CT::Perpendicular, QString::fromUtf8("\u22A5"), tr("Perpendicular"), "N"},
         {CT::Tangent, QString::fromUtf8("\u25CB"), tr("Tangent"), "T"},
+        {CT::Concentric, QString::fromUtf8("\u25CE"), tr("Concentric"), ""},
         {CT::Coincident, QString::fromUtf8("\u25CF"), tr("Coincident"), "C"},
         {CT::Equal, QString::fromUtf8("="), tr("Equal"), "E"},
         {CT::Midpoint, QString::fromUtf8("\u22C2"), tr("Midpoint"), "M"},
+        {CT::Symmetric, QString::fromUtf8("\u2016"), tr("Symmetric"), ""},
         {CT::OnCurve, QString::fromUtf8("\u25CB\u2192"), tr("Point On Curve"), ""},
     };
 
@@ -114,8 +116,11 @@ void SketchModePanel::setupUi() {
 
     std::vector<std::tuple<CT, QString, QString, QString>> dimensionalConstraints = {
         {CT::Distance, QString::fromUtf8("\u2194"), tr("Distance"), "D"},
+        {CT::HorizontalDistance, QString::fromUtf8("\u2194"), tr("H-Distance"), ""},
+        {CT::VerticalDistance, QString::fromUtf8("\u2195"), tr("V-Distance"), ""},
         {CT::Angle, QString::fromUtf8("\u2220"), tr("Angle"), "A"},
         {CT::Radius, QString::fromUtf8("R"), tr("Radius"), "R"},
+        {CT::Diameter, QString::fromUtf8("\u2300"), tr("Diameter"), ""},
     };
 
     for (const auto& [type, icon, name, shortcut] : dimensionalConstraints) {

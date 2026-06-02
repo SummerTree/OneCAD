@@ -5,8 +5,8 @@
 #include <BRepBndLib.hxx>
 #include <BRepCheck_Analyzer.hxx>
 #include <Bnd_Box.hxx>
-#include <TopExp_Explorer.hxx>
 #include <TopoDS_Wire.hxx>
+#include <TopExp_Explorer.hxx>
 
 #include <cassert>
 #include <cmath>
@@ -128,6 +128,27 @@ int main() {
         assert(nearlyEqual(xmax, 0.0));
         assert(nearlyEqual(ymin, 0.0));
         assert(nearlyEqual(ymax, 10.0));
+    }
+
+    {
+        sketch::Sketch sketch;
+        auto center = sketch.addPoint(0.0, 0.0);
+        auto ellipse = sketch.addEllipse(center, 6.0, 3.0, 0.25);
+        assert(!ellipse.empty());
+
+        loop::LoopDetectorConfig config;
+        config.planarizeIntersections = true;
+        loop::LoopDetector detector(config);
+        auto loops = detector.detect(sketch);
+        assert(loops.success);
+        assert(loops.faces.size() == 1);
+
+        loop::FaceBuilder builder;
+        auto results = builder.buildAllFaces(loops, sketch);
+        assert(results.size() == 1);
+        assert(results[0].success);
+        assert(BRepCheck_Analyzer(results[0].face).IsValid());
+        assert(countWires(results[0].face) == 1);
     }
 
     std::cout << "Face builder prototype: OK" << std::endl;

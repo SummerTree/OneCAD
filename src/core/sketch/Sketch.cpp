@@ -63,6 +63,10 @@ bool isTangentPairSupported(EntityType first, EntityType second) {
            (firstCircular && secondCircular);
 }
 
+bool isCircularCurve(EntityType type) {
+    return type == EntityType::Arc || type == EntityType::Circle;
+}
+
 std::optional<std::string> firstUnsupportedConstraint(const Sketch& sketch) {
     for (const auto& constraint : sketch.getAllConstraints()) {
         if (!constraint) {
@@ -687,16 +691,55 @@ ConstraintSupportResult Sketch::validateConstraintSupport(const SketchConstraint
             return {};
         }
 
-        case ConstraintType::Concentric:
-            return unsupportedConstraint("Concentric constraint is not implemented yet");
-        case ConstraintType::Diameter:
-            return unsupportedConstraint("Diameter constraint is not implemented yet; use Radius");
-        case ConstraintType::HorizontalDistance:
-            return unsupportedConstraint("Horizontal Distance constraint is not implemented yet");
-        case ConstraintType::VerticalDistance:
-            return unsupportedConstraint("Vertical Distance constraint is not implemented yet");
-        case ConstraintType::Symmetric:
-            return unsupportedConstraint("Symmetric constraint is not implemented yet");
+        case ConstraintType::Concentric: {
+            const auto* c = dynamic_cast<const ConcentricConstraint*>(&constraint);
+            if (!c) {
+                return unsupportedConstraint("Concentric constraint implementation missing");
+            }
+            const auto first = entityType(c->entity1());
+            const auto second = entityType(c->entity2());
+            if (!first.has_value() || !second.has_value() ||
+                !isCircularCurve(*first) || !isCircularCurve(*second)) {
+                return unsupportedConstraint("Concentric requires two arcs/circles");
+            }
+            return {};
+        }
+        case ConstraintType::Diameter: {
+            const auto* c = dynamic_cast<const DiameterConstraint*>(&constraint);
+            std::optional<EntityType> type;
+            if (c) {
+                type = entityType(c->entityId());
+            }
+            if (!type.has_value() || !isCircularCurve(*type)) {
+                return unsupportedConstraint("Diameter requires an arc or circle");
+            }
+            return {};
+        }
+        case ConstraintType::HorizontalDistance: {
+            const auto* c = dynamic_cast<const HorizontalDistanceConstraint*>(&constraint);
+            if (!c || !hasType(*this, c->point1(), EntityType::Point) ||
+                !hasType(*this, c->point2(), EntityType::Point)) {
+                return unsupportedConstraint("Horizontal Distance requires two points");
+            }
+            return {};
+        }
+        case ConstraintType::VerticalDistance: {
+            const auto* c = dynamic_cast<const VerticalDistanceConstraint*>(&constraint);
+            if (!c || !hasType(*this, c->point1(), EntityType::Point) ||
+                !hasType(*this, c->point2(), EntityType::Point)) {
+                return unsupportedConstraint("Vertical Distance requires two points");
+            }
+            return {};
+        }
+        case ConstraintType::Symmetric: {
+            const auto* c = dynamic_cast<const SymmetricConstraint*>(&constraint);
+            if (!c || !hasType(*this, c->point1(), EntityType::Point) ||
+                !hasType(*this, c->point2(), EntityType::Point) ||
+                !hasType(*this, c->axisLine(), EntityType::Line)) {
+                return unsupportedConstraint("Symmetric requires two points and an axis line");
+            }
+            return {};
+        }
     }
 
     return unsupportedConstraint("Unknown constraint type");
@@ -819,11 +862,49 @@ ConstraintID Sketch::addDistance(EntityID entity1, EntityID entity2, double dist
     return addConstraint(std::make_unique<constraints::DistanceConstraint>(entity1, entity2, distance));
 }
 
+ConstraintID Sketch::addHorizontalDistance(EntityID point1, EntityID point2, double distance) {
+    if (!getEntityAs<SketchPoint>(point1) || !getEntityAs<SketchPoint>(point2)) {
+        return {};
+    }
+    return addConstraint(std::make_unique<constraints::HorizontalDistanceConstraint>(point1, point2, distance));
+}
+
+ConstraintID Sketch::addVerticalDistance(EntityID point1, EntityID point2, double distance) {
+    if (!getEntityAs<SketchPoint>(point1) || !getEntityAs<SketchPoint>(point2)) {
+        return {};
+    }
+    return addConstraint(std::make_unique<constraints::VerticalDistanceConstraint>(point1, point2, distance));
+}
+
 ConstraintID Sketch::addRadius(EntityID arcOrCircle, double radius) {
     if (!getEntityAs<SketchArc>(arcOrCircle) && !getEntityAs<SketchCircle>(arcOrCircle)) {
         return {};
     }
     return addConstraint(std::make_unique<constraints::RadiusConstraint>(arcOrCircle, radius));
+}
+
+ConstraintID Sketch::addDiameter(EntityID arcOrCircle, double diameter) {
+    if (!getEntityAs<SketchArc>(arcOrCircle) && !getEntityAs<SketchCircle>(arcOrCircle)) {
+        return {};
+    }
+    return addConstraint(std::make_unique<constraints::DiameterConstraint>(arcOrCircle, diameter));
+}
+
+ConstraintID Sketch::addConcentric(EntityID entity1, EntityID entity2) {
+    const auto* first = getEntity(entity1);
+    const auto* second = getEntity(entity2);
+    if (!first || !second || !isCircularCurve(first->type()) || !isCircularCurve(second->type())) {
+        return {};
+    }
+    return addConstraint(std::make_unique<constraints::ConcentricConstraint>(entity1, entity2));
+}
+
+ConstraintID Sketch::addSymmetric(EntityID point1, EntityID point2, EntityID axisLine) {
+    if (!getEntityAs<SketchPoint>(point1) || !getEntityAs<SketchPoint>(point2) ||
+        !getEntityAs<SketchLine>(axisLine)) {
+        return {};
+    }
+    return addConstraint(std::make_unique<constraints::SymmetricConstraint>(point1, point2, axisLine));
 }
 
 ConstraintID Sketch::addAngle(EntityID line1, EntityID line2, double angleDegrees) {
@@ -1125,11 +1206,13 @@ SolveResult Sketch::solve() {
     SolveResult result;
 
     if (constraints_.empty()) {
+        lastConflictingConstraints_.clear();
         result.success = true;
         return result;
     }
 
     if (const auto unsupported = firstUnsupportedConstraint(*this)) {
+        lastConflictingConstraints_.clear();
         result.success = false;
         result.errorMessage = *unsupported;
         qCWarning(logSketchEngine) << "solve:unsupported-constraint"
@@ -1152,6 +1235,7 @@ SolveResult Sketch::solve() {
     result.iterations = solverResult.iterations;
     result.residual = solverResult.residual;
     result.conflictingConstraints = solverResult.conflictingConstraints;
+    lastConflictingConstraints_ = solverResult.conflictingConstraints;
     result.errorMessage = solverResult.errorMessage;
     return result;
 }
@@ -1333,6 +1417,7 @@ SolveResult Sketch::solveWithGroupDrag(
     }
 
     if (constraints_.empty()) {
+        lastConflictingConstraints_.clear();
         for (const auto& [pointId, rigidTarget] : rigidTargets) {
             auto* point = getEntityAs<SketchPoint>(pointId);
             if (!point) {
@@ -1369,6 +1454,7 @@ SolveResult Sketch::solveWithGroupDrag(
     result.iterations = solverResult.iterations;
     result.residual = solverResult.residual;
     result.conflictingConstraints = solverResult.conflictingConstraints;
+    lastConflictingConstraints_ = solverResult.conflictingConstraints;
     result.errorMessage = solverResult.errorMessage;
 
     if (result.success) {
@@ -1418,6 +1504,7 @@ SolveResult Sketch::solveWithDrag(EntityID draggedPoint, const Vec2d& targetPos)
     }
 
     if (constraints_.empty()) {
+        lastConflictingConstraints_.clear();
         point->setPosition(targetPos.x, targetPos.y);
         result.success = true;
         return result;
@@ -1453,6 +1540,7 @@ SolveResult Sketch::solveWithDrag(EntityID draggedPoint, const Vec2d& targetPos)
     result.iterations = solverResult.iterations;
     result.residual = solverResult.residual;
     result.conflictingConstraints = solverResult.conflictingConstraints;
+    lastConflictingConstraints_ = solverResult.conflictingConstraints;
     result.errorMessage = solverResult.errorMessage;
 
     if (isDraggingPoint_ && !result.success) {
@@ -1505,7 +1593,7 @@ bool Sketch::isOverConstrained() const {
 }
 
 std::vector<ConstraintID> Sketch::getConflictingConstraints() const {
-    return {};
+    return lastConflictingConstraints_;
 }
 
 ValidationResult Sketch::validate() const {
@@ -1948,6 +2036,7 @@ std::vector<EntityID> Sketch::findInRect(const Vec2d& min, const Vec2d& max) con
 void Sketch::invalidateSolver() {
     solverDirty_ = true;
     dofDirty_ = true;
+    lastConflictingConstraints_.clear();
     qCDebug(logSketchEngine) << "invalidateSolver"
                              << "entityCount=" << entities_.size()
                              << "constraintCount=" << constraints_.size();

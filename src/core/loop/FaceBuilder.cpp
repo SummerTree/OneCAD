@@ -6,6 +6,7 @@
 
 #include "../sketch/SketchArc.h"
 #include "../sketch/SketchCircle.h"
+#include "../sketch/SketchEllipse.h"
 #include "../sketch/SketchLine.h"
 #include "../sketch/SketchPoint.h"
 
@@ -17,12 +18,14 @@
 #include <GC_MakeCircle.hxx>
 #include <GC_MakeSegment.hxx>
 #include <Geom_Circle.hxx>
+#include <Geom_Ellipse.hxx>
 #include <Geom_TrimmedCurve.hxx>
 #include <ShapeFix_Wire.hxx>
 #include <TopoDS.hxx>
 #include <gp_Ax2.hxx>
 #include <gp_Ax3.hxx>
 #include <gp_Circ.hxx>
+#include <gp_Elips.hxx>
 
 #include <algorithm>
 #include <cmath>
@@ -62,6 +65,33 @@ bool normalize(sk::Vec3d& v) {
     v.y /= len;
     v.z /= len;
     return true;
+}
+
+sk::EntityID baseEdgeId(const sk::EntityID& entityId) {
+    const size_t splitPos = entityId.find("#seg");
+    if (splitPos == std::string::npos) {
+        return entityId;
+    }
+    return entityId.substr(0, splitPos);
+}
+
+std::optional<sk::EntityID> singleClosedCurveBaseId(const Loop& loop, const sk::Sketch& sketch) {
+    if (loop.wire.edges.empty()) {
+        return std::nullopt;
+    }
+
+    const sk::EntityID baseId = baseEdgeId(loop.wire.edges.front());
+    const auto* entity = sketch.getEntity(baseId);
+    if (!entity || (entity->type() != sk::EntityType::Circle && entity->type() != sk::EntityType::Ellipse)) {
+        return std::nullopt;
+    }
+
+    for (const auto& edgeId : loop.wire.edges) {
+        if (baseEdgeId(edgeId) != baseId) {
+            return std::nullopt;
+        }
+    }
+    return baseId;
 }
 
 sk::Vec3d pickPerpendicular(const sk::Vec3d& n) {
@@ -292,7 +322,49 @@ std::optional<TopoDS_Edge> FaceBuilder::createEdge(const sk::EntityID& entityId,
                     return std::nullopt;
                 }
 
-                return edgeMaker.Edge();
+                TopoDS_Edge edge = edgeMaker.Edge();
+                if (!forward) {
+                    edge.Reverse();
+                }
+                return edge;
+            }
+
+            case sk::EntityType::Ellipse: {
+                auto* ellipse = sketch.getEntityAs<sk::SketchEllipse>(entityId);
+                if (!ellipse) return std::nullopt;
+
+                auto* centerPt = sketch.getEntityAs<sk::SketchPoint>(ellipse->centerPointId());
+                if (!centerPt) return std::nullopt;
+
+                gp_Pnt center = toGpPnt(centerPt->x(), centerPt->y(), plane);
+                const gp_Ax3& ax3 = plane.Position();
+                const gp_Dir& normal = plane.Axis().Direction();
+                const gp_Dir& xDir = ax3.XDirection();
+                const gp_Dir& yDir = ax3.YDirection();
+                const double cosR = std::cos(ellipse->rotation());
+                const double sinR = std::sin(ellipse->rotation());
+                gp_Dir majorDir(xDir.X() * cosR + yDir.X() * sinR,
+                                xDir.Y() * cosR + yDir.Y() * sinR,
+                                xDir.Z() * cosR + yDir.Z() * sinR);
+
+                gp_Ax2 ellipseAxis(center, normal, majorDir);
+                gp_Elips gelips(ellipseAxis, ellipse->majorRadius(), ellipse->minorRadius());
+
+                Handle(Geom_Ellipse) geomEllipse = new Geom_Ellipse(gelips);
+                if (geomEllipse.IsNull()) {
+                    return std::nullopt;
+                }
+
+                BRepBuilderAPI_MakeEdge edgeMaker(geomEllipse);
+                if (!edgeMaker.IsDone()) {
+                    return std::nullopt;
+                }
+
+                TopoDS_Edge edge = edgeMaker.Edge();
+                if (!forward) {
+                    edge.Reverse();
+                }
+                return edge;
             }
 
             default:
@@ -332,7 +404,18 @@ WireBuildResult FaceBuilder::buildWire(const Loop& loop, const sk::Sketch& sketc
     try {
         BRepBuilderAPI_MakeWire wireMaker;
 
-        if (canUseEntities) {
+        if (auto closedBaseId = singleClosedCurveBaseId(loop, sketch)) {
+            auto edge = createEdge(*closedBaseId, sketch, plane, loop.signedArea >= 0.0);
+            if (!edge.has_value()) {
+                result.errorMessage = "Failed to create edge for entity: " + *closedBaseId;
+                return result;
+            }
+            wireMaker.Add(edge.value());
+            if (wireMaker.Error() != BRepBuilderAPI_WireDone) {
+                result.warnings.push_back(
+                    std::string("Wire build reported: ") + wireErrorToString(wireMaker.Error()));
+            }
+        } else if (canUseEntities) {
             for (size_t i = 0; i < loop.wire.edges.size(); ++i) {
                 const auto& entityId = loop.wire.edges[i];
                 bool forward = (i < loop.wire.forward.size()) ? loop.wire.forward[i] : true;

@@ -190,6 +190,7 @@ Viewport::Viewport(QWidget* parent)
             m_activeSketch->solve();
             if (m_sketchRenderer) {
                 m_sketchRenderer->updateGeometry();
+                m_sketchRenderer->setConflictingConstraints(m_activeSketch->getConflictingConstraints());
                 m_sketchRenderer->updateConstraints();
             }
             update();
@@ -771,6 +772,8 @@ void Viewport::mouseDoubleClickEvent(QMouseEvent* event) {
                 QString units;
                 switch (constraint->type()) {
                     case sketch::ConstraintType::Distance:
+                    case sketch::ConstraintType::HorizontalDistance:
+                    case sketch::ConstraintType::VerticalDistance:
                     case sketch::ConstraintType::Radius:
                     case sketch::ConstraintType::Diameter:
                         units = "mm";
@@ -784,12 +787,22 @@ void Viewport::mouseDoubleClickEvent(QMouseEvent* event) {
                 }
 
                 // Show the dimension editor at the click position
-                m_dimensionEditor->showForConstraint(
-                    QString::fromStdString(constraintId),
-                    dimConstraint->value(),
-                    units,
-                    event->pos()
-                );
+                if (constraint->type() == sketch::ConstraintType::HorizontalDistance ||
+                    constraint->type() == sketch::ConstraintType::VerticalDistance) {
+                    m_dimensionEditor->showForSignedConstraint(
+                        QString::fromStdString(constraintId),
+                        dimConstraint->value(),
+                        units,
+                        event->pos()
+                    );
+                } else {
+                    m_dimensionEditor->showForConstraint(
+                        QString::fromStdString(constraintId),
+                        dimConstraint->value(),
+                        units,
+                        event->pos()
+                    );
+                }
                 return;
             }
         }

@@ -50,6 +50,9 @@ public:
     void showForConstraint(const QString& constraintId, double currentValue,
                            const QString& units, const QPoint& screenPos);
 
+    void showForSignedConstraint(const QString& constraintId, double currentValue,
+                                 const QString& units, const QPoint& screenPos);
+
     /**
      * @brief Show editor for an editable draft preview parameter.
      * @param parameterId Tool-defined stable preview dimension id

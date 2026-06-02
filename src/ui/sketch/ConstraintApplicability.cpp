@@ -22,6 +22,10 @@ bool isCurveType(EntityType type) {
            type == EntityType::Circle;
 }
 
+bool isCircularType(EntityType type) {
+    return type == EntityType::Arc || type == EntityType::Circle;
+}
+
 bool hasLineBetweenPoints(const Sketch* sketch, const EntityID& pointA, const EntityID& pointB) {
     if (!sketch) {
         return false;
@@ -94,6 +98,23 @@ ConstraintApplicabilityResult evaluateConstraintApplicability(
         }
         if (type == EntityType::Arc || type == EntityType::Circle) {
             result.applicableConstraints.insert(ConstraintType::Radius);
+            result.applicableConstraints.insert(ConstraintType::Diameter);
+        }
+        return result;
+    }
+
+    if (selectedCount == 3) {
+        int pointCount = 0;
+        int lineCount = 0;
+        for (const auto* entity : selectedEntities) {
+            if (entity->type() == EntityType::Point) {
+                ++pointCount;
+            } else if (entity->type() == EntityType::Line) {
+                ++lineCount;
+            }
+        }
+        if (pointCount == 2 && lineCount == 1) {
+            result.applicableConstraints.insert(ConstraintType::Symmetric);
         }
         return result;
     }
@@ -120,10 +141,16 @@ ConstraintApplicabilityResult evaluateConstraintApplicability(
 
     if (aPoint && bPoint) {
         result.applicableConstraints.insert(ConstraintType::Coincident);
+        result.applicableConstraints.insert(ConstraintType::HorizontalDistance);
+        result.applicableConstraints.insert(ConstraintType::VerticalDistance);
         if (hasLineBetweenPoints(sketch, selectedEntityIds[0], selectedEntityIds[1])) {
             result.applicableConstraints.insert(ConstraintType::Horizontal);
             result.applicableConstraints.insert(ConstraintType::Vertical);
         }
+    }
+
+    if (isCircularType(typeA) && isCircularType(typeB)) {
+        result.applicableConstraints.insert(ConstraintType::Concentric);
     }
 
     if (aLine && bLine) {

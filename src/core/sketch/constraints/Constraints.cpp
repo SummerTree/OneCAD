@@ -130,6 +130,12 @@ gp_Pnt2d projectPointToLine(const gp_Pnt2d& point, const gp_Pnt2d& a, const gp_P
     return gp_Pnt2d(a.X() + t * dx, a.Y() + t * dy);
 }
 
+gp_Pnt2d reflectPointAcrossLine(const gp_Pnt2d& point, const gp_Pnt2d& a, const gp_Pnt2d& b) {
+    gp_Pnt2d projection = projectPointToLine(point, a, b);
+    return gp_Pnt2d(2.0 * projection.X() - point.X(),
+                    2.0 * projection.Y() - point.Y());
+}
+
 std::string formatValue(double value, const std::string& units) {
     std::ostringstream stream;
     stream.setf(std::ios::fixed);
@@ -892,6 +898,144 @@ gp_Pnt2d DistanceConstraint::getDimensionTextPosition(const Sketch& sketch) cons
     return getIconPosition(sketch);
 }
 
+//==============================================================================
+// HorizontalDistanceConstraint
+//==============================================================================
+
+HorizontalDistanceConstraint::HorizontalDistanceConstraint(const EntityID& point1,
+                                                           const EntityID& point2,
+                                                           double distance)
+    : DimensionalConstraint(distance),
+      m_point1(point1),
+      m_point2(point2) {
+}
+
+std::string HorizontalDistanceConstraint::toString() const {
+    return "H-Distance: " + formatValue(value(), units());
+}
+
+std::vector<EntityID> HorizontalDistanceConstraint::referencedEntities() const {
+    return {m_point1, m_point2};
+}
+
+bool HorizontalDistanceConstraint::isSatisfied(const Sketch& sketch, double tolerance) const {
+    return getError(sketch) <= tolerance;
+}
+
+double HorizontalDistanceConstraint::getError(const Sketch& sketch) const {
+    gp_Pnt2d p1;
+    gp_Pnt2d p2;
+    if (!getPointPosition(sketch, m_point1, p1) || !getPointPosition(sketch, m_point2, p2)) {
+        return std::numeric_limits<double>::infinity();
+    }
+    return std::abs((p2.X() - p1.X()) - value());
+}
+
+void HorizontalDistanceConstraint::serialize(QJsonObject& json) const {
+    serializeBase(json);
+    json["point1"] = QString::fromStdString(m_point1);
+    json["point2"] = QString::fromStdString(m_point2);
+    json["distance"] = value();
+}
+
+bool HorizontalDistanceConstraint::deserialize(const QJsonObject& json) {
+    if (!json.contains("point1") || !json.contains("point2") || !json.contains("distance")) {
+        return false;
+    }
+    if (!json["point1"].isString() || !json["point2"].isString() || !json["distance"].isDouble()) {
+        return false;
+    }
+    if (!deserializeBase(json, "HorizontalDistance")) {
+        return false;
+    }
+    m_point1 = json["point1"].toString().toStdString();
+    m_point2 = json["point2"].toString().toStdString();
+    setValue(json["distance"].toDouble());
+    return true;
+}
+
+gp_Pnt2d HorizontalDistanceConstraint::getIconPosition(const Sketch& sketch) const {
+    gp_Pnt2d p1;
+    gp_Pnt2d p2;
+    if (!getPointPosition(sketch, m_point1, p1) || !getPointPosition(sketch, m_point2, p2)) {
+        return gp_Pnt2d(0.0, 0.0);
+    }
+    return gp_Pnt2d((p1.X() + p2.X()) * 0.5, p1.Y());
+}
+
+gp_Pnt2d HorizontalDistanceConstraint::getDimensionTextPosition(const Sketch& sketch) const {
+    return getIconPosition(sketch);
+}
+
+//==============================================================================
+// VerticalDistanceConstraint
+//==============================================================================
+
+VerticalDistanceConstraint::VerticalDistanceConstraint(const EntityID& point1,
+                                                       const EntityID& point2,
+                                                       double distance)
+    : DimensionalConstraint(distance),
+      m_point1(point1),
+      m_point2(point2) {
+}
+
+std::string VerticalDistanceConstraint::toString() const {
+    return "V-Distance: " + formatValue(value(), units());
+}
+
+std::vector<EntityID> VerticalDistanceConstraint::referencedEntities() const {
+    return {m_point1, m_point2};
+}
+
+bool VerticalDistanceConstraint::isSatisfied(const Sketch& sketch, double tolerance) const {
+    return getError(sketch) <= tolerance;
+}
+
+double VerticalDistanceConstraint::getError(const Sketch& sketch) const {
+    gp_Pnt2d p1;
+    gp_Pnt2d p2;
+    if (!getPointPosition(sketch, m_point1, p1) || !getPointPosition(sketch, m_point2, p2)) {
+        return std::numeric_limits<double>::infinity();
+    }
+    return std::abs((p2.Y() - p1.Y()) - value());
+}
+
+void VerticalDistanceConstraint::serialize(QJsonObject& json) const {
+    serializeBase(json);
+    json["point1"] = QString::fromStdString(m_point1);
+    json["point2"] = QString::fromStdString(m_point2);
+    json["distance"] = value();
+}
+
+bool VerticalDistanceConstraint::deserialize(const QJsonObject& json) {
+    if (!json.contains("point1") || !json.contains("point2") || !json.contains("distance")) {
+        return false;
+    }
+    if (!json["point1"].isString() || !json["point2"].isString() || !json["distance"].isDouble()) {
+        return false;
+    }
+    if (!deserializeBase(json, "VerticalDistance")) {
+        return false;
+    }
+    m_point1 = json["point1"].toString().toStdString();
+    m_point2 = json["point2"].toString().toStdString();
+    setValue(json["distance"].toDouble());
+    return true;
+}
+
+gp_Pnt2d VerticalDistanceConstraint::getIconPosition(const Sketch& sketch) const {
+    gp_Pnt2d p1;
+    gp_Pnt2d p2;
+    if (!getPointPosition(sketch, m_point1, p1) || !getPointPosition(sketch, m_point2, p2)) {
+        return gp_Pnt2d(0.0, 0.0);
+    }
+    return gp_Pnt2d(p1.X(), (p1.Y() + p2.Y()) * 0.5);
+}
+
+gp_Pnt2d VerticalDistanceConstraint::getDimensionTextPosition(const Sketch& sketch) const {
+    return getIconPosition(sketch);
+}
+
 AngleConstraint::AngleConstraint(const EntityID& line1, const EntityID& line2, double angleRadians)
     : DimensionalConstraint(angleRadians),
       m_line1(line1),
@@ -1165,6 +1309,74 @@ gp_Pnt2d ConcentricConstraint::getIconPosition(const Sketch& sketch) const {
         return gp_Pnt2d(0.0, 0.0);
     }
     return center;
+}
+
+//==============================================================================
+// SymmetricConstraint
+//==============================================================================
+
+SymmetricConstraint::SymmetricConstraint(const EntityID& point1,
+                                         const EntityID& point2,
+                                         const EntityID& axisLine)
+    : m_point1(point1),
+      m_point2(point2),
+      m_axisLine(axisLine) {
+}
+
+std::vector<EntityID> SymmetricConstraint::referencedEntities() const {
+    return {m_point1, m_point2, m_axisLine};
+}
+
+bool SymmetricConstraint::isSatisfied(const Sketch& sketch, double tolerance) const {
+    return getError(sketch) <= tolerance;
+}
+
+double SymmetricConstraint::getError(const Sketch& sketch) const {
+    gp_Pnt2d p1;
+    gp_Pnt2d p2;
+    gp_Pnt2d axisStart;
+    gp_Pnt2d axisEnd;
+    if (!getPointPosition(sketch, m_point1, p1) ||
+        !getPointPosition(sketch, m_point2, p2) ||
+        !getLinePoints(sketch, m_axisLine, axisStart, axisEnd)) {
+        return std::numeric_limits<double>::infinity();
+    }
+    if (axisStart.Distance(axisEnd) <= 0.0) {
+        return std::numeric_limits<double>::infinity();
+    }
+    return reflectPointAcrossLine(p1, axisStart, axisEnd).Distance(p2);
+}
+
+void SymmetricConstraint::serialize(QJsonObject& json) const {
+    serializeBase(json);
+    json["point1"] = QString::fromStdString(m_point1);
+    json["point2"] = QString::fromStdString(m_point2);
+    json["axisLine"] = QString::fromStdString(m_axisLine);
+}
+
+bool SymmetricConstraint::deserialize(const QJsonObject& json) {
+    if (!deserializeBase(json, "Symmetric")) {
+        return false;
+    }
+    if (!json.contains("point1") || !json.contains("point2") || !json.contains("axisLine")) {
+        return false;
+    }
+    if (!json["point1"].isString() || !json["point2"].isString() || !json["axisLine"].isString()) {
+        return false;
+    }
+    m_point1 = json["point1"].toString().toStdString();
+    m_point2 = json["point2"].toString().toStdString();
+    m_axisLine = json["axisLine"].toString().toStdString();
+    return true;
+}
+
+gp_Pnt2d SymmetricConstraint::getIconPosition(const Sketch& sketch) const {
+    gp_Pnt2d axisStart;
+    gp_Pnt2d axisEnd;
+    if (!getLinePoints(sketch, m_axisLine, axisStart, axisEnd)) {
+        return gp_Pnt2d(0.0, 0.0);
+    }
+    return midpoint(axisStart, axisEnd);
 }
 
 //==============================================================================
