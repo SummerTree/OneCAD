@@ -11,6 +11,7 @@
 class QLabel;
 class QSlider;
 class QEvent;
+class QCloseEvent;
 class QAction;
 class QHBoxLayout;
 namespace onecad {
@@ -148,6 +149,12 @@ private:
 
     bool eventFilter(QObject* obj, QEvent* event) override;
 
+protected:
+    // Window close (red X, Cmd+Q via File>Quit) must honor the unsaved-changes
+    // prompt exactly like File>New / File>Open.
+    void closeEvent(QCloseEvent* event) override;
+
+private:
     // UI Components
     Viewport* m_viewport = nullptr;
     ModelNavigator* m_navigator = nullptr;

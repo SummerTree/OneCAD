@@ -38,6 +38,7 @@
 #include <QLabel>
 #include <QSlider>
 #include <QApplication>
+#include <QCloseEvent>
 #include <QMessageBox>
 #include <QFileDialog>
 #include <QFileInfo>
@@ -457,7 +458,8 @@ void MainWindow::setupMenuBar() {
     fileMenu->addAction(tr("&Export STEP..."), this, &MainWindow::onExportStep);
     fileMenu->addAction(tr("Export &Mesh (STL/OBJ)..."), this, &MainWindow::onExportMesh);
     fileMenu->addSeparator();
-    fileMenu->addAction(tr("&Quit"), QKeySequence::Quit, qApp, &QApplication::quit);
+    // Route Quit through close() so closeEvent runs the unsaved-changes guard.
+    fileMenu->addAction(tr("&Quit"), QKeySequence::Quit, this, &QWidget::close);
     
     // Edit menu
     QMenu* editMenu = menuBar->addMenu(tr("&Edit"));
@@ -1882,6 +1884,14 @@ bool MainWindow::maybeSave() {
     }
     
     return result == QMessageBox::Discard;
+}
+
+void MainWindow::closeEvent(QCloseEvent* event) {
+    if (maybeSave()) {
+        event->accept();
+    } else {
+        event->ignore();
+    }
 }
 
 void MainWindow::onNewDocument() {
