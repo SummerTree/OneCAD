@@ -38,6 +38,8 @@
 #include <algorithm>
 #include <cassert>
 #include <cmath>
+#include <cstdio>
+#include <cstdlib>
 #include <iostream>
 #include <limits>
 #include <optional>
@@ -1568,6 +1570,131 @@ void testExtrudeFaceRefRejectedByAddCommand() {
     std::cout << " PASS\n";
 }
 
+void testRevolveAxisCrossingProfileFailsAsOpFailure() {
+    std::cout << "Test: Revolve profile crossing its axis fails the op, not the app..." << std::flush;
+
+    app::Document doc;
+    auto sketch = std::make_unique<core::sketch::Sketch>(core::sketch::SketchPlane::XY());
+    auto p1 = sketch->addPoint(-5.0, 0.0);
+    auto p2 = sketch->addPoint(5.0, 0.0);
+    auto p3 = sketch->addPoint(5.0, 10.0);
+    auto p4 = sketch->addPoint(-5.0, 10.0);
+    sketch->addLine(p1, p2);
+    sketch->addLine(p2, p3);
+    sketch->addLine(p3, p4);
+    sketch->addLine(p4, p1);
+    // Construction axis straight through the middle of the profile: OCCT's
+    // BRepPrimAPI_MakeRevol raises Standard_ConstructionError for this input.
+    auto a1 = sketch->addPoint(0.0, -20.0, true);
+    auto a2 = sketch->addPoint(0.0, 20.0, true);
+    auto axisLineId = sketch->addLine(a1, a2, true);
+
+    const std::string sketchId = doc.addSketch(std::move(sketch));
+    const std::string regionId = firstRegionId(*doc.getSketch(sketchId));
+
+    app::OperationRecord op;
+    op.opId = newId();
+    op.type = app::OperationType::Revolve;
+    op.input = app::SketchRegionRef{sketchId, regionId};
+    app::RevolveParams params;
+    params.angleDeg = 360.0;
+    params.axis = app::SketchLineRef{sketchId, axisLineId};
+    op.params = params;
+    op.resultBodyIds.push_back(newId());
+    doc.addOperation(op);
+    doc.setAppliedOpCount(doc.operations().size());
+
+    app::history::RegenerationEngine engine(&doc);
+    const auto result = engine.regenerateAll();  // must not std::terminate
+
+    bool failedWithMessage = false;
+    for (const auto& f : result.failedOps) {
+        if (f.opId == op.opId && !f.errorMessage.empty()) {
+            failedWithMessage = true;
+        }
+    }
+    if (!failedWithMessage) {
+        std::fprintf(stderr, "revolve axis-cross did not fail as an op failure\n");
+        std::exit(1);
+    }
+
+    std::cout << " PASS\n";
+}
+
+void testTemporalGuardCoversBooleanAndPattern() {
+    std::cout << "Test: Temporal guard rejects future bodies for boolean + pattern..." << std::flush;
+
+    app::Document doc;
+    const auto [sketchA, regionA] = createSquareSketchRegion(doc, 10.0);
+    const auto [sketchC, regionC] = createSquareSketchRegion(doc, 6.0);
+    const std::string bodyA = newId();
+    const std::string bodyC = newId();
+
+    // op1 -> bodyA (valid).
+    app::OperationRecord op1;
+    op1.opId = newId();
+    op1.type = app::OperationType::Extrude;
+    op1.input = app::SketchRegionRef{sketchA, regionA};
+    op1.params = app::ExtrudeParams{10.0, 0.0, app::ExtrudeMode::Blind, app::BooleanMode::NewBody};
+    op1.resultBodyIds.push_back(bodyA);
+
+    // op2: boolean whose TOOL body is only produced by the later op4 (time-travel).
+    app::OperationRecord op2;
+    op2.opId = newId();
+    op2.type = app::OperationType::Boolean;
+    op2.input = app::BodyRef{bodyA};
+    app::BooleanParams boolParams;
+    boolParams.operation = app::BooleanParams::Op::Cut;
+    boolParams.targetBodyId = bodyA;
+    boolParams.toolBodyId = bodyC;
+    op2.params = boolParams;
+    op2.resultBodyIds.push_back(bodyA);
+
+    // op3: linear pattern whose SOURCE body is only produced by the later op4.
+    app::OperationRecord op3;
+    op3.opId = newId();
+    op3.type = app::OperationType::LinearPattern;
+    op3.input = app::BodyRef{bodyC};
+    app::LinearPatternParams patParams;
+    patParams.sourceBodyId = bodyC;
+    patParams.count = 3;
+    patParams.spacing = 20.0;
+    op3.params = patParams;
+    op3.resultBodyIds.push_back(newId());
+
+    // op4 -> bodyC (the future producer).
+    app::OperationRecord op4;
+    op4.opId = newId();
+    op4.type = app::OperationType::Extrude;
+    op4.input = app::SketchRegionRef{sketchC, regionC};
+    op4.params = app::ExtrudeParams{4.0, 0.0, app::ExtrudeMode::Blind, app::BooleanMode::NewBody};
+    op4.resultBodyIds.push_back(bodyC);
+
+    doc.addOperation(op1);
+    doc.addOperation(op2);
+    doc.addOperation(op3);
+    doc.addOperation(op4);
+    doc.setAppliedOpCount(doc.operations().size());
+
+    app::history::RegenerationEngine engine(&doc);
+    const auto result = engine.regenerateAll();
+
+    auto failed = [&](const std::string& id) {
+        for (const auto& f : result.failedOps) {
+            if (f.opId == id) {
+                return true;
+            }
+        }
+        return false;
+    };
+    if (!failed(op2.opId) || !failed(op3.opId)) {
+        std::fprintf(stderr, "temporal guard missed boolean or pattern time-travel\n");
+        std::exit(1);
+    }
+
+    std::cout << " PASS\n";
+}
+
 int main(int argc, char* argv[]) {
     QCoreApplication app(argc, argv);
 
@@ -1600,6 +1727,8 @@ int main(int argc, char* argv[]) {
     testExtrudeToFaceStopsAtFace();
     testExtrudeToNextRequiresBody();
     testTemporalGuardRejectsFutureTarget();
+    testTemporalGuardCoversBooleanAndPattern();
+    testRevolveAxisCrossingProfileFailsAsOpFailure();
     testDirtyFlagSkipsCleanBranch();
     testReprofileExtrudeSwapsSketchRegion();
     testReprofileToFaceRefRejected();

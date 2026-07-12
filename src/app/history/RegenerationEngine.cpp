@@ -148,37 +148,51 @@ TopoDS_Shape checkedBooleanResult(const TopoDS_Shape& target,
         return {};
     }
 
-    TopoDS_Shape result;
-    if (mode == BooleanMode::Add) {
-        BRepAlgoAPI_Fuse fuse(target, tool);
-        if (!fuse.IsDone()) {
-            errorOut = context + " fuse failed";
+    // OCCT boolean algorithms can raise Standard_Failure from their constructors on
+    // degenerate inputs; a boolean failure must never escape as an app crash.
+    try {
+        TopoDS_Shape result;
+        if (mode == BooleanMode::Add) {
+            BRepAlgoAPI_Fuse fuse(target, tool);
+            if (!fuse.IsDone()) {
+                errorOut = context + " fuse failed";
+                return {};
+            }
+            result = fuse.Shape();
+        } else if (mode == BooleanMode::Cut) {
+            BRepAlgoAPI_Cut cut(target, tool);
+            if (!cut.IsDone()) {
+                errorOut = context + " cut failed";
+                return {};
+            }
+            result = cut.Shape();
+        } else if (mode == BooleanMode::Intersect) {
+            BRepAlgoAPI_Common common(target, tool);
+            if (!common.IsDone()) {
+                errorOut = context + " intersect failed";
+                return {};
+            }
+            result = common.Shape();
+        } else {
+            errorOut = context + " unsupported boolean mode";
             return {};
         }
-        result = fuse.Shape();
-    } else if (mode == BooleanMode::Cut) {
-        BRepAlgoAPI_Cut cut(target, tool);
-        if (!cut.IsDone()) {
-            errorOut = context + " cut failed";
-            return {};
-        }
-        result = cut.Shape();
-    } else if (mode == BooleanMode::Intersect) {
-        BRepAlgoAPI_Common common(target, tool);
-        if (!common.IsDone()) {
-            errorOut = context + " intersect failed";
-            return {};
-        }
-        result = common.Shape();
-    } else {
-        errorOut = context + " unsupported boolean mode";
-        return {};
-    }
 
-    if (!checkedShapeResult(result, context + " boolean", errorOut)) {
+        if (!checkedShapeResult(result, context + " boolean", errorOut)) {
+            return {};
+        }
+        return result;
+    } catch (const Standard_Failure& failure) {
+        errorOut = context + " boolean raised: " +
+                   std::string(failure.GetMessageString() ? failure.GetMessageString() : "OCCT failure");
+        return {};
+    } catch (const std::exception& ex) {
+        errorOut = context + " boolean raised: " + std::string(ex.what());
+        return {};
+    } catch (...) {
+        errorOut = context + " boolean raised an unknown exception";
         return {};
     }
-    return result;
 }
 
 bool planarFacePlaneAndNormal(const TopoDS_Face& face, gp_Pln& planeOut, gp_Dir& normalOut) {
@@ -710,6 +724,10 @@ bool RegenerationEngine::executeOperation(const OperationRecord& op, std::string
                       << "opId=" << QString::fromStdString(op.opId)
                       << "type=" << static_cast<int>(op.type)
                       << "outputs=" << op.resultBodyIds.size();
+    // Outer safety net: no OCCT/std exception leaked by any builder (current or
+    // future) may escape the regeneration loop — a modeling failure is an op
+    // failure, never an app crash.
+    try {
     TopoDS_Shape result;
 
     switch (op.type) {
@@ -775,6 +793,20 @@ bool RegenerationEngine::executeOperation(const OperationRecord& op, std::string
     qCDebug(logRegen) << "executeOperation:done"
                       << "opId=" << QString::fromStdString(op.opId);
     return true;
+    } catch (const Standard_Failure& failure) {
+        errorOut = "Operation raised: " +
+                   std::string(failure.GetMessageString() ? failure.GetMessageString()
+                                                          : "OCCT failure");
+    } catch (const std::exception& ex) {
+        errorOut = "Operation raised: " + std::string(ex.what());
+    } catch (...) {
+        errorOut = "Operation raised an unknown exception";
+    }
+    qCCritical(logRegen) << "executeOperation:exception"
+                         << "opId=" << QString::fromStdString(op.opId)
+                         << "type=" << static_cast<int>(op.type)
+                         << "error=" << QString::fromStdString(errorOut);
+    return false;
 }
 
 TopoDS_Shape RegenerationEngine::buildExtrude(const OperationRecord& op, std::string& errorOut) {
@@ -1174,29 +1206,45 @@ TopoDS_Shape RegenerationEngine::buildRevolve(const OperationRecord& op, std::st
 
     const double angleRad = params.angleDeg * M_PI / 180.0;
     TopoDS_Shape result;
-    for (const TopoDS_Face& profileFace : profileFaces) {
-        if (profileFace.IsNull()) {
-            continue;
+    // BRepPrimAPI_MakeRevol is constructed with Copy=true and raises
+    // Standard_ConstructionError from the constructor when the profile touches or
+    // crosses the axis — a common user error that must fail the op, not the app.
+    try {
+        for (const TopoDS_Face& profileFace : profileFaces) {
+            if (profileFace.IsNull()) {
+                continue;
+            }
+            BRepPrimAPI_MakeRevol revol(profileFace, axis, angleRad, true);
+            if (!revol.IsDone()) {
+                errorOut = "Revolve operation failed";
+                return {};
+            }
+            TopoDS_Shape revolShape = revol.Shape();
+            if (revolShape.IsNull()) {
+                continue;
+            }
+            if (result.IsNull()) {
+                result = revolShape;
+                continue;
+            }
+            BRepAlgoAPI_Fuse fuse(result, revolShape);
+            if (!fuse.IsDone()) {
+                errorOut = "Revolve patch fuse failed";
+                return {};
+            }
+            result = fuse.Shape();
         }
-        BRepPrimAPI_MakeRevol revol(profileFace, axis, angleRad, true);
-        if (!revol.IsDone()) {
-            errorOut = "Revolve operation failed";
-            return {};
-        }
-        TopoDS_Shape revolShape = revol.Shape();
-        if (revolShape.IsNull()) {
-            continue;
-        }
-        if (result.IsNull()) {
-            result = revolShape;
-            continue;
-        }
-        BRepAlgoAPI_Fuse fuse(result, revolShape);
-        if (!fuse.IsDone()) {
-            errorOut = "Revolve patch fuse failed";
-            return {};
-        }
-        result = fuse.Shape();
+    } catch (const Standard_Failure& failure) {
+        errorOut = "Revolve failed: " +
+                   std::string(failure.GetMessageString() ? failure.GetMessageString()
+                                                          : "OCCT construction failure");
+        return {};
+    } catch (const std::exception& ex) {
+        errorOut = "Revolve failed: " + std::string(ex.what());
+        return {};
+    } catch (...) {
+        errorOut = "Revolve failed: unknown exception";
+        return {};
     }
 
     if (result.IsNull()) {
@@ -1212,6 +1260,15 @@ TopoDS_Shape RegenerationEngine::buildRevolve(const OperationRecord& op, std::st
             qCWarning(logRegen) << "buildRevolve:missing-boolean-target"
                                 << "opId=" << QString::fromStdString(op.opId)
                                 << "mode=" << static_cast<int>(params.booleanMode);
+            return {};
+        }
+
+        // Temporal-order guard: forbid targeting a body produced by a later operation.
+        if (!graph_.producesBefore(targetBodyId, op.opId)) {
+            errorOut = "Boolean target references a body created by a later operation: " + targetBodyId;
+            qCWarning(logRegen) << "buildRevolve:boolean-target-time-travel"
+                                << "opId=" << QString::fromStdString(op.opId)
+                                << "targetBodyId=" << QString::fromStdString(targetBodyId);
             return {};
         }
 
@@ -1455,6 +1512,18 @@ TopoDS_Shape RegenerationEngine::buildBoolean(const OperationRecord& op, std::st
 
     const auto& params = std::get<BooleanParams>(op.params);
 
+    // Temporal-order guard: both operands must come from earlier operations.
+    if (!graph_.producesBefore(params.targetBodyId, op.opId)) {
+        errorOut = "Boolean target references a body created by a later operation: " +
+                   params.targetBodyId;
+        return {};
+    }
+    if (!graph_.producesBefore(params.toolBodyId, op.opId)) {
+        errorOut = "Boolean tool references a body created by a later operation: " +
+                   params.toolBodyId;
+        return {};
+    }
+
     auto targetOpt = resolveBody(params.targetBodyId);
     if (!targetOpt) {
         errorOut = "Target body not found: " + params.targetBodyId;
@@ -1670,6 +1739,10 @@ TopoDS_Shape RegenerationEngine::buildLinearPattern(const OperationRecord& op, s
         return {};
     }
 
+    if (!graph_.producesBefore(p.sourceBodyId, op.opId)) {
+        errorOut = "Pattern source references a body created by a later operation: " + p.sourceBodyId;
+        return {};
+    }
     const auto* sourceShape = doc_->getBodyShape(p.sourceBodyId);
     if (!sourceShape || sourceShape->IsNull()) {
         errorOut = "Source body not found for linear pattern";
@@ -1895,6 +1968,10 @@ TopoDS_Shape RegenerationEngine::buildCircularPattern(const OperationRecord& op,
         return {};
     }
 
+    if (!graph_.producesBefore(p.sourceBodyId, op.opId)) {
+        errorOut = "Pattern source references a body created by a later operation: " + p.sourceBodyId;
+        return {};
+    }
     const auto* sourceShape = doc_->getBodyShape(p.sourceBodyId);
     if (!sourceShape || sourceShape->IsNull()) {
         errorOut = "Source body not found for circular pattern";
@@ -1960,6 +2037,10 @@ TopoDS_Shape RegenerationEngine::buildMirrorBody(const OperationRecord& op, std:
     }
     const auto& p = std::get<MirrorBodyParams>(op.params);
 
+    if (!graph_.producesBefore(p.sourceBodyId, op.opId)) {
+        errorOut = "Mirror source references a body created by a later operation: " + p.sourceBodyId;
+        return {};
+    }
     const auto* sourceShape = doc_->getBodyShape(p.sourceBodyId);
     if (!sourceShape || sourceShape->IsNull()) {
         errorOut = "Source body not found for mirror";
