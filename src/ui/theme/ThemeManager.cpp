@@ -169,6 +169,9 @@ bool ThemeManager::systemPrefersDark() const {
 
 QString ThemeManager::buildStyleSheet(const ThemeDefinition& theme) {
     const ThemeUiColors& ui = theme.ui;
+    const ThemeButtonColors& btn = theme.button;
+    const ThemeMetrics& m = theme.metrics;
+    const ThemeTypography& ty = theme.typography;
     QString styleSheet = QStringLiteral(R"(
         QMainWindow {
             background-color: @window-bg@;
@@ -209,7 +212,7 @@ QString ThemeManager::buildStyleSheet(const ThemeDefinition& theme) {
             background: transparent;
         }
         QWidget[nav-item="true"] {
-            border-radius: 10px;
+            border-radius: @radius-md@;
             background-color: transparent;
             min-height: 32px;
         }
@@ -246,7 +249,7 @@ QString ThemeManager::buildStyleSheet(const ThemeDefinition& theme) {
         QToolButton[nav-inline="true"] {
             background-color: transparent;
             border: none;
-            border-radius: 6px;
+            border-radius: @radius-sm@;
             padding: 0px;
             icon-size: 18px;
             min-width: 24px;
@@ -265,7 +268,7 @@ QString ThemeManager::buildStyleSheet(const ThemeDefinition& theme) {
         QWidget#ConstraintToolsPanel {
             background-color: @panel-bg@;
             border: 1px solid @panel-border@;
-            border-radius: 12px;
+            border-radius: @radius-lg@;
         }
         QMenuBar {
             background-color: @menubar-bg@;
@@ -309,8 +312,8 @@ QString ThemeManager::buildStyleSheet(const ThemeDefinition& theme) {
             background-color: @dock-title-bg@;
             padding: 6px;
             border-bottom: 1px solid @dock-title-border@;
-            border-top-left-radius: 12px;
-            border-top-right-radius: 12px;
+            border-top-left-radius: @radius-lg@;
+            border-top-right-radius: @radius-lg@;
         }
         QTreeWidget {
             background-color: @tree-bg@;
@@ -327,7 +330,7 @@ QString ThemeManager::buildStyleSheet(const ThemeDefinition& theme) {
             background-color: @sidebar-bg@;
             color: @sidebar-text@;
             border: 1px solid @sidebar-border@;
-            border-radius: 10px;
+            border-radius: @radius-md@;
             padding: 0px;
             min-width: 42px;
             min-height: 42px;
@@ -356,11 +359,11 @@ QString ThemeManager::buildStyleSheet(const ThemeDefinition& theme) {
         }
         QLabel#inspectorHint {
             color: @inspector-hint@;
-            font-size: 12px;
+            font-size: @font-sm@;
         }
         QLabel#inspectorTip {
             color: @inspector-tip@;
-            font-size: 11px;
+            font-size: @font-xs@;
             padding-top: 20px;
         }
         QLabel#inspectorEntityTitle {
@@ -369,7 +372,7 @@ QString ThemeManager::buildStyleSheet(const ThemeDefinition& theme) {
         }
         QLabel#inspectorEntityId {
             color: @inspector-entity-id@;
-            font-size: 11px;
+            font-size: @font-xs@;
         }
         QLabel#inspectorSeparator {
             background-color: @inspector-separator@;
@@ -385,7 +388,7 @@ QString ThemeManager::buildStyleSheet(const ThemeDefinition& theme) {
         QToolButton {
             background-color: @toolbutton-bg@;
             border: 1px solid @toolbutton-border@;
-            border-radius: 10px;
+            border-radius: @radius-md@;
             padding: 6px 12px;
             color: @toolbutton-text@;
             min-width: 60px;
@@ -433,6 +436,40 @@ QString ThemeManager::buildStyleSheet(const ThemeDefinition& theme) {
         }
         QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal {
             width: 0px;
+        }
+        QPushButton[primary="true"] {
+            background-color: @btn-accent@;
+            color: @btn-accent-text@;
+            border: none;
+            border-radius: @radius-sm@;
+            padding: @spacing-sm@ @spacing-lg@;
+            font-weight: 600;
+            min-height: 24px;
+        }
+        QPushButton[primary="true"]:hover {
+            background-color: @btn-accent-hover@;
+        }
+        QPushButton[primary="true"]:pressed {
+            background-color: @btn-accent-active@;
+        }
+        QPushButton[primary="true"]:disabled {
+            background-color: @btn-secondary-bg@;
+            color: @btn-ghost-text@;
+        }
+        QPushButton[ghost="true"] {
+            background-color: transparent;
+            color: @btn-ghost-text@;
+            border: none;
+            border-radius: @radius-sm@;
+            padding: @spacing-sm@ @spacing-lg@;
+        }
+        QPushButton[ghost="true"]:hover {
+            background-color: @btn-ghost-hover-bg@;
+        }
+        QDialogButtonBox QPushButton {
+            border-radius: @radius-sm@;
+            padding: @spacing-sm@ @spacing-lg@;
+            min-width: 72px;
         }
     )");
 
@@ -495,6 +532,28 @@ QString ThemeManager::buildStyleSheet(const ThemeDefinition& theme) {
     styleSheet.replace("@scrollbar-track@", toQssColor(ui.scrollbarTrack));
     styleSheet.replace("@scrollbar-handle@", toQssColor(ui.scrollbarHandle));
     styleSheet.replace("@scrollbar-handle-hover@", toQssColor(ui.scrollbarHandleHover));
+
+    // Button color tokens (primary/ghost/secondary + QDialogButtonBox).
+    styleSheet.replace("@btn-accent@", toQssColor(btn.accent));
+    styleSheet.replace("@btn-accent-text@", toQssColor(btn.accentText));
+    styleSheet.replace("@btn-accent-hover@", toQssColor(btn.accentHover));
+    styleSheet.replace("@btn-accent-active@", toQssColor(btn.accentActive));
+    styleSheet.replace("@btn-secondary-bg@", toQssColor(btn.secondaryBackground));
+    styleSheet.replace("@btn-ghost-text@", toQssColor(btn.ghostText));
+    styleSheet.replace("@btn-ghost-hover-bg@", toQssColor(btn.ghostHoverBackground));
+
+    // Metric tokens (radii + spacing). Only on-scale literals are tokenized; a few
+    // off-scale one-offs (8px header radius, 14/32px titles, scrollbar geometry,
+    // 6px button padding) remain literal to preserve exact pixels.
+    styleSheet.replace("@radius-sm@", QString::number(m.radiusSm) + "px");
+    styleSheet.replace("@radius-md@", QString::number(m.radiusMd) + "px");
+    styleSheet.replace("@radius-lg@", QString::number(m.radiusLg) + "px");
+    styleSheet.replace("@spacing-sm@", QString::number(m.spacingSm) + "px");
+    styleSheet.replace("@spacing-lg@", QString::number(m.spacingLg) + "px");
+
+    // Typography size tokens.
+    styleSheet.replace("@font-xs@", QString::number(ty.sizeXs) + "px");
+    styleSheet.replace("@font-sm@", QString::number(ty.sizeSm) + "px");
 
     return styleSheet;
 }

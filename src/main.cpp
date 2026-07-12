@@ -1,6 +1,7 @@
 #include <QApplication>
 #include <QCoreApplication>
 #include <QEvent>
+#include <QFont>
 #include <QKeyEvent>
 #include <QLoggingCategory>
 #include <QMouseEvent>
@@ -181,6 +182,21 @@ int main(int argc, char* argv[]) {
                     << "stencilBufferSize=" << format.stencilBufferSize();
 
     QApplication app(argc, argv);
+
+    // Base UI font: pin the macOS system family chain so typography is deterministic
+    // across platforms. Sizes are driven per-widget by the theme stylesheet (font-*).
+    // Must run after QApplication exists; family is theme-independent (matches
+    // ThemeTypography::fontFamily). "-apple-system" is a QSS-only keyword, so QFont
+    // uses concrete family names with fallbacks.
+    {
+        QFont appFont;
+        appFont.setFamilies({QStringLiteral("SF Pro Text"),
+                             QStringLiteral(".AppleSystemUIFont"),
+                             QStringLiteral("Helvetica Neue"),
+                             QStringLiteral("Arial")});
+        appFont.setPixelSize(13);
+        QApplication::setFont(appFont);
+    }
 
     UserActionEventFilter debugEventFilter;
     if (onecad::app::Logging::isDebugLoggingEnabled()) {

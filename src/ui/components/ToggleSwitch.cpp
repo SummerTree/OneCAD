@@ -1,4 +1,7 @@
 #include "ToggleSwitch.h"
+#include "../theme/ThemeManager.h"
+#include "../theme/ThemeConfig.h"
+
 #include <QPainter>
 #include <QPropertyAnimation>
 #include <QStyleOption>
@@ -10,14 +13,33 @@ ToggleSwitch::ToggleSwitch(const QString& text, QWidget* parent)
     // Custom drawing, so no standard indicator
     setStyleSheet("QCheckBox::indicator { width: 0px; height: 0px; }");
     setCursor(Qt::PointingHandCursor);
-    
+
     // Animation for smoothness
     m_animate = new QPropertyAnimation(this, "indicatorOpacity", this);
     m_animate->setDuration(150);
-    
+
     // Crucial for layout to work correctly
     setMinimumHeight(28);
     setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+
+    m_themeConnection = connect(&ThemeManager::instance(), &ThemeManager::themeChanged,
+                                this, &ToggleSwitch::applyTheme, Qt::UniqueConnection);
+    applyTheme();
+}
+
+ToggleSwitch::~ToggleSwitch() {
+    QObject::disconnect(m_themeConnection);
+}
+
+void ToggleSwitch::applyTheme() {
+    const ThemeDefinition& theme = ThemeManager::instance().currentTheme();
+    m_textColor = theme.ui.widgetText;
+    m_textDisabledColor = theme.ui.inspectorPlaceholderText;
+    m_trackOffColor = theme.ui.scrollbarHandle;
+    m_trackOnColor = theme.button.accent;
+    m_knobColor = QColor(255, 255, 255);
+    m_fontPixelSize = theme.typography.sizeMd;
+    update();
 }
 
 void ToggleSwitch::setIndicatorOpacity(float opacity) {
@@ -46,9 +68,9 @@ void ToggleSwitch::paintEvent(QPaintEvent*) {
     QRect textRect = rect;
     textRect.setRight(switchX - 10);
     
-    p.setPen(isEnabled() ? QColor("#E0E0E0") : QColor("#888888")); // Lighter text for dark theme
+    p.setPen(isEnabled() ? m_textColor : m_textDisabledColor);
     QFont font = p.font();
-    font.setPixelSize(13); // Match previous design
+    font.setPixelSize(m_fontPixelSize);
     p.setFont(font);
     
     // Use QStyle functionality to respect alignment if needed, 
@@ -71,9 +93,9 @@ void ToggleSwitch::paintEvent(QPaintEvent*) {
     // Track Color
     // Off: #3a3a3a, On: #007AFF (Apple Blue)
     // Interpolate?
-    QColor offColor("#3a3a3a");
-    QColor onColor("#007AFF");
-    
+    const QColor& offColor = m_trackOffColor;
+    const QColor& onColor = m_trackOnColor;
+
     int r = offColor.red() + (onColor.red() - offColor.red()) * t;
     int g = offColor.green() + (onColor.green() - offColor.green()) * t;
     int b = offColor.blue() + (onColor.blue() - offColor.blue()) * t;
@@ -95,7 +117,7 @@ void ToggleSwitch::paintEvent(QPaintEvent*) {
     int knobX = startX + (endX - startX) * t;
     int knobY = switchY + knobPadding;
     
-    p.setBrush(Qt::white);
+    p.setBrush(m_knobColor);
     p.drawEllipse(knobX, knobY, knobSize, knobSize);
 }
 

@@ -2,6 +2,8 @@
 #define ONECAD_UI_COMPONENTS_TOGGLESWITCH_H
 
 #include <QCheckBox>
+#include <QColor>
+#include <QMetaObject>
 #include <QPropertyAnimation>
 
 namespace onecad::ui {
@@ -12,6 +14,7 @@ class ToggleSwitch : public QCheckBox {
 
 public:
     explicit ToggleSwitch(const QString& text = "", QWidget* parent = nullptr);
+    ~ToggleSwitch() override;
 
     float indicatorOpacity() const { return m_indicatorOpacity; }
     void setIndicatorOpacity(float opacity);
@@ -26,9 +29,21 @@ protected:
     QSize sizeHint() const override;
 
 private:
+    // This widget is custom-painted, so it cannot be themed via the global stylesheet;
+    // it caches theme colors and repaints on ThemeManager::themeChanged instead.
+    void applyTheme();
+
     float m_indicatorOpacity = 0.0f;
     bool m_isHovered = false;
     QPropertyAnimation* m_animate = nullptr;
+
+    QColor m_textColor;
+    QColor m_textDisabledColor;
+    QColor m_trackOffColor;
+    QColor m_trackOnColor;
+    QColor m_knobColor;
+    int m_fontPixelSize = 13;
+    QMetaObject::Connection m_themeConnection;
 };
 
 } // namespace onecad::ui

@@ -14,12 +14,13 @@ QString toQssColor(const QColor& color) {
 
 namespace {
 
-// Primary accent (Electric Blue)
-const QColor kAccent(0, 148, 198);
-const QColor kAccentHover = kAccent.lighter(115);
-const QColor kAccentActive = kAccent.darker(110);
+// Primary accent (Cyan). Lighter hue than the prior electric blue, so the
+// hover/active deltas are tightened to keep the states distinguishable.
+const QColor kAccent(46, 155, 218); // #2E9BDA
+const QColor kAccentHover = kAccent.lighter(112);
+const QColor kAccentActive = kAccent.darker(115);
 const QColor kAccentTextLight(255, 255, 255);
-const QColor kAccentTextDark(230, 245, 255);
+const QColor kAccentTextDark(232, 246, 255);
 
 ThemeDefinition makeLightTheme() {
     ThemeDefinition theme;
@@ -76,6 +77,21 @@ ThemeDefinition makeLightTheme() {
     theme.ui.scrollbarHandle = QColor(193, 193, 193);
     theme.ui.scrollbarHandleHover = QColor(168, 168, 168);
 
+    theme.button.accent = kAccent;
+    theme.button.accentText = kAccentTextLight;
+    theme.button.accentHover = kAccentHover;
+    theme.button.accentActive = kAccentActive;
+    theme.button.secondaryBackground = theme.ui.sidebarButtonBackground;
+    theme.button.secondaryText = theme.ui.widgetText;
+    theme.button.secondaryBorder = theme.ui.panelBorder;
+    theme.button.ghostText = theme.ui.widgetText;
+    theme.button.ghostHoverBackground = theme.ui.treeHoverBackground;
+
+    // Metrics use struct defaults (theme-independent). Typography family is the
+    // macOS system chain; sizes/weights use struct defaults.
+    theme.typography.fontFamily =
+        QStringLiteral("'SF Pro Text', 'SF Pro Display', 'Helvetica Neue', Arial, sans-serif");
+
     theme.dimensionEditor.background = QColor(255, 255, 255);
     theme.dimensionEditor.border = kAccent;
     theme.dimensionEditor.borderFocus = kAccentActive;
@@ -117,7 +133,7 @@ ThemeDefinition makeLightTheme() {
     theme.viewport.grid.axisX = QColor(255, 100, 100);
     theme.viewport.grid.axisY = QColor(100, 255, 100);
     theme.viewport.grid.axisZ = QColor(100, 100, 255);
-    theme.viewport.planes.xy = QColor(0, 148, 198, 70);
+    theme.viewport.planes.xy = QColor(kAccent.red(), kAccent.green(), kAccent.blue(), 70);
     theme.viewport.planes.xz = QColor(110, 190, 140, 65);
     theme.viewport.planes.yz = QColor(240, 170, 90, 65);
     theme.viewport.planes.labelText = QColor(30, 32, 36);
@@ -223,6 +239,19 @@ ThemeDefinition makeDarkTheme() {
     theme.ui.scrollbarHandle = QColor(66, 66, 66);
     theme.ui.scrollbarHandleHover = QColor(104, 104, 104);
 
+    theme.button.accent = kAccent;
+    theme.button.accentText = kAccentTextLight;
+    theme.button.accentHover = kAccentHover;
+    theme.button.accentActive = kAccentActive;
+    theme.button.secondaryBackground = theme.ui.sidebarButtonBackground;
+    theme.button.secondaryText = theme.ui.widgetText;
+    theme.button.secondaryBorder = theme.ui.panelBorder;
+    theme.button.ghostText = theme.ui.widgetText;
+    theme.button.ghostHoverBackground = theme.ui.treeHoverBackground;
+
+    theme.typography.fontFamily =
+        QStringLiteral("'SF Pro Text', 'SF Pro Display', 'Helvetica Neue', Arial, sans-serif");
+
     theme.dimensionEditor.background = QColor(255, 255, 255);
     theme.dimensionEditor.border = kAccent;
     theme.dimensionEditor.borderFocus = kAccentActive;
@@ -264,7 +293,7 @@ ThemeDefinition makeDarkTheme() {
     theme.viewport.grid.axisX = QColor(255, 100, 100);
     theme.viewport.grid.axisY = QColor(100, 255, 100);
     theme.viewport.grid.axisZ = QColor(100, 100, 255);
-    theme.viewport.planes.xy = QColor(0, 148, 198, 65);
+    theme.viewport.planes.xy = QColor(kAccent.red(), kAccent.green(), kAccent.blue(), 65);
     theme.viewport.planes.xz = QColor(110, 190, 140, 60);
     theme.viewport.planes.yz = QColor(240, 170, 90, 60);
     theme.viewport.planes.labelText = QColor(235, 235, 240);

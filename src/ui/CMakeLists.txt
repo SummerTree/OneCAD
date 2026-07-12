@@ -2,6 +2,7 @@
 add_library(onecad_ui STATIC
     components/SidebarToolButton.cpp
     components/ToggleSwitch.cpp
+    components/ModalOverlay.cpp
     mainwindow/MainWindow.cpp
     theme/ThemeConfig.cpp
     theme/ThemeManager.cpp

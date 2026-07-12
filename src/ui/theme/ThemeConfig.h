@@ -183,11 +183,57 @@ struct ThemeSketchColors {
     QColor regionFill;
 };
 
+// Button color roles. Drives the global QPushButton[primary]/[ghost] rules and
+// the QDialogButtonBox styling so primary vs. secondary actions are visually distinct.
+struct ThemeButtonColors {
+    QColor accent;
+    QColor accentText;
+    QColor accentHover;
+    QColor accentActive;
+    QColor secondaryBackground;
+    QColor secondaryText;
+    QColor secondaryBorder;
+    QColor ghostText;
+    QColor ghostHoverBackground;
+};
+
+// Metric tokens (8pt-based spacing, corner radii, border widths). Theme-independent
+// by design; both themes share these values. Substituted into the global stylesheet.
+struct ThemeMetrics {
+    int spacingXs = 4;
+    int spacingSm = 8;
+    int spacingMd = 12;
+    int spacingLg = 16;
+    int spacingXl = 24;
+    int radiusSm = 6;
+    int radiusMd = 10;
+    int radiusLg = 12;
+    int borderThin = 1;
+    int borderMed = 2;
+};
+
+// Typography tokens (font family chain + size/weight scale). Family is set once via
+// QApplication::setFont; sizes are substituted into the global stylesheet.
+struct ThemeTypography {
+    QString fontFamily;
+    int sizeXs = 11;
+    int sizeSm = 12;
+    int sizeMd = 13;
+    int sizeLg = 15;
+    int sizeXl = 20;
+    int weightRegular = 400;
+    int weightMedium = 500;
+    int weightSemibold = 600;
+};
+
 struct ThemeDefinition {
     QString id;
     QString displayName;
     bool isDark = false;
     ThemeUiColors ui;
+    ThemeButtonColors button;
+    ThemeMetrics metrics;
+    ThemeTypography typography;
     ThemeDimensionEditorColors dimensionEditor;
     ThemeConstraintColors constraints;
     ThemeStatusColors status;
