@@ -4,7 +4,6 @@
  */
 #include "HistoryPanel.h"
 #include "FeatureCard.h"
-#include "EditParameterDialog.h"
 #include "../../app/document/Document.h"
 #include "../../app/document/OperationRecord.h"
 #include "../../app/history/DependencyGraph.h"
@@ -500,11 +499,9 @@ void HistoryPanel::onItemDoubleClicked(QTreeWidgetItem* item, int) {
 void HistoryPanel::showEditDialog(const std::string& opId) {
     if (!document_ || !viewport_) return;
 
-    EditParameterDialog dialog(document_, viewport_, commandProcessor_, opId, this);
-    if (dialog.exec() == QDialog::Accepted) {
-        rebuild();
-        viewport_->update();
-    }
+    // The edit dialog is owned and presented by MainWindow as an in-app modal
+    // overlay (see MainWindow::showEditParameterOverlay).
+    emit editRequested(QString::fromStdString(opId));
 }
 
 void HistoryPanel::onCustomContextMenu(const QPoint& pos) {

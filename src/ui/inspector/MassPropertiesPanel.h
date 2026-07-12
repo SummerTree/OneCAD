@@ -17,7 +17,12 @@ public:
     void updateForShape(const TopoDS_Shape& shape, const QString& bodyName);
     void clear();
 
+    // Above this face count the expensive volume/surface-area integrals are skipped
+    // (cheap counts + bounding box are still shown) to keep selection responsive.
+    void setHeavyComputeFaceLimit(int limit) { m_heavyComputeFaceLimit = limit; }
+
 private:
+    int m_heavyComputeFaceLimit = 40000;
     QLabel* m_nameLabel = nullptr;
     QLabel* m_volumeLabel = nullptr;
     QLabel* m_surfaceAreaLabel = nullptr;

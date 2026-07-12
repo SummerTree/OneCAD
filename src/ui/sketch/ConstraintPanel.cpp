@@ -8,8 +8,10 @@
 #include <QLabel>
 #include <QListWidget>
 #include <QListWidgetItem>
+#include <QMouseEvent>
 #include <QPushButton>
 #include <QVBoxLayout>
+#include <QWheelEvent>
 
 #include <algorithm>
 #include <unordered_set>
@@ -27,10 +29,27 @@ QString formatSelectionCount(int count) {
 
 ConstraintPanel::ConstraintPanel(QWidget* parent)
     : QWidget(parent) {
+    setFocusPolicy(Qt::ClickFocus);
     setupUi();
     m_themeConnection = connect(&ThemeManager::instance(), &ThemeManager::themeChanged,
                                 this, &ConstraintPanel::updateTheme, Qt::UniqueConnection);
     updateTheme();
+}
+
+void ConstraintPanel::mousePressEvent(QMouseEvent* event) {
+    event->accept();
+}
+
+void ConstraintPanel::mouseReleaseEvent(QMouseEvent* event) {
+    event->accept();
+}
+
+void ConstraintPanel::mouseMoveEvent(QMouseEvent* event) {
+    event->accept();
+}
+
+void ConstraintPanel::wheelEvent(QWheelEvent* event) {
+    event->accept();
 }
 
 void ConstraintPanel::setupUi() {
@@ -321,9 +340,14 @@ void ConstraintPanel::populateConstraintDetails() {
 
 void ConstraintPanel::populateSummaryState() {
     m_titleLabel->setText(tr("Sketch constraints"));
-    m_subtitleLabel->setText(tr("DOF: %1 • Conflicts: %2")
-                                 .arg(m_currentDof)
-                                 .arg(m_conflictCount));
+    // Qualitative state only — the exact DOF number lives in the status bar
+    // (single numeric source of truth) so the two readouts never disagree.
+    QString stateText = m_currentDof == 0 ? tr("Fully constrained")
+                                          : tr("Under-constrained");
+    if (m_conflictCount > 0) {
+        stateText += tr(" • Conflicts: %1").arg(m_conflictCount);
+    }
+    m_subtitleLabel->setText(stateText);
     m_hintLabel->setText(tr("Select geometry to constrain."));
 
     QPalette subtitlePalette = m_subtitleLabel->palette();

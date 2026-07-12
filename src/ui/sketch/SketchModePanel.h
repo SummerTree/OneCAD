@@ -61,6 +61,13 @@ signals:
      */
     void toolRequested(int toolType);
 
+protected:
+    // Swallow background mouse/wheel events so clicks do not reach the viewport.
+    void mousePressEvent(QMouseEvent* event) override;
+    void mouseReleaseEvent(QMouseEvent* event) override;
+    void mouseMoveEvent(QMouseEvent* event) override;
+    void wheelEvent(QWheelEvent* event) override;
+
 private:
     struct ConstraintButton {
         core::sketch::ConstraintType type;

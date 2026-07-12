@@ -76,6 +76,14 @@ signals:
      */
     void restoreSuppressedRequested();
 
+protected:
+    // Swallow mouse/wheel events on the panel background so clicks do not fall
+    // through to the viewport beneath (deselecting geometry / starting drags).
+    void mousePressEvent(QMouseEvent* event) override;
+    void mouseReleaseEvent(QMouseEvent* event) override;
+    void mouseMoveEvent(QMouseEvent* event) override;
+    void wheelEvent(QWheelEvent* event) override;
+
 private:
     void setupUi();
     void populateContext();

@@ -1,11 +1,17 @@
 #include "Viewport.h"
 #include "../../render/Camera3D.h"
 #include "../../core/sketch/Sketch.h"
+#include "../../app/document/Document.h"
 
 #include <QLoggingCategory>
 #include <QWheelEvent>
 #include <QtMath>
+#include <algorithm>
 #include <cmath>
+
+#include <BRepBndLib.hxx>
+#include <Bnd_Box.hxx>
+#include <TopoDS_Shape.hxx>
 
 namespace onecad {
 namespace ui {
@@ -384,6 +390,62 @@ void Viewport::setIsometricView() {
 
 void Viewport::resetView() {
     m_camera->reset();
+    update();
+    emit cameraChanged();
+}
+
+void Viewport::fitToView() {
+    if (!m_camera || !m_document) {
+        resetView();
+        return;
+    }
+
+    // Aggregate bounding box over visible bodies (same pattern as the adaptive
+    // near/far computation).
+    Bnd_Box box;
+    for (const auto& bodyId : m_document->getBodyIds()) {
+        if (!m_document->isBodyVisible(bodyId)) continue;
+        const auto* shape = m_document->getBodyShape(bodyId);
+        if (!shape || shape->IsNull()) continue;
+        BRepBndLib::Add(*shape, box);
+    }
+
+    if (box.IsVoid()) {
+        // Nothing to frame — preserve today's behavior.
+        resetView();
+        return;
+    }
+
+    double xmin, ymin, zmin, xmax, ymax, zmax;
+    box.Get(xmin, ymin, zmin, xmax, ymax, zmax);
+    const QVector3D center(static_cast<float>((xmin + xmax) * 0.5),
+                           static_cast<float>((ymin + ymax) * 0.5),
+                           static_cast<float>((zmin + zmax) * 0.5));
+    float radius = QVector3D(static_cast<float>(xmax - xmin),
+                             static_cast<float>(ymax - ymin),
+                             static_cast<float>(zmax - zmin)).length() * 0.5f;
+    if (radius < 1.0f) {
+        radius = 1.0f; // Avoid zero-extent degenerate framing.
+    }
+
+    constexpr float kMargin = 1.15f;
+    // Capture the view direction BEFORE moving the target.
+    const QVector3D dir = m_camera->forward();
+
+    if (m_camera->projectionType() == render::Camera3D::ProjectionType::Orthographic) {
+        m_camera->setOrthoScale(2.0f * radius * kMargin);
+        // Keep a sensible standoff so near/far clip stays valid.
+        const float dist = std::clamp(radius * 3.0f, 1.0f, 50000.0f);
+        m_camera->setTarget(center);
+        m_camera->setPosition(center - dir * dist);
+    } else {
+        const float fovRad = qDegreesToRadians(std::max(5.0f, m_camera->fov()));
+        const float dist = std::clamp(radius * kMargin / std::sin(fovRad * 0.5f),
+                                      1.0f, 50000.0f);
+        m_camera->setTarget(center);
+        m_camera->setPosition(center - dir * dist);
+    }
+
     update();
     emit cameraChanged();
 }

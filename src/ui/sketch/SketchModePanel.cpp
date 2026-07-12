@@ -5,15 +5,34 @@
 #include <QVBoxLayout>
 #include <QHBoxLayout>
 #include <QLabel>
+#include <QMouseEvent>
 #include <QPushButton>
 #include <QFrame>
+#include <QWheelEvent>
 
 namespace onecad::ui {
 
 SketchModePanel::SketchModePanel(QWidget* parent)
     : QWidget(parent)
 {
+    setFocusPolicy(Qt::ClickFocus);
     setupUi();
+}
+
+void SketchModePanel::mousePressEvent(QMouseEvent* event) {
+    event->accept();
+}
+
+void SketchModePanel::mouseReleaseEvent(QMouseEvent* event) {
+    event->accept();
+}
+
+void SketchModePanel::mouseMoveEvent(QMouseEvent* event) {
+    event->accept();
+}
+
+void SketchModePanel::wheelEvent(QWheelEvent* event) {
+    event->accept();
 }
 
 void SketchModePanel::setupUi() {

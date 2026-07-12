@@ -5,9 +5,12 @@
 #ifndef ONECAD_UI_HISTORY_EDITPARAMETERDIALOG_H
 #define ONECAD_UI_HISTORY_EDITPARAMETERDIALOG_H
 
-#include <QDialog>
+#include "../components/ModalOverlay.h"
+
 #include <QString>
 #include <QTimer>
+
+class QComboBox;
 #include <memory>
 #include <string>
 
@@ -42,7 +45,7 @@ class Viewport;
  * v1: Supports Extrude, Revolve, and Linear Pattern operations.
  * Uses debounced preview (100ms) on spinbox value changes.
  */
-class EditParameterDialog : public QDialog {
+class EditParameterDialog : public ModalOverlay {
     Q_OBJECT
 
 public:
@@ -57,9 +60,9 @@ signals:
     void previewRequested(const QString& opId);
     void parametersChanged(const QString& opId);
 
-public slots:
-    void accept() override;
-    void reject() override;
+protected:
+    bool onAccept() override;
+    void onReject() override;
 
 private slots:
     void onValueChanged();
@@ -90,6 +93,7 @@ private:
     QVBoxLayout* paramsLayout_ = nullptr;
     QDoubleSpinBox* distanceSpinbox_ = nullptr;   // Extrude
     QDoubleSpinBox* draftAngleSpinbox_ = nullptr; // Extrude
+    QComboBox* extrudeModeCombo_ = nullptr;       // Extrude end condition
     QDoubleSpinBox* angleSpinbox_ = nullptr;      // Revolve
     QDoubleSpinBox* spacingSpinbox_ = nullptr;    // Linear pattern
     QSpinBox* countSpinbox_ = nullptr;            // Linear pattern

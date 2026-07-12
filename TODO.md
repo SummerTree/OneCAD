@@ -101,3 +101,37 @@
 - [ ] Slice 2: Document/regeneration/tessellation rollback safety
 - [ ] Slice 3: Selection/topology promotion + viewport picking regressions
 - [ ] Slice 4: Beginner MVP UI gating + Sketch→Extrude→Edit stabilization
+
+## Active: Sketch-Only Extrude + Parametric Core Hardening
+
+Plan: `~/.claude/plans/act-as-senior-c-hashed-shell.md`
+
+- [x] **P0** Validation contract: `OperationValidation.h` + `AddOperationCommand` hook (forbid Extrude+FaceRef). Test: `testExtrudeFaceRefRejectedByAddCommand`. ✅ 29/29 ctest green.
+- [x] **P1** Sever extrude FaceRef path: `ExtrudeTool` (face branch + push-pull alias + patch members removed), `Viewport` auto-activation (Face dropped from canExtrude), `RegenerationEngine::buildExtrude` (FaceRef arm + merged-profile removed). Deleted 3 FaceRef tests + helpers, repointed rollback test. `resolveBooleanTargetBodyId` FaceRef arm KEPT (shared with Revolve). ✅
+- [x] **P2** Auto-sketch-on-face fast path: `MainWindow::createSketchOnFace` + `Document::primaryRegionId` + `Viewport::activateExtrudeToolForRegion`; wired into `extrudeRequested` (explicit intent only, not passive face selection). Test: `testAutoSketchOnFaceCreatesEditableSketchRegion`. ✅ 29/29 green.
+- [x] **P3** `DatumPlane` entity (OffsetFromPlane/OffsetFromFace/AngledFromEdge; ThreePoint reserved) + `Document` API (add/get/remove/recompute) + `document.json` round-trip (resolved frame stored) + `AddDatumPlaneCommand` + "Insert ▸ Datum Plane…" menu (offset + auto-sketch). Tests: `testDatumPlaneOffsetResolves`, datum in roundtrip compat. ✅ 29/29. (3D plane-picker overlay listing datums = follow-up.)
+- [x] **P4** Frozen attachment + `UpdateSketchAttachmentCommand` + `Document::resolveHostFaceResync` (literal-id → geometric re-pick fallback by frozen-plane orientation; already covers P7's host-face case) + "Insert ▸ Update Sketch Attachment" menu. Test: `testUpdateAttachmentResyncsPlane`. ✅ 29/29.
+- [x] **P5** Full end modes: `ExtrudeParams` two-direction fields + `HistoryIO`; `buildExtrude` refactor — Two-Directions (fused prisms), Symmetric, ThroughAll, and To Face / To Next via **compute-distance-then-prism** (planar-target projection + `distanceToNextPlanarFace`; avoids `BRepFeat` fragility). Distance guard relaxed for non-Blind modes. Tests: `testExtrudeTwoDirections/ThroughAllCutsBox/ToFaceStopsAtFace/ToNextRequiresBody`. ✅ 29/29. (Curved-target up-to-surface + mode UI in EditParameterDialog = P8/follow-up.)
+- [x] **P6** Parametric core: face/edge → producer DAG edges (id-prefix owner) for `regenerateFrom` completeness; temporal-order guard `DependencyGraph::producesBefore` wired into `buildExtrude` boolean target. Confirmed `regenerateFrom` already does affected-set partial regen (skips clean branches). Tests: `testTemporalGuardRejectsFutureTarget`, `testDirtyFlagSkipsCleanBranch`. ✅ 29/29. (ElementMap snapshot in preview backup/restore deferred — current addBodyWithId rebuild is functional; flagged.)
+- [x] **P7** Broken-reference fallback: `ElementMap::resolveWithFallback` (descriptor re-match among same-owner live entries, `kRematchRejectScore` threshold, `sources`/owner-scoped) wired into `RegenerationEngine::resolveFace`/`resolveEdge` (logged "reference-remapped"). Host-face case already via P4. Test: `testResolveWithFallbackRematchesAndRejects` (+ gate `proto_elementmap_rigorous`). ✅ 29/29.
+- [x] **P8** Edit-in-place + re-profile: `Document::updateOperationInput` + `EditOperationInputCommand` (validates input type, regenerates, undo); `EditParameterDialog` exposes End Condition combo + preserves all `ExtrudeParams` on edit. Tests: `testReprofileExtrudeSwapsSketchRegion`, `testReprofileToFaceRefRejected`. ✅ 29/29; full `OneCAD` app links. (Boolean-mode picker + "Re-profile" selection button in dialog + previewFrom-rewire = follow-ups; commands exist + tested.)
+
+Gate every phase: `proto_regeneration`, `proto_elementmap_rigorous`, `proto_face_builder`, `proto_loop_detector`; `make test`; `test_compile` for UI.
+
+## ✅ ALL PHASES P0–P8 COMPLETE — 29/29 ctest green, full app links.
+
+Follow-ups (non-blocking): datum planes in 3D plane-picker overlay; curved-surface sketch/up-to-surface; ElementMap snapshot in preview backup/restore; EditParameterDialog boolean-mode + re-profile buttons + previewFrom rewire.
+
+## Active: UI Design Refinement (Phases A–D)
+
+Plan: `~/.claude/plans/act-as-senior-c-whimsical-toucan.md`. Refines existing UI infra (no rebuilds). Adopt accent cyan #2E9BDA; full design-token extraction.
+
+- [x] **A** Visual system: accent→#2E9BDA; ThemeButtonColors/ThemeMetrics/ThemeTypography structs; buildStyleSheet token extraction + primary/ghost button rules; SF Pro app font; ModalOverlay primary/ghost; CommandPalette theme+shortcuts+match-bold+badge; ToggleSwitch/RegenFailureDialog tokenization. ✅ test_compile green, grep-gate clean.
+- [x] **B** Selection-driven Inspector: wire PropertyInspector to viewport/history/navigator selection; View-menu toggle + QSettings; debounce/guard MassPropertiesPanel; body name/visibility editors via existing commands. ✅ test_compile green.
+- [x] **C** Viewport/sketch fixes: de-dup DOF (status bar numeric, panel qualitative); ConstraintPanel/SketchModePanel consume mouse events; Viewport::fitToView() + Fit/Home buttons (bottom-left, ic_fit/ic_view_iso). ✅ test_compile green.
+- [x] **D** Start screen: logo+version header; search+sort+thumbnail cache; responsive grid; Import STEP tile; ProjectTile middle-elision. ✅ test_compile green.
+
+Gate: `test_compile`, full app build, headless smoke; `proto_elementmap_rigorous` + `proto_regeneration` before commit.
+
+✅ **ALL PHASES A–D COMPLETE & VERIFIED** — full app builds+links; headless smoke exit 0 (SF Pro applied, no malformed-QSS); 29/29 ctest green. Caught+fixed: `Qt::UniqueConnection` is illegal with lambdas (ToggleSwitch/CommandPalette → switched to PMF). Not committed (per instruction).
+Manual visual checks remaining for user: theme toggle (cyan accent everywhere, contrast), ⌘K shortcuts/badges, modal primary/ghost buttons, Inspector on body/op select, sketch panels no click-through, Fit/Home buttons, start-screen search/sort/import.

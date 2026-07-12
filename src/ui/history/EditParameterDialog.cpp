@@ -11,16 +11,13 @@
 #include "../../core/sketch/Sketch.h"
 #include "../viewport/Viewport.h"
 
+#include <QComboBox>
 #include <QDoubleSpinBox>
 #include <QLabel>
 #include <QVBoxLayout>
-#include <QHBoxLayout>
 #include <QFormLayout>
-#include <QPushButton>
-#include <QDialogButtonBox>
 #include <QCheckBox>
 #include <QLoggingCategory>
-#include <QMessageBox>
 #include <QSpinBox>
 
 namespace onecad::ui {
@@ -76,14 +73,13 @@ EditParameterDialog::EditParameterDialog(app::Document* document,
                                          app::commands::CommandProcessor* commandProcessor,
                                          const std::string& opId,
                                          QWidget* parent)
-    : QDialog(parent)
+    : ModalOverlay(parent)
     , document_(document)
     , viewport_(viewport)
     , commandProcessor_(commandProcessor)
     , opId_(opId) {
-    setWindowTitle(tr("Edit Parameters"));
-    setModal(true);
-    setMinimumWidth(300);
+    setTitle(tr("Edit Operation Parameters"));
+    setCardMinimumWidth(340);
 
     // Setup debounce timer
     debounceTimer_ = new QTimer(this);
@@ -100,25 +96,10 @@ EditParameterDialog::~EditParameterDialog() {
 }
 
 void EditParameterDialog::setupUi() {
-    auto* mainLayout = new QVBoxLayout(this);
-
-    // Title
-    auto* titleLabel = new QLabel(tr("Edit Operation Parameters"));
-    titleLabel->setStyleSheet("font-weight: bold; font-size: 14px;");
-    mainLayout->addWidget(titleLabel);
-
-    // Parameters form
+    // Title and Ok/Cancel buttons are provided by ModalOverlay; only the
+    // parameter form is added to the card body here.
     paramsLayout_ = new QVBoxLayout;
-    mainLayout->addLayout(paramsLayout_);
-
-    mainLayout->addStretch();
-
-    // Buttons
-    auto* buttonBox = new QDialogButtonBox(
-        QDialogButtonBox::Ok | QDialogButtonBox::Cancel);
-    connect(buttonBox, &QDialogButtonBox::accepted, this, &QDialog::accept);
-    connect(buttonBox, &QDialogButtonBox::rejected, this, &QDialog::reject);
-    mainLayout->addWidget(buttonBox);
+    addContentLayout(paramsLayout_);
 }
 
 void EditParameterDialog::loadCurrentParams() {
@@ -188,6 +169,18 @@ void EditParameterDialog::buildExtrudeUi(const app::ExtrudeParams& params) {
             this, &EditParameterDialog::onValueChanged);
     formLayout->addRow(tr("Draft Angle:"), draftAngleSpinbox_);
 
+    // End condition (direction 1). Order must match indexToExtrudeMode below.
+    extrudeModeCombo_ = new QComboBox;
+    extrudeModeCombo_->addItem(tr("Blind"));
+    extrudeModeCombo_->addItem(tr("Through All"));
+    extrudeModeCombo_->addItem(tr("Symmetric"));
+    extrudeModeCombo_->addItem(tr("To Next"));
+    extrudeModeCombo_->addItem(tr("To Face"));
+    extrudeModeCombo_->setCurrentIndex(static_cast<int>(params.extrudeMode));
+    connect(extrudeModeCombo_, QOverload<int>::of(&QComboBox::currentIndexChanged),
+            this, [this](int) { onValueChanged(); });
+    formLayout->addRow(tr("End Condition:"), extrudeModeCombo_);
+
     paramsLayout_->addLayout(formLayout);
 }
 
@@ -249,24 +242,25 @@ void EditParameterDialog::buildLinearPatternUi(const app::LinearPatternParams& p
 }
 
 app::ExtrudeParams EditParameterDialog::getExtrudeParams() const {
+    // Start from the original params so non-edited fields (boolean mode, target body/face,
+    // two-direction settings) are preserved, then override the editable controls.
     app::ExtrudeParams params;
-    params.distance = distanceSpinbox_ ? distanceSpinbox_->value() : 0.0;
-    params.draftAngleDeg = draftAngleSpinbox_ ? draftAngleSpinbox_->value() : 0.0;
-    params.booleanMode = app::BooleanMode::NewBody;  // Preserve original mode
-    params.targetBodyId.clear();
-
-    // Find original to preserve boolean mode and target body
     if (document_) {
         for (const auto& op : document_->operations()) {
             if (op.opId == opId_ && std::holds_alternative<app::ExtrudeParams>(op.params)) {
-                const auto& orig = std::get<app::ExtrudeParams>(op.params);
-                params.booleanMode = orig.booleanMode;
-                params.targetBodyId = orig.targetBodyId;
-                qCDebug(logEditParamsDialog) << "getExtrudeParams:preserved-target"
-                                             << QString::fromStdString(params.targetBodyId);
+                params = std::get<app::ExtrudeParams>(op.params);
                 break;
             }
         }
+    }
+    if (distanceSpinbox_) {
+        params.distance = distanceSpinbox_->value();
+    }
+    if (draftAngleSpinbox_) {
+        params.draftAngleDeg = draftAngleSpinbox_->value();
+    }
+    if (extrudeModeCombo_) {
+        params.extrudeMode = static_cast<app::ExtrudeMode>(extrudeModeCombo_->currentIndex());
     }
     return params;
 }
@@ -319,6 +313,7 @@ void EditParameterDialog::onValueChanged() {
     hasChanges_ = true;
     previewValid_ = true;
     previewError_.clear();
+    clearError();
     debounceTimer_->start();
 }
 
@@ -390,25 +385,28 @@ void EditParameterDialog::clearPreview() {
     }
 }
 
-void EditParameterDialog::accept() {
+bool EditParameterDialog::onAccept() {
+    // Guard against the operation being deleted while the overlay was open.
+    if (document_ && !document_->findOperation(opId_)) {
+        setError(tr("Operation no longer exists."));
+        return false;
+    }
     if (!previewValid_) {
-        QMessageBox::warning(this, tr("Cannot Apply Parameters"),
-                             previewError_.isEmpty() ? tr("Preview failed.") : previewError_);
-        return;
+        setError(previewError_.isEmpty() ? tr("Preview failed.") : previewError_);
+        return false;
     }
     if (hasChanges_) {
         if (!applyChanges()) {
-            QMessageBox::warning(this, tr("Cannot Apply Parameters"), tr("Regeneration failed."));
-            return;
+            setError(previewError_.isEmpty() ? tr("Regeneration failed.") : previewError_);
+            return false;
         }
     }
     clearPreview();
-    QDialog::accept();
+    return true;
 }
 
-void EditParameterDialog::reject() {
+void EditParameterDialog::onReject() {
     clearPreview();
-    QDialog::reject();
 }
 
 bool EditParameterDialog::applyChanges() {

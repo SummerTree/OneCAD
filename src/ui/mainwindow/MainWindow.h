@@ -41,6 +41,7 @@ class SketchModePanel;
 class RenderDebugPanel;
 class StartOverlay;
 class HistoryPanel;
+class EditParameterDialog;
 class SnapSettingsPanel;
 class PropertyInspector;
 class CommandPalette;
@@ -73,6 +74,8 @@ private slots:
     void onExitSketch();
     void onSketchModeChanged(bool inSketchMode);
     void onSketchPlanePicked(int planeIndex);
+    void onCreateDatumPlane();
+    void onUpdateSketchAttachment();
     void onPlaneSelectionCancelled();
     void openSketchForEdit(const QString& sketchId);
     void onImport();
@@ -91,6 +94,11 @@ private slots:
     void onRenameItem(const QString& itemId);
     void onVisibilityToggled(const QString& itemId, bool visible);
     void onIsolateItem(const QString& itemId);
+
+    // Selection-driven Inspector dispatch.
+    void onInspectorBodySelected(const QString& bodyId);
+    void onInspectorOperationSelected(const QString& opId);
+    void onInspectorSelectionCleared();
 
 private:
     void setupMenuBar();
@@ -116,10 +124,19 @@ private:
     void positionStartOverlay();
     void setupHistoryPanel();
     void positionHistoryPanel();
+    void showEditParameterOverlay(const QString& opId);
+    void closeEditParameterOverlay();
     void setupSnapOverlay();
     void positionSnapOverlay();
     void positionSnapSettingsPanel();
+    void setupViewControlButtons();
+    void positionViewControlButtons();
     void handleRegenerationFailures();
+    // Create a real editable sketch attached to a planar model face (host-face
+    // attachment + projected boundary), WITHOUT entering sketch mode. Returns the
+    // new sketch id, or empty on failure. Shared by onNewSketch and the
+    // extrude-over-face fast path.
+    std::string createSketchOnFace(const std::string& bodyId, const std::string& faceId);
     void showStartDialog();
     bool loadDocumentFromPath(const QString& fileName);
     bool saveDocumentToPath(const QString& filePath);
@@ -143,10 +160,15 @@ private:
     RenderDebugPanel* m_renderDebugPanel = nullptr;
     StartOverlay* m_startOverlay = nullptr;
     HistoryPanel* m_historyPanel = nullptr;
+    EditParameterDialog* m_editParameterOverlay = nullptr;
     SidebarToolButton* m_historyOverlayButton = nullptr;
     SnapSettingsPanel* m_snapSettingsPanel = nullptr;
     SidebarToolButton* m_snapSettingsButton = nullptr;
+    SidebarToolButton* m_fitViewButton = nullptr;
+    SidebarToolButton* m_homeViewButton = nullptr;
     PropertyInspector* m_propertyInspector = nullptr;
+    QAction* m_inspectorAction = nullptr;        // View > Inspector toggle
+    bool m_inspectorUserHidden = false;          // respects an explicit user hide
     CommandPalette* m_commandPalette = nullptr;
     QHBoxLayout* m_centralLayout = nullptr;
 

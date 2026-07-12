@@ -63,7 +63,6 @@ public:
 signals:
     void collapsedChanged(bool collapsed);
     void operationSelected(const QString& opId);
-    void operationDoubleClicked(const QString& opId);
     void editRequested(const QString& opId);
     void rollbackRequested(const QString& opId);
     void suppressRequested(const QString& opId, bool suppress);

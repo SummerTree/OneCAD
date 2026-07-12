@@ -45,7 +45,7 @@ src/
 ├── render/            # Camera3D, Grid3D, OpenGL 4.1 Core, SketchRenderer, TessellationCache
 ├── ui/                # Qt6 widgets: Viewport, ContextToolbar, ViewCube, ModelNavigator, tools/ (Extrude/Revolve/Fillet/Shell/LinearPattern/Measure)
 └── io/                # Package (ZIP/Directory), HistoryIO (JSONL), DocumentIO, SketchIO, ElementMapIO
-tests/                 # ~27 standalone prototype executables for regression testing
+tests/                 # ~31 standalone prototype executables for regression testing
 ```
 
 ### Key Subsystems
@@ -53,7 +53,7 @@ tests/                 # ~27 standalone prototype executables for regression tes
 **Document & History** (`src/app/`):
 
 - `Document` is the central QObject storing sketches (UUID map), bodies (TopoDS_Shape), and operations (`OperationRecord` vector)
-- `OperationRecord`: opId, type (Extrude/Revolve/Fillet/Chamfer/Shell/Boolean/LinearPattern), input (`std::variant`: SketchRegionRef/FaceRef/BodyRef), params (`std::variant` of typed params), resultBodyIds
+- `OperationRecord`: opId, type (Extrude/Revolve/Fillet/Chamfer/Shell/Boolean/LinearPattern/CircularPattern/Loft/Sweep/MirrorBody — see `OperationType` in `OperationRecord.h`), input (`std::variant`: SketchRegionRef/FaceRef/BodyRef), params (`std::variant` of typed params), resultBodyIds. Sidecar `OperationMetadata.h`/`OperationValidation.h` hold display metadata + input validation; `DatumPlane.h` defines datum plane geometry
 - `DependencyGraph`: forward/backward adjacency, Kahn's topological sort, suppression propagation, failure tracking
 - `RegenerationEngine`: replays operations in topo-sorted order → produces bodies. Supports `regenerateAll()`, `regenerateFrom(opId)`, `previewFrom(opId, newParams)`
 - `KernelScheduler`: single-writer background thread for non-blocking regeneration
@@ -62,7 +62,7 @@ tests/                 # ~27 standalone prototype executables for regression tes
 
 - `Command` interface: `execute()`, `undo()`, `label()`
 - `CommandProcessor`: undo/redo stacks, transaction batching
-- Operation commands: AddOperation, RemoveOperation, UpdateOperationParams, Rollback, SetOperationSuppression
+- Command families (`src/app/commands/`): operations (AddOperation, RemoveOperation, UpdateOperationParams, EditOperationInput, Rollback, SetOperationSuppression), body/sketch lifecycle (Add/Delete/Modify/Rename Body, Delete/Rename Sketch, ToggleVisibility), sketch (SketchDragGesture, UpdateSketchAttachment), datum (AddDatumPlane), import (ImportStep). Shared helpers in `OperationCommandUtils.h`
 - Rollback = suppress downstream ops without deletion (maintains dependency links)
 - Applied op count tracks insertion cursor (≤ total ops; ops beyond cursor are drafts)
 
@@ -127,10 +127,10 @@ tests/                 # ~27 standalone prototype executables for regression tes
 
 ## Specifications
 
-- `SPECIFICATION.md` - Full software spec (3500+ lines)
-- `SKETCH_IMPLEMENTATION_PLAN.md` - 7-phase roadmap
-- `PHASES.md` - Development phases overview
-- Per-subsystem `AGENTS.md` files in `src/kernel/`, `src/core/`, `src/render/`, `src/ui/` (read the kernel one before touching ElementMap). Note: the **root `AGENTS.md` is stale** — it claims 3D modeling/feature history/STEP I/O are unimplemented, which is no longer true; trust this file over it.
+- `docs/SPECIFICATION.md` - Full software spec (3500+ lines)
+- `docs/SKETCH_IMPLEMENTATION_PLAN.md` - 7-phase roadmap
+- `docs/PHASES.md` - Development phases overview
+- Per-subsystem `AGENTS.md` files in `src/kernel/`, `src/core/`, `src/render/`, `src/ui/` (read the kernel one for ElementMap descriptor/hashing internals before touching ElementMap). Note: several `AGENTS.md` files are **stale** — the **root** one claims 3D modeling/feature history/STEP I/O are unimplemented (false), and **`src/kernel/AGENTS.md`** claims `onecad_kernel` is a header-only INTERFACE target not linked into the app (false — it is now a `STATIC` lib with compiled sources, wired in). Trust this file and the actual CMakeLists over them.
 
 ## Code Standards
 

@@ -6,6 +6,8 @@
 #include "../../render/Camera3D.h"
 #include "../../core/sketch/Sketch.h"
 #include "../../core/sketch/tools/SketchToolManager.h"
+#include "../../app/commands/AddDatumPlaneCommand.h"
+#include "../../app/commands/UpdateSketchAttachmentCommand.h"
 #include "../../app/commands/CommandProcessor.h"
 #include "../../app/commands/DeleteBodyCommand.h"
 #include "../../app/commands/DeleteSketchCommand.h"
@@ -67,6 +69,7 @@
 #include "../components/SidebarToolButton.h"
 #include "../start/StartOverlay.h"
 #include "../history/HistoryPanel.h"
+#include "../history/EditParameterDialog.h"
 #include "../history/RegenFailureDialog.h"
 #include "../inspector/PropertyInspector.h"
 #include "../palette/CommandPalette.h"
@@ -281,10 +284,37 @@ MainWindow::MainWindow(QWidget* parent)
     connect(m_navigator, &ModelNavigator::isolateRequested,
             this, &MainWindow::onIsolateItem);
 
-    // Property inspector dock
+    // Property inspector dock. Hidden by default; revealed on selection (unless the
+    // user explicitly hid it) or via the View > Inspector toggle.
     m_propertyInspector = new PropertyInspector(this);
     m_propertyInspector->setDocument(m_document.get());
     addDockWidget(Qt::RightDockWidgetArea, m_propertyInspector);
+    m_propertyInspector->setVisible(false);
+
+    // Route inspector edits through undoable commands (same pattern as the navigator).
+    connect(m_propertyInspector, &PropertyInspector::bodyRenameRequested, this,
+            [this](const QString& bodyId, const QString& newName) {
+                auto cmd = std::make_unique<app::commands::RenameBodyCommand>(
+                    m_document.get(), bodyId.toStdString(), newName.toStdString());
+                m_commandProcessor->execute(std::move(cmd));
+            });
+    connect(m_propertyInspector, &PropertyInspector::bodyVisibilityChangeRequested, this,
+            [this](const QString& bodyId, bool visible) {
+                auto cmd = std::make_unique<app::commands::ToggleVisibilityCommand>(
+                    m_document.get(), bodyId.toStdString(),
+                    app::commands::ToggleVisibilityCommand::ItemType::Body, visible);
+                m_commandProcessor->execute(std::move(cmd));
+                if (m_viewport) {
+                    m_viewport->update();
+                }
+            });
+    // Keep displayed properties fresh across regeneration/rollback.
+    connect(m_document.get(), &app::Document::bodyUpdated,
+            m_propertyInspector, &PropertyInspector::refresh);
+    connect(m_document.get(), &app::Document::operationUpdated,
+            m_propertyInspector, &PropertyInspector::refresh);
+    connect(m_document.get(), &app::Document::appliedOpCountChanged,
+            m_propertyInspector, [this](qulonglong) { m_propertyInspector->refresh(); });
 
     // Command palette (Cmd+K)
     m_commandPalette = new CommandPalette(this);
@@ -460,11 +490,17 @@ void MainWindow::setupMenuBar() {
     editMenu->addSeparator();
     editMenu->addAction(tr("&Delete"), QKeySequence::Delete, this, []() {});
     editMenu->addAction(tr("Select &All"), QKeySequence::SelectAll, this, []() {});
-    
+
+    // Insert menu
+    QMenu* insertMenu = menuBar->addMenu(tr("&Insert"));
+    insertMenu->addAction(tr("&Datum Plane..."), this, &MainWindow::onCreateDatumPlane);
+    insertMenu->addAction(tr("&Update Sketch Attachment"), this,
+                          &MainWindow::onUpdateSketchAttachment);
+
     // View menu
     QMenu* viewMenu = menuBar->addMenu(tr("&View"));
     viewMenu->addAction(tr("Zoom to &Fit"), QKeySequence(Qt::Key_0), this, [this]() {
-        m_viewport->resetView();
+        m_viewport->fitToView();
     });
     viewMenu->addSeparator();
     viewMenu->addAction(tr("&Front"), QKeySequence(Qt::Key_1), this, [this]() {
@@ -534,7 +570,30 @@ void MainWindow::setupMenuBar() {
     }
 
     viewMenu->addSeparator();
-    
+
+    // Inspector toggle. Checkmark stays in sync with the dock's own visibility
+    // (e.g. when closed via its title-bar X), and an explicit hide is remembered so
+    // selection does not force the dock back open.
+    m_inspectorAction = viewMenu->addAction(tr("&Inspector"));
+    m_inspectorAction->setCheckable(true);
+    connect(m_inspectorAction, &QAction::triggered, this, [this](bool checked) {
+        m_inspectorUserHidden = !checked;
+        if (m_propertyInspector) {
+            m_propertyInspector->setVisible(checked);
+        }
+    });
+    if (m_propertyInspector) {
+        connect(m_propertyInspector, &QDockWidget::visibilityChanged, this,
+                [this](bool visible) {
+                    if (m_inspectorAction) {
+                        QSignalBlocker block(m_inspectorAction);
+                        m_inspectorAction->setChecked(visible);
+                    }
+                });
+    }
+
+    viewMenu->addSeparator();
+
     // Help menu
     QMenu* helpMenu = menuBar->addMenu(tr("&Help"));
     helpMenu->addAction(tr("&About OneCAD"), this, [this]() {
@@ -667,6 +726,32 @@ void MainWindow::setupToolBar() {
         if (!m_viewport) {
             return;
         }
+        // Fast path: a single planar model face auto-creates a sketch on that face
+        // (projecting its boundary) and extrudes the resulting region. Extrude no
+        // longer push-pulls a raw face — it always operates on a sketch region.
+        const auto modelSel = m_viewport->modelSelection();
+        if (m_document && modelSel.size() == 1 &&
+            modelSel.front().kind == app::selection::SelectionKind::Face) {
+            const auto& face = modelSel.front();
+            const std::string sketchId =
+                createSketchOnFace(face.id.ownerId, face.id.elementId);
+            const auto regionId = sketchId.empty()
+                ? std::optional<std::string>{}
+                : m_document->primaryRegionId(sketchId);
+            const bool activated = regionId
+                ? m_viewport->activateExtrudeToolForRegion(sketchId, *regionId)
+                : false;
+            if (m_toolStatus) {
+                m_toolStatus->setText(activated
+                    ? tr("Extrude tool active - sketch created on face")
+                    : tr("Could not start extrude on the selected face"));
+            }
+            if (m_toolbar) {
+                m_toolbar->setExtrudeActive(activated);
+            }
+            return;
+        }
+
         const bool activated = m_viewport->activateExtrudeTool();
         if (m_toolStatus) {
             m_toolStatus->setText(activated
@@ -795,6 +880,16 @@ void MainWindow::setupToolBar() {
                 default:
                     m_toolbar->setContext(ContextToolbar::Context::Default);
                     break;
+            }
+
+            // Drive the selection-driven Inspector. A single body populates it; a
+            // fully empty selection clears it; face/edge/region selections leave the
+            // last shown content (avoids flicker during modeling).
+            if (hasBody) {
+                onInspectorBodySelected(
+                    QString::fromStdString(modelSelection.front().id.ownerId));
+            } else if (context == 0 && modelSelection.empty() && sketchSelection.empty()) {
+                onInspectorSelectionCleared();
             }
         });
     }
@@ -1070,6 +1165,42 @@ void MainWindow::positionStartOverlay() {
     m_startOverlay->raise();
 }
 
+void MainWindow::showEditParameterOverlay(const QString& opId) {
+    if (m_editParameterOverlay) {
+        return; // Single instance; one edit at a time.
+    }
+    if (!m_document || !m_viewport || !centralWidget()) {
+        return;
+    }
+
+    m_editParameterOverlay = new EditParameterDialog(
+        m_document.get(), m_viewport, m_commandProcessor.get(),
+        opId.toStdString(), centralWidget());
+
+    connect(m_editParameterOverlay, &EditParameterDialog::finished, this, [this](bool accepted) {
+        if (accepted && m_historyPanel) {
+            m_historyPanel->rebuild();
+        }
+        closeEditParameterOverlay();
+    });
+
+    // Geometry is self-managed by ModalOverlay (tracks its parent).
+    m_editParameterOverlay->show();
+    m_editParameterOverlay->raise();
+    m_editParameterOverlay->setFocus(Qt::OtherFocusReason);
+}
+
+void MainWindow::closeEditParameterOverlay() {
+    if (!m_editParameterOverlay) {
+        return;
+    }
+    m_editParameterOverlay->deleteLater();
+    m_editParameterOverlay = nullptr;
+    if (m_viewport) {
+        m_viewport->update(); // Destructor clears preview meshes.
+    }
+}
+
 void MainWindow::setupViewport() {
     QWidget* central = new QWidget(this);
     QHBoxLayout* layout = new QHBoxLayout(central);
@@ -1100,6 +1231,21 @@ void MainWindow::setupViewport() {
 
     connect(m_startOverlay, &StartOverlay::openProjectRequested, this, [this]() {
         onOpenDocument();
+    });
+
+    connect(m_startOverlay, &StartOverlay::importStepProjectRequested, this, [this]() {
+        const QString file = QFileDialog::getOpenFileName(
+            this, tr("Import STEP File"), defaultProjectDirectory(),
+            tr("STEP Files (*.step *.stp);;All Files (*)"));
+        if (file.isEmpty()) {
+            return;
+        }
+        // Fresh document, then reuse the existing STEP import pipeline.
+        onNewDocument();
+        importStepFile(file);
+        if (m_startOverlay) {
+            m_startOverlay->hide();
+        }
     });
 
     connect(m_startOverlay, &StartOverlay::recentProjectRequested, this, [this](const QString& path) {
@@ -1175,7 +1321,11 @@ void MainWindow::setupViewport() {
         if (m_viewport) {
             m_viewport->setReferenceSketch(id);
         }
+        // A sketch has no body properties; clear the inspector content.
+        onInspectorSelectionCleared();
     });
+    connect(m_navigator, &ModelNavigator::bodySelected, this,
+            &MainWindow::onInspectorBodySelected);
     connect(m_navigator, &ModelNavigator::editSketchRequested, this, &MainWindow::openSketchForEdit);
 
     setupNavigatorOverlayButton();
@@ -1183,6 +1333,7 @@ void MainWindow::setupViewport() {
     setupRenderDebugOverlay();
     setupSnapOverlay(); // Before History panel to reserve space
     setupHistoryPanel();
+    setupViewControlButtons();
     
     // Initial resize to position overlays
     positionHomeOverlayButton();
@@ -1247,6 +1398,7 @@ bool MainWindow::eventFilter(QObject* obj, QEvent* event) {
         positionSnapOverlay();
         positionSnapSettingsPanel();
         positionHistoryPanel();
+        positionViewControlButtons();
     }
 
     return QMainWindow::eventFilter(obj, event);
@@ -1320,25 +1472,10 @@ void MainWindow::onNewSketch() {
     qCDebug(logMainWindow) << "onNewSketch:modelSelectionCount=" << selection.size();
     if (selection.size() == 1 && selection[0].kind == app::selection::SelectionKind::Face) {
         const auto& selectedFace = selection[0];
-        qCDebug(logMainWindow) << "onNewSketch:face-selected"
-                               << "bodyId=" << QString::fromStdString(selectedFace.id.ownerId)
-                               << "faceId=" << QString::fromStdString(selectedFace.id.elementId);
-        auto plane = m_document->getSketchPlaneForFace(selectedFace.id.ownerId,
-                                                        selectedFace.id.elementId);
-        if (plane) {
-            auto sketch = std::make_unique<core::sketch::Sketch>(*plane);
-            sketch->setHostFaceAttachment(selectedFace.id.ownerId, selectedFace.id.elementId);
-            m_activeSketchId = m_document->addSketch(std::move(sketch));
-            if (!m_activeSketchId.empty()) {
-                const bool projected = m_document->ensureHostFaceBoundariesProjected(m_activeSketchId);
-                qCDebug(logMainWindow) << "onNewSketch:host-boundary-projection"
-                                       << "sketchId=" << QString::fromStdString(m_activeSketchId)
-                                       << "projected=" << projected;
-            }
-            if (!m_activeSketchId.empty()) {
-                m_viewport->setReferenceSketch(QString::fromStdString(m_activeSketchId));
-            }
-
+        const std::string sketchId =
+            createSketchOnFace(selectedFace.id.ownerId, selectedFace.id.elementId);
+        if (!sketchId.empty()) {
+            m_activeSketchId = sketchId;
             core::sketch::Sketch* sketchPtr = m_document->getSketch(m_activeSketchId);
             if (sketchPtr) {
                 m_viewport->enterSketchMode(sketchPtr);
@@ -1348,14 +1485,11 @@ void MainWindow::onNewSketch() {
                                       << "sketchId=" << QString::fromStdString(m_activeSketchId);
                 return;
             }
-
-            qCWarning(logMainWindow) << "onNewSketch:created-sketch-missing-after-insert"
-                                     << QString::fromStdString(m_activeSketchId);
             m_activeSketchId.clear();
             m_toolStatus->setText(tr("Ready"));
             return;
         }
-        qCWarning(logMainWindow) << "onNewSketch:failed-to-resolve-face-plane"
+        qCWarning(logMainWindow) << "onNewSketch:failed-to-create-sketch-on-face"
                                  << "bodyId=" << QString::fromStdString(selectedFace.id.ownerId)
                                  << "faceId=" << QString::fromStdString(selectedFace.id.elementId);
     }
@@ -1363,6 +1497,37 @@ void MainWindow::onNewSketch() {
     m_viewport->beginPlaneSelection();
     m_toolStatus->setText(tr("Select a plane to start sketch"));
     qCInfo(logMainWindow) << "onNewSketch:plane-selection-started";
+}
+
+std::string MainWindow::createSketchOnFace(const std::string& bodyId,
+                                           const std::string& faceId) {
+    if (!m_document || bodyId.empty() || faceId.empty()) {
+        return {};
+    }
+    qCDebug(logMainWindow) << "createSketchOnFace"
+                           << "bodyId=" << QString::fromStdString(bodyId)
+                           << "faceId=" << QString::fromStdString(faceId);
+
+    auto plane = m_document->getSketchPlaneForFace(bodyId, faceId);
+    if (!plane) {
+        qCWarning(logMainWindow) << "createSketchOnFace:failed-to-resolve-face-plane";
+        return {};
+    }
+
+    auto sketch = std::make_unique<core::sketch::Sketch>(*plane);
+    sketch->setHostFaceAttachment(bodyId, faceId);
+    const std::string sketchId = m_document->addSketch(std::move(sketch));
+    if (sketchId.empty()) {
+        qCWarning(logMainWindow) << "createSketchOnFace:add-sketch-failed";
+        return {};
+    }
+
+    const bool projected = m_document->ensureHostFaceBoundariesProjected(sketchId);
+    qCDebug(logMainWindow) << "createSketchOnFace:host-boundary-projection"
+                           << "sketchId=" << QString::fromStdString(sketchId)
+                           << "projected=" << projected;
+    m_viewport->setReferenceSketch(QString::fromStdString(sketchId));
+    return sketchId;
 }
 
 void MainWindow::onSketchPlanePicked(int planeIndex) {
@@ -1408,6 +1573,83 @@ void MainWindow::onSketchPlanePicked(int planeIndex) {
     qCInfo(logMainWindow) << "onSketchPlanePicked:entered-sketch-mode"
                           << "plane=" << planeName
                           << "sketchId=" << QString::fromStdString(m_activeSketchId);
+}
+
+void MainWindow::onCreateDatumPlane() {
+    if (!m_document || !m_viewport) {
+        return;
+    }
+    if (m_viewport->isInSketchMode()) {
+        onExitSketch();
+    }
+
+    bool ok = false;
+    const double offset = QInputDialog::getDouble(
+        this, tr("Create Datum Plane"), tr("Offset from XY plane (mm):"),
+        10.0, -1.0e6, 1.0e6, 3, &ok);
+    if (!ok) {
+        return;
+    }
+
+    app::DatumPlane datum;
+    datum.name = tr("Datum (XY +%1)").arg(offset).toStdString();
+    datum.kind = app::DatumPlane::Kind::OffsetFromPlane;
+    datum.basePlaneId = "XY";
+    datum.offset = offset;
+
+    auto command = std::make_unique<app::commands::AddDatumPlaneCommand>(m_document.get(), datum);
+    auto* raw = command.get();
+    const bool added = m_commandProcessor
+        ? m_commandProcessor->execute(std::move(command))
+        : command->execute();
+    if (!added) {
+        m_toolStatus->setText(tr("Failed to create datum plane"));
+        return;
+    }
+
+    // Start a sketch on the new datum (frozen frame).
+    const app::DatumPlane* created = m_document->getDatumPlane(raw->datumId());
+    if (!created || !created->resolvedValid) {
+        m_toolStatus->setText(tr("Datum plane created"));
+        return;
+    }
+    auto sketch = std::make_unique<core::sketch::Sketch>(created->resolvedPlane);
+    m_activeSketchId = m_document->addSketch(std::move(sketch));
+    core::sketch::Sketch* sketchPtr = m_document->getSketch(m_activeSketchId);
+    if (!sketchPtr) {
+        m_activeSketchId.clear();
+        m_toolStatus->setText(tr("Datum plane created"));
+        return;
+    }
+    m_viewport->setReferenceSketch(QString::fromStdString(m_activeSketchId));
+    m_viewport->enterSketchMode(sketchPtr);
+    m_toolbar->setContext(ContextToolbar::Context::Sketch);
+    m_toolStatus->setText(tr("Sketch Mode - Datum Plane"));
+}
+
+void MainWindow::onUpdateSketchAttachment() {
+    if (!m_document || m_activeSketchId.empty()) {
+        if (m_toolStatus) {
+            m_toolStatus->setText(tr("No active sketch to update"));
+        }
+        return;
+    }
+    core::sketch::Sketch* sketch = m_document->getSketch(m_activeSketchId);
+    if (!sketch || !sketch->hasHostFaceAttachment()) {
+        if (m_toolStatus) {
+            m_toolStatus->setText(tr("Active sketch is not attached to a face"));
+        }
+        return;
+    }
+    auto cmd = std::make_unique<app::commands::UpdateSketchAttachmentCommand>(
+        m_document.get(), m_activeSketchId);
+    const bool ok = m_commandProcessor
+        ? m_commandProcessor->execute(std::move(cmd))
+        : cmd->execute();
+    if (m_toolStatus) {
+        m_toolStatus->setText(ok ? tr("Sketch attachment updated")
+                                 : tr("Failed to update sketch attachment"));
+    }
 }
 
 void MainWindow::onPlaneSelectionCancelled() {
@@ -1668,6 +1910,10 @@ bool MainWindow::loadDocumentFromPath(const QString& fileName) {
         return false;
     }
 
+    // The edit overlay holds a raw Document*; tear it down before the document
+    // is replaced to avoid a dangling pointer.
+    closeEditParameterOverlay();
+
     QString resolvedPath = QFileInfo(fileName).absoluteFilePath();
 
     // Exit sketch mode if active
@@ -1861,6 +2107,10 @@ bool MainWindow::hasOpenProject() const {
 }
 
 void MainWindow::resetDocumentState() {
+    // The edit overlay holds a raw Document*; tear it down before the document
+    // is cleared to avoid a dangling pointer.
+    closeEditParameterOverlay();
+
     if (m_viewport && m_viewport->isInSketchMode()) {
         onExitSketch();
     }
@@ -2496,6 +2746,36 @@ void MainWindow::onIsolateItem(const QString& itemId) {
     m_viewport->update();
 }
 
+void MainWindow::onInspectorBodySelected(const QString& bodyId) {
+    if (!m_propertyInspector) {
+        return;
+    }
+    if (bodyId.isEmpty()) {
+        onInspectorSelectionCleared();
+        return;
+    }
+    m_propertyInspector->showBodyProperties(bodyId);
+    if (!m_inspectorUserHidden && !m_propertyInspector->isVisible()) {
+        m_propertyInspector->setVisible(true);
+    }
+}
+
+void MainWindow::onInspectorOperationSelected(const QString& opId) {
+    if (!m_propertyInspector || opId.isEmpty()) {
+        return;
+    }
+    m_propertyInspector->showOperationProperties(opId);
+    if (!m_inspectorUserHidden && !m_propertyInspector->isVisible()) {
+        m_propertyInspector->setVisible(true);
+    }
+}
+
+void MainWindow::onInspectorSelectionCleared() {
+    if (m_propertyInspector) {
+        m_propertyInspector->showEmptyState();
+    }
+}
+
 void MainWindow::loadSettings() {
     QSettings settings("OneCAD", "OneCAD");
 
@@ -2509,6 +2789,17 @@ void MainWindow::loadSettings() {
     if (m_viewport) {
         m_viewport->setCameraAngle(savedAngle);
     }
+
+    // Restore Inspector dock visibility (default hidden).
+    const bool inspectorVisible = settings.value("ui/inspectorVisible", false).toBool();
+    m_inspectorUserHidden = !inspectorVisible;
+    if (m_propertyInspector) {
+        m_propertyInspector->setVisible(inspectorVisible);
+    }
+    if (m_inspectorAction) {
+        QSignalBlocker block(m_inspectorAction);
+        m_inspectorAction->setChecked(inspectorVisible);
+    }
 }
 
 void MainWindow::saveSettings() {
@@ -2518,6 +2809,10 @@ void MainWindow::saveSettings() {
     if (m_viewport && m_viewport->camera()) {
         float currentAngle = m_viewport->camera()->cameraAngle();
         settings.setValue("viewport/cameraAngle", currentAngle);
+    }
+
+    if (m_propertyInspector) {
+        settings.setValue("ui/inspectorVisible", m_propertyInspector->isVisible());
     }
 
     settings.sync(); // Force immediate write
@@ -2576,6 +2871,46 @@ void MainWindow::positionSnapSettingsPanel() {
     m_snapSettingsPanel->raise();
 }
 
+void MainWindow::setupViewControlButtons() {
+    if (!m_viewport) return;
+
+    // Fit-to-view (frames all visible geometry; matches the View > Zoom to Fit / 0).
+    m_fitViewButton = SidebarToolButton::fromSvgIcon(
+        ":/icons/ic_fit.svg", tr("Fit to view (0)"), m_viewport);
+    m_fitViewButton->setFixedSize(42, 42);
+    m_fitViewButton->setVisible(true);
+    connect(m_fitViewButton, &SidebarToolButton::clicked, this, [this]() {
+        if (m_viewport) m_viewport->fitToView();
+    });
+
+    // Home (default isometric view; matches View > Isometric / 7).
+    m_homeViewButton = SidebarToolButton::fromSvgIcon(
+        ":/icons/ic_view_iso.svg", tr("Home / Isometric (7)"), m_viewport);
+    m_homeViewButton->setFixedSize(42, 42);
+    m_homeViewButton->setVisible(true);
+    connect(m_homeViewButton, &SidebarToolButton::clicked, this, [this]() {
+        if (m_viewport) m_viewport->setIsometricView();
+    });
+
+    positionViewControlButtons();
+}
+
+void MainWindow::positionViewControlButtons() {
+    if (!m_viewport || !m_fitViewButton || !m_homeViewButton) return;
+
+    // Bottom-left stack (Home above Fit): clear of the top-left overlay buttons,
+    // the top-right ViewCube/snap/history cluster, and the right-side history panel.
+    const int margin = 20;
+    const int spacing = 8;
+    const int x = margin;
+    const int fitY = m_viewport->height() - m_fitViewButton->height() - margin;
+    const int homeY = fitY - m_homeViewButton->height() - spacing;
+    m_homeViewButton->move(x, homeY);
+    m_homeViewButton->raise();
+    m_fitViewButton->move(x, fitY);
+    m_fitViewButton->raise();
+}
+
 void MainWindow::setupHistoryPanel() {
     if (!m_viewport) return;
 
@@ -2621,6 +2956,15 @@ void MainWindow::setupHistoryPanel() {
         }
     });
 
+    connect(m_historyPanel, &HistoryPanel::editRequested, this, [this](const QString& opId) {
+        showEditParameterOverlay(opId);
+    });
+
+    // Single-click selecting a history row populates the Inspector (distinct from the
+    // double-click/edit interaction above, which opens the parameter overlay).
+    connect(m_historyPanel, &HistoryPanel::operationSelected, this,
+            &MainWindow::onInspectorOperationSelected);
+
     // Create toggle button
     m_historyOverlayButton = new SidebarToolButton("H", tr("Toggle History Panel (Cmd+H)"), m_viewport);
     m_historyOverlayButton->setFixedSize(42, 42);
@@ -2634,10 +2978,6 @@ void MainWindow::setupHistoryPanel() {
 
     connect(m_historyPanel, &HistoryPanel::collapsedChanged, this, [this](bool collapsed) {
         if (m_historyOverlayButton) {
-      // Right side
-    positionSnapOverlay();
-    positionSnapSettingsPanel();
-    positionHistoryPanel();
             m_historyOverlayButton->setToolTip(collapsed ? tr("Show history")
                                                          : tr("Hide history"));
         }

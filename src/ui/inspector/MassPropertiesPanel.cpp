@@ -46,6 +46,46 @@ void MassPropertiesPanel::updateForShape(const TopoDS_Shape& shape,
 
     m_nameLabel->setText(bodyName);
 
+    // Topology counts (cheap traversals) \u2014 also used to gate the heavy integrals.
+    int faces = 0, edges = 0, vertices = 0;
+    for (TopExp_Explorer exp(shape, TopAbs_FACE); exp.More(); exp.Next()) {
+        ++faces;
+    }
+    for (TopExp_Explorer exp(shape, TopAbs_EDGE); exp.More(); exp.Next()) {
+        ++edges;
+    }
+    for (TopExp_Explorer exp(shape, TopAbs_VERTEX); exp.More(); exp.Next()) {
+        ++vertices;
+    }
+    m_faceCountLabel->setText(QString::number(faces));
+    m_edgeCountLabel->setText(QString::number(edges));
+    m_vertexCountLabel->setText(QString::number(vertices));
+
+    // Bounding box (cheap).
+    Bnd_Box bbox;
+    BRepBndLib::Add(shape, bbox);
+    if (!bbox.IsVoid()) {
+        double xmin, ymin, zmin, xmax, ymax, zmax;
+        bbox.Get(xmin, ymin, zmin, xmax, ymax, zmax);
+        m_boundingBoxLabel->setText(
+            QString("%1 x %2 x %3 mm")
+                .arg(xmax - xmin, 0, 'f', 2)
+                .arg(ymax - ymin, 0, 'f', 2)
+                .arg(zmax - zmin, 0, 'f', 2));
+    } else {
+        m_boundingBoxLabel->setText(QStringLiteral("-"));
+    }
+
+    // The volume/surface-area integrals dominate cost; skip them for very large
+    // models so interactive selection stays responsive.
+    if (faces > m_heavyComputeFaceLimit) {
+        const QString skipped = tr("\u2014 (large model)");
+        m_volumeLabel->setText(skipped);
+        m_surfaceAreaLabel->setText(skipped);
+        m_centerOfMassLabel->setText(QStringLiteral("-"));
+        return;
+    }
+
     // Volume properties
     GProp_GProps volumeProps;
     BRepGProp::VolumeProperties(shape, volumeProps);
@@ -64,34 +104,6 @@ void MassPropertiesPanel::updateForShape(const TopoDS_Shape& shape,
     BRepGProp::SurfaceProperties(shape, surfaceProps);
     double surfaceArea = surfaceProps.Mass();
     m_surfaceAreaLabel->setText(QString::number(surfaceArea, 'f', 4) + " mm\u00B2");
-
-    // Bounding box
-    Bnd_Box bbox;
-    BRepBndLib::Add(shape, bbox);
-    if (!bbox.IsVoid()) {
-        double xmin, ymin, zmin, xmax, ymax, zmax;
-        bbox.Get(xmin, ymin, zmin, xmax, ymax, zmax);
-        m_boundingBoxLabel->setText(
-            QString("%1 x %2 x %3 mm")
-                .arg(xmax - xmin, 0, 'f', 2)
-                .arg(ymax - ymin, 0, 'f', 2)
-                .arg(zmax - zmin, 0, 'f', 2));
-    }
-
-    // Topology counts
-    int faces = 0, edges = 0, vertices = 0;
-    for (TopExp_Explorer exp(shape, TopAbs_FACE); exp.More(); exp.Next()) {
-        ++faces;
-    }
-    for (TopExp_Explorer exp(shape, TopAbs_EDGE); exp.More(); exp.Next()) {
-        ++edges;
-    }
-    for (TopExp_Explorer exp(shape, TopAbs_VERTEX); exp.More(); exp.Next()) {
-        ++vertices;
-    }
-    m_faceCountLabel->setText(QString::number(faces));
-    m_edgeCountLabel->setText(QString::number(edges));
-    m_vertexCountLabel->setText(QString::number(vertices));
 }
 
 void MassPropertiesPanel::clear() {

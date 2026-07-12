@@ -2,15 +2,30 @@
 #include "MassPropertiesPanel.h"
 #include "../../app/document/Document.h"
 
+#include <QCheckBox>
+#include <QFormLayout>
 #include <QLabel>
+#include <QLineEdit>
+#include <QPushButton>
 #include <QStackedWidget>
+#include <QTimer>
 #include <QVBoxLayout>
 
 namespace onecad {
 namespace ui {
 
+namespace {
+// Defer the heavy mass-properties compute so rapid selection changes coalesce.
+constexpr int kMassPropsDebounceMs = 120;
+} // namespace
+
 PropertyInspector::PropertyInspector(QWidget* parent)
     : QDockWidget(tr("Inspector"), parent) {
+    m_massPropsTimer = new QTimer(this);
+    m_massPropsTimer->setSingleShot(true);
+    m_massPropsTimer->setInterval(kMassPropsDebounceMs);
+    connect(m_massPropsTimer, &QTimer::timeout, this, [this]() { computeMassPropsNow(); });
+
     setupUi();
     showEmptyState();
     setMinimumWidth(250);
@@ -59,10 +74,39 @@ void PropertyInspector::createEmptyStateWidget() {
 void PropertyInspector::createBodyWidget() {
     m_bodyWidget = new QWidget;
     auto* layout = new QVBoxLayout(m_bodyWidget);
-    layout->setContentsMargins(0, 0, 0, 0);
+    layout->setContentsMargins(8, 8, 8, 8);
+    layout->setSpacing(8);
+
+    // Editable body properties (routed through the owner as undoable commands).
+    auto* form = new QFormLayout;
+    m_bodyNameEdit = new QLineEdit;
+    m_bodyNameEdit->setPlaceholderText(tr("Body name"));
+    connect(m_bodyNameEdit, &QLineEdit::editingFinished, this, [this]() {
+        if (!m_currentBodyId.isEmpty()) {
+            const QString newName = m_bodyNameEdit->text().trimmed();
+            if (!newName.isEmpty()) {
+                emit bodyRenameRequested(m_currentBodyId, newName);
+            }
+        }
+    });
+    form->addRow(tr("Name:"), m_bodyNameEdit);
+
+    m_bodyVisibleCheck = new QCheckBox(tr("Visible"));
+    connect(m_bodyVisibleCheck, &QCheckBox::toggled, this, [this](bool checked) {
+        if (!m_currentBodyId.isEmpty()) {
+            emit bodyVisibilityChangeRequested(m_currentBodyId, checked);
+        }
+    });
+    form->addRow(QString(), m_bodyVisibleCheck);
+    layout->addLayout(form);
 
     m_massProps = new MassPropertiesPanel;
     layout->addWidget(m_massProps);
+
+    m_bodyColorStub = new QPushButton(tr("Appearance (coming soon)"));
+    m_bodyColorStub->setEnabled(false);
+    layout->addWidget(m_bodyColorStub);
+
     layout->addStretch();
 }
 
@@ -84,6 +128,9 @@ void PropertyInspector::createOperationWidget() {
 }
 
 void PropertyInspector::showEmptyState() {
+    m_currentBodyId.clear();
+    m_currentOpId.clear();
+    m_massPropsTimer->stop();
     m_stackedWidget->setCurrentWidget(m_emptyWidget);
 }
 
@@ -100,12 +147,51 @@ void PropertyInspector::showBodyProperties(const QString& bodyId) {
         return;
     }
 
+    m_currentBodyId = bodyId;
+    m_currentOpId.clear();
+
     QString name = QString::fromStdString(m_document->getBodyName(id));
     if (name.isEmpty()) {
         name = bodyId;
     }
-    m_massProps->updateForShape(*shape, name);
+    // Populate editors immediately without re-emitting change signals.
+    if (m_bodyNameEdit) {
+        QSignalBlocker block(m_bodyNameEdit);
+        m_bodyNameEdit->setText(name);
+    }
+    if (m_bodyVisibleCheck) {
+        QSignalBlocker block(m_bodyVisibleCheck);
+        m_bodyVisibleCheck->setChecked(m_document->isBodyVisible(id));
+    }
+
+    // Switch view immediately for responsiveness; defer the heavy compute.
     m_stackedWidget->setCurrentWidget(m_bodyWidget);
+    m_massProps->clear();
+    m_massPropsTimer->start();
+}
+
+void PropertyInspector::computeMassPropsNow() {
+    if (!m_document || m_currentBodyId.isEmpty() || !m_massProps) {
+        return;
+    }
+    const auto* shape = m_document->getBodyShape(m_currentBodyId.toStdString());
+    if (!shape) {
+        showEmptyState();
+        return;
+    }
+    QString name = QString::fromStdString(m_document->getBodyName(m_currentBodyId.toStdString()));
+    if (name.isEmpty()) {
+        name = m_currentBodyId;
+    }
+    m_massProps->updateForShape(*shape, name);
+}
+
+void PropertyInspector::refresh() {
+    if (!m_currentBodyId.isEmpty()) {
+        showBodyProperties(m_currentBodyId);
+    } else if (!m_currentOpId.isEmpty()) {
+        showOperationProperties(m_currentOpId);
+    }
 }
 
 void PropertyInspector::showOperationProperties(const QString& opId) {
@@ -119,6 +205,10 @@ void PropertyInspector::showOperationProperties(const QString& opId) {
         showEmptyState();
         return;
     }
+
+    m_currentOpId = opId;
+    m_currentBodyId.clear();
+    m_massPropsTimer->stop();
 
     m_opTypeLabel->setText(
         tr("Operation: %1").arg(QString::fromLatin1(app::operationTypeName(op->type))));

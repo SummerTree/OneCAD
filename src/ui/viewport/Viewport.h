@@ -215,6 +215,9 @@ public slots:
     void setBottomView();
     void setIsometricView();
     void resetView();
+    // Frame all visible bodies in the current view direction. Falls back to
+    // resetView() when there is no visible geometry.
+    void fitToView();
     void setCameraAngle(float degrees);
     void toggleGrid();
     void updateTheme();
