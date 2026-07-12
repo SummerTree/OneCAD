@@ -8,6 +8,7 @@
 
 #include <QDir>
 #include <QFileInfo>
+#include <QFontMetrics>
 #include <QLabel>
 #include <QMouseEvent>
 #include <QMenu>
@@ -80,15 +81,18 @@ ProjectTile::ProjectTile(const QString& path,
     m_nameLabel->setObjectName("projectName");
     layout->addWidget(m_nameLabel);
 
-    // Path (truncated)
-    QString displayPath = QDir::toNativeSeparators(info.absolutePath());
-    if (displayPath.length() > 25) {
-        displayPath = "..." + displayPath.right(22);
-    }
-    m_pathLabel = new QLabel(displayPath, this);
+    // Path: middle elision keeps both the leading root and the trailing folder,
+    // which disambiguates similarly-named projects better than left-truncation.
+    // Full path stays available via the tooltip.
+    const QString fullPath = QDir::toNativeSeparators(info.absolutePath());
+    m_pathLabel = new QLabel(this);
     m_pathLabel->setAlignment(Qt::AlignCenter);
     m_pathLabel->setObjectName("projectPath");
+    m_pathLabel->setWordWrap(false);
     m_pathLabel->setToolTip(info.absoluteFilePath());
+    const int pathWidth = kTileWidth - 2 * 8; // tile content width minus layout margins
+    m_pathLabel->setText(
+        QFontMetrics(m_pathLabel->font()).elidedText(fullPath, Qt::ElideMiddle, pathWidth));
     layout->addWidget(m_pathLabel);
 
     // Date

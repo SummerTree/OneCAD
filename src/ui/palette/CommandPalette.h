@@ -1,6 +1,7 @@
 #ifndef ONECAD_UI_PALETTE_COMMANDPALETTE_H
 #define ONECAD_UI_PALETTE_COMMANDPALETTE_H
 
+#include <QMetaObject>
 #include <QWidget>
 
 class QLineEdit;
@@ -15,6 +16,7 @@ class CommandPalette : public QWidget {
 
 public:
     explicit CommandPalette(QWidget* parent = nullptr);
+    ~CommandPalette() override;
 
     void activate();
 
@@ -29,9 +31,11 @@ private:
     void populateResults(const QString& query);
     void executeSelected();
     void dismiss();
+    void applyTheme();
 
     QLineEdit* m_searchField = nullptr;
     QListWidget* m_resultsList = nullptr;
+    QMetaObject::Connection m_themeConnection;
 };
 
 } // namespace ui

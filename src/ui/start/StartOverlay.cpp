@@ -8,20 +8,30 @@
 #include "../theme/ThemeManager.h"
 #include "../../io/OneCADFileIO.h"
 
+#include <QComboBox>
+#include <QCoreApplication>
 #include <QDir>
 #include <QFileInfo>
 #include <QFrame>
 #include <QGridLayout>
 #include <QGraphicsOpacityEffect>
 #include <QHBoxLayout>
+#include <QIcon>
 #include <QLabel>
+#include <QLineEdit>
 #include <QEasingCurve>
 #include <QPropertyAnimation>
 #include <QPushButton>
+#include <QResizeEvent>
 #include <QScrollArea>
+#include <QScrollBar>
 #include <QShowEvent>
 #include <QSizePolicy>
+#include <QTimer>
+#include <QToolButton>
 #include <QVBoxLayout>
+
+#include <algorithm>
 
 namespace onecad::ui {
 
@@ -58,6 +68,18 @@ StartOverlay::StartOverlay(QWidget* parent)
     panelLayout->setContentsMargins(32, 28, 32, 28);
     panelLayout->setSpacing(16);
 
+    // Brand + version header band.
+    auto* headerLayout = new QHBoxLayout();
+    headerLayout->setSpacing(8);
+    auto* brandLogo = new QLabel(tr("OneCAD"));
+    brandLogo->setObjectName("brandLogo");
+    auto* versionLabel = new QLabel(tr("v%1").arg(QCoreApplication::applicationVersion()));
+    versionLabel->setObjectName("versionLabel");
+    headerLayout->addWidget(brandLogo);
+    headerLayout->addStretch();
+    headerLayout->addWidget(versionLabel);
+    panelLayout->addLayout(headerLayout);
+
     auto* title = new QLabel(tr("Start"));
     title->setObjectName("title");
     panelLayout->addWidget(title);
@@ -87,17 +109,33 @@ StartOverlay::StartOverlay(QWidget* parent)
     recentLabel->setObjectName("sectionTitle");
     panelLayout->addWidget(recentLabel);
 
+    // Search + sort controls (view-state over the loaded project list).
+    auto* controlsLayout = new QHBoxLayout();
+    controlsLayout->setSpacing(8);
+    searchEdit_ = new QLineEdit(panel_);
+    searchEdit_->setObjectName("searchEdit");
+    searchEdit_->setPlaceholderText(tr("Search projects…"));
+    searchEdit_->setClearButtonEnabled(true);
+    searchEdit_->addAction(QIcon(":/icons/ic_search.svg"), QLineEdit::LeadingPosition);
+    sortCombo_ = new QComboBox(panel_);
+    sortCombo_->setObjectName("sortCombo");
+    sortCombo_->addItem(tr("Date modified"), static_cast<int>(SortMode::DateModified));
+    sortCombo_->addItem(tr("Name"), static_cast<int>(SortMode::Name));
+    controlsLayout->addWidget(searchEdit_, 1);
+    controlsLayout->addWidget(sortCombo_);
+    panelLayout->addLayout(controlsLayout);
+
     recentContainer_ = new QWidget(panel_);
     recentLayout_ = new QGridLayout(recentContainer_);
     recentLayout_->setContentsMargins(0, 0, 0, 0);
     recentLayout_->setSpacing(12);
 
-    auto* scroll = new QScrollArea(panel_);
-    scroll->setWidgetResizable(true);
-    scroll->setFrameShape(QFrame::NoFrame);
-    scroll->setMinimumHeight(260);
-    scroll->setWidget(recentContainer_);
-    panelLayout->addWidget(scroll);
+    scroll_ = new QScrollArea(panel_);
+    scroll_->setWidgetResizable(true);
+    scroll_->setFrameShape(QFrame::NoFrame);
+    scroll_->setMinimumHeight(260);
+    scroll_->setWidget(recentContainer_);
+    panelLayout->addWidget(scroll_);
 
     rootLayout->addWidget(panel_, 0, Qt::AlignHCenter);
     rootLayout->addStretch();
@@ -106,8 +144,27 @@ StartOverlay::StartOverlay(QWidget* parent)
     panel_->setGraphicsEffect(panelOpacity);
     panelOpacity->setOpacity(0.0);
 
+    // Debounce responsive grid rebuilds on resize to avoid layout thrashing.
+    resizeDebounce_ = new QTimer(this);
+    resizeDebounce_->setSingleShot(true);
+    resizeDebounce_->setInterval(100);
+    connect(resizeDebounce_, &QTimer::timeout, this, [this]() {
+        if (!scroll_) return;
+        if (columnCountForWidth(scroll_->viewport()->width()) != lastColumnCount_) {
+            rebuildRecentGrid();
+        }
+    });
+
     connect(newButton, &QPushButton::clicked, this, &StartOverlay::handleNewProject);
     connect(openButton, &QPushButton::clicked, this, &StartOverlay::handleOpenProject);
+    connect(searchEdit_, &QLineEdit::textChanged, this, [this](const QString& text) {
+        filterText_ = text;
+        applyFilterAndSort();
+    });
+    connect(sortCombo_, QOverload<int>::of(&QComboBox::currentIndexChanged), this, [this](int) {
+        sortMode_ = static_cast<SortMode>(sortCombo_->currentData().toInt());
+        applyFilterAndSort();
+    });
 
     themeConnection_ = connect(&ThemeManager::instance(), &ThemeManager::themeChanged,
                                this, &StartOverlay::applyTheme, Qt::UniqueConnection);
@@ -200,12 +257,73 @@ void StartOverlay::applyTheme() {
              toQssColor(recentBorder),
              toQssColor(recentHover));
 
-    setStyleSheet(styleSheet);
+    // Styles for the header, search/sort, and import-tile widgets added on top of
+    // the original ramp (kept as a separate block to avoid renumbering placeholders).
+    const QString extra = QStringLiteral(
+        "QLabel#brandLogo { background: transparent; font-size: 15px; font-weight: 600; color: %1; }"
+        "QLabel#versionLabel { background: transparent; font-size: 12px; color: %2; }"
+        "QLineEdit#searchEdit { background: %3; color: %1; border: 1px solid %4;"
+        "  border-radius: 8px; padding: 5px 8px; }"
+        "QComboBox#sortCombo { background: %3; color: %1; border: 1px solid %4;"
+        "  border-radius: 8px; padding: 4px 8px; }"
+        "QToolButton#importTile { background: %5; color: %1; border: 1px dashed %4;"
+        "  border-radius: 10px; font-size: 12px; }"
+        "QToolButton#importTile:hover { background: %6; border: 1px solid %7; }")
+        .arg(toQssColor(titleColor),
+             toQssColor(subtitleColor),
+             toQssColor(ui.inspectorBackground.isValid() ? ui.inspectorBackground : ui.widgetBackground),
+             toQssColor(ui.panelBorder),
+             toQssColor(ui.toolButtonBackground),
+             toQssColor(ui.toolButtonHoverBackground),
+             toQssColor(theme.button.accent));
+
+    setStyleSheet(styleSheet + extra);
 }
 
 void StartOverlay::setProjects(const QStringList& projects) {
     projects_ = projects;
+    thumbnailCache_.clear();
+    applyFilterAndSort();
+}
+
+void StartOverlay::applyFilterAndSort() {
     rebuildRecentGrid();
+    if (scroll_ && scroll_->verticalScrollBar()) {
+        scroll_->verticalScrollBar()->setValue(0);
+    }
+}
+
+int StartOverlay::columnCountForWidth(int width) const {
+    constexpr int kTileWidth = 160; // mirrors ProjectTile
+    const int spacing = recentLayout_ ? recentLayout_->spacing() : 12;
+    if (width <= 0) {
+        return 3;
+    }
+    const int cols = width / (kTileWidth + spacing);
+    return std::clamp(cols, 2, 6);
+}
+
+QStringList StartOverlay::computeVisibleProjects() const {
+    QStringList visible;
+    visible.reserve(projects_.size());
+    for (const QString& path : projects_) {
+        if (filterText_.isEmpty() ||
+            projectDisplayName(path).contains(filterText_, Qt::CaseInsensitive)) {
+            visible.append(path);
+        }
+    }
+
+    if (sortMode_ == SortMode::Name) {
+        std::sort(visible.begin(), visible.end(), [](const QString& a, const QString& b) {
+            return projectDisplayName(a).localeAwareCompare(projectDisplayName(b)) < 0;
+        });
+    } else {
+        // Date modified, newest first (matches listProjectsInDefaultDirectory order).
+        std::sort(visible.begin(), visible.end(), [](const QString& a, const QString& b) {
+            return QFileInfo(a).lastModified() > QFileInfo(b).lastModified();
+        });
+    }
+    return visible;
 }
 
 void StartOverlay::rebuildRecentGrid() {
@@ -216,21 +334,44 @@ void StartOverlay::rebuildRecentGrid() {
         }
         delete item;
     }
+    recentEmptyLabel_ = nullptr;
 
-    if (projects_.isEmpty()) {
-        recentEmptyLabel_ = new QLabel(tr("No projects yet."));
+    const int cols = columnCountForWidth(scroll_ ? scroll_->viewport()->width() : 0);
+    lastColumnCount_ = cols;
+
+    // The Import STEP quick action always occupies the first cell.
+    auto* importTile = new QToolButton(recentContainer_);
+    importTile->setObjectName("importTile");
+    importTile->setText(tr("Import STEP…"));
+    importTile->setIcon(QIcon(":/icons/ic_import.svg"));
+    importTile->setIconSize(QSize(40, 40));
+    importTile->setToolButtonStyle(Qt::ToolButtonTextUnderIcon);
+    importTile->setFixedSize(160, 200);
+    importTile->setCursor(Qt::PointingHandCursor);
+    connect(importTile, &QToolButton::clicked, this,
+            [this]() { emit importStepProjectRequested(); });
+    recentLayout_->addWidget(importTile, 0, 0);
+
+    const QStringList visible = computeVisibleProjects();
+
+    if (visible.isEmpty()) {
+        recentEmptyLabel_ = new QLabel(
+            filterText_.isEmpty() ? tr("No projects yet.") : tr("No projects match."));
         recentEmptyLabel_->setObjectName("emptyState");
-        recentLayout_->addWidget(recentEmptyLabel_, 0, 0);
+        recentLayout_->addWidget(recentEmptyLabel_, 1, 0, 1, cols);
+        recentLayout_->setRowStretch(2, 1);
         return;
     }
 
-    constexpr int kColumns = 4;
-    int row = 0;
-    int col = 0;
-
-    for (const QString& path : projects_) {
-        // Load thumbnail (lightweight - only reads thumbnail.png from package)
-        QImage thumbnail = io::OneCADFileIO::readThumbnail(path);
+    int index = 1; // cell 0 is the import tile
+    for (const QString& path : visible) {
+        QImage thumbnail;
+        if (thumbnailCache_.contains(path)) {
+            thumbnail = thumbnailCache_.value(path);
+        } else {
+            thumbnail = io::OneCADFileIO::readThumbnail(path);
+            thumbnailCache_.insert(path, thumbnail);
+        }
 
         auto* tile = new ProjectTile(path, thumbnail, recentContainer_);
         connect(tile, &ProjectTile::clicked,
@@ -238,17 +379,11 @@ void StartOverlay::rebuildRecentGrid() {
         connect(tile, &ProjectTile::deleteRequested,
                 this, &StartOverlay::handleDeleteClicked);
 
-        recentLayout_->addWidget(tile, row, col);
-
-        col++;
-        if (col >= kColumns) {
-            col = 0;
-            row++;
-        }
+        recentLayout_->addWidget(tile, index / cols, index % cols);
+        ++index;
     }
 
-    // Add stretch at bottom
-    recentLayout_->setRowStretch(row + 1, 1);
+    recentLayout_->setRowStretch((index - 1) / cols + 1, 1);
 }
 
 void StartOverlay::handleNewProject() {
@@ -283,6 +418,14 @@ void StartOverlay::showEvent(QShowEvent* event) {
     anim->setEndValue(1.0);
     anim->setEasingCurve(QEasingCurve::OutCubic);
     anim->start(QAbstractAnimation::DeleteWhenStopped);
+}
+
+void StartOverlay::resizeEvent(QResizeEvent* event) {
+    QWidget::resizeEvent(event);
+    // Coalesce rapid resizes; the timer rebuilds only if the column count changes.
+    if (resizeDebounce_) {
+        resizeDebounce_->start();
+    }
 }
 
 } // namespace onecad::ui
