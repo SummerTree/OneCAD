@@ -31,3 +31,4 @@ compile_commands.json
 # Local artifacts
 runtime.log
 graphify-out/
+.sisyphus/

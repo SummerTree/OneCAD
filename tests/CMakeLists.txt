@@ -372,6 +372,15 @@ add_test(NAME proto_pick_topology_promotion COMMAND proto_pick_topology_promotio
 add_test(NAME proto_selection_topology_resolver COMMAND proto_selection_topology_resolver)
 add_test(NAME proto_model_selection_resolution COMMAND proto_model_selection_resolution)
 add_test(NAME proto_document_lifecycle COMMAND proto_document_lifecycle)
+# Viewport drag-regression guards. The first two need a real OpenGL context
+# (offscreen QPA cannot provide one), so they carry the "gl" label — CI runs
+# `ctest -LE gl`; run them locally where a windowing system exists.
+add_test(NAME proto_viewport_drag_state COMMAND proto_viewport_drag_state)
+add_test(NAME proto_viewport_drag_guide_capture COMMAND proto_viewport_drag_guide_capture)
+add_test(NAME proto_viewport_group_drag_feedback COMMAND proto_viewport_group_drag_feedback)
+set_tests_properties(proto_viewport_drag_state proto_viewport_drag_guide_capture
+    PROPERTIES TIMEOUT 120 LABELS gl)
+set_tests_properties(proto_viewport_group_drag_feedback PROPERTIES TIMEOUT 120)
 add_test(NAME proto_regeneration COMMAND proto_regeneration)
 add_test(NAME proto_history_io_compat COMMAND proto_history_io_compat)
 add_test(NAME proto_document_roundtrip_compat COMMAND proto_document_roundtrip_compat)

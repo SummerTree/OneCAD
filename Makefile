@@ -21,6 +21,7 @@ init:
 		brew list qt >/dev/null 2>&1 || brew install qt; \
 		brew list opencascade >/dev/null 2>&1 || brew install opencascade; \
 		brew list eigen >/dev/null 2>&1 || brew install eigen; \
+		brew list boost >/dev/null 2>&1 || brew install boost; \
 	elif [ "$(UNAME_S)" = "Linux" ]; then \
 		echo "Installing Linux dependencies via apt..."; \
 		sudo apt-get update && sudo apt-get install -y \
@@ -28,7 +29,7 @@ init:
 			libocct-modeling-algorithms-dev libocct-modeling-data-dev \
 			libocct-data-exchange-dev libocct-visualization-dev \
 			libocct-foundation-dev libocct-ocaf-dev \
-			libeigen3-dev \
+			libeigen3-dev libboost-dev \
 			cmake ninja-build g++ \
 			libgl1-mesa-dev libglu1-mesa-dev; \
 	else \
