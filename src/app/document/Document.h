@@ -67,6 +67,28 @@ public:
     const core::sketch::Sketch* getSketch(const std::string& id) const;
 
     /**
+     * @brief Resolve the primary extrudable region of a sketch.
+     *
+     * Detects closed regions and returns the largest-area one (the common case for a
+     * sketch-on-face projection is a single region). Used by the auto-sketch-on-face
+     * extrude fast path. Returns nullopt if the sketch has no closed region.
+     */
+    std::optional<std::string> primaryRegionId(const std::string& sketchId) const;
+
+    /**
+     * @brief Re-resolve a host-attached sketch's face after upstream edits.
+     *
+     * Returns the host face's current plane plus the (possibly re-matched) face id.
+     * Tries the stored ElementMap id first; if it no longer resolves (descriptor-based
+     * ids change when a face moves), falls back to a geometric re-pick: the body face
+     * whose outward normal matches the sketch's frozen-plane normal and whose plane is
+     * nearest the frozen origin. Returns nullopt if the sketch has no host attachment
+     * or no matching face can be found.
+     */
+    std::optional<std::pair<core::sketch::SketchPlane, std::string>>
+    resolveHostFaceResync(const std::string& sketchId) const;
+
+    /**
      * @brief Get all sketch IDs
      */
     std::vector<std::string> getSketchIds() const;
@@ -148,6 +170,7 @@ public:
     void addOperation(const OperationRecord& record);
     bool insertOperation(std::size_t index, const OperationRecord& record);
     bool updateOperationParams(const std::string& opId, const OperationParams& params);
+    bool updateOperationInput(const std::string& opId, const OperationInput& input);
     bool removeOperation(const std::string& opId);
     int operationIndex(const std::string& opId) const;
     OperationRecord* findOperation(const std::string& opId);

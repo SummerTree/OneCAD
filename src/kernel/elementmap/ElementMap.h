@@ -100,6 +100,13 @@ public:
     // Updates tracked shapes using the history from a boolean operation. Returns IDs that were deleted.
     std::vector<ElementId> update(BRepAlgoAPI_BooleanOperation& algo, const std::string& opId);
 
+    // Resolve a (possibly stale) id to a live shape. If the literal id still has a bound
+    // shape, returns it (scoreOut = 0). Otherwise, if the id is known, re-matches by stored
+    // descriptor against same-owner entries that still have shapes, returning the best match
+    // when its score is within `maxScore`. Returns null shape if no acceptable match exists.
+    // This is the "broken reference" recovery used after a face/edge id is remapped by an edit.
+    TopoDS_Shape resolveWithFallback(const ElementId& id, double maxScore, double& scoreOut) const;
+
     bool write(std::ostream& os) const;
     bool read(std::istream& is);
     std::string toString() const;
@@ -200,6 +207,50 @@ inline Entry* ElementMap::find(const ElementId& id) {
 
 inline bool ElementMap::contains(const ElementId& id) const {
     return entries_.find(id.value) != entries_.end();
+}
+
+inline TopoDS_Shape ElementMap::resolveWithFallback(const ElementId& id, double maxScore,
+                                                    double& scoreOut) const {
+    scoreOut = std::numeric_limits<double>::max();
+    auto it = entries_.find(id.value);
+    if (it != entries_.end() && !it->second.shape.IsNull()) {
+        scoreOut = 0.0;
+        return it->second.shape;  // literal id still resolves
+    }
+    if (it == entries_.end()) {
+        return TopoDS_Shape();  // unknown id: no stored descriptor to re-match against
+    }
+
+    const Entry& stale = it->second;
+    auto ownerOf = [](const std::string& value) -> std::string {
+        const auto pos = value.find('/');
+        return pos == std::string::npos ? std::string{} : value.substr(0, pos);
+    };
+    const std::string owner = ownerOf(id.value);
+
+    const Entry* best = nullptr;
+    double bestScore = maxScore;
+    for (const auto& [key, cand] : entries_) {
+        if (cand.kind != stale.kind || cand.shape.IsNull()) {
+            continue;
+        }
+        if (cand.id.value == id.value) {
+            continue;
+        }
+        if (!owner.empty() && ownerOf(cand.id.value) != owner) {
+            continue;  // restrict the search to the same owning body
+        }
+        const double candidateScore = score(stale.descriptor, cand.descriptor);
+        if (candidateScore < bestScore) {
+            bestScore = candidateScore;
+            best = &cand;
+        }
+    }
+    if (best) {
+        scoreOut = bestScore;
+        return best->shape;
+    }
+    return TopoDS_Shape();
 }
 
 inline std::vector<ElementId> ElementMap::ids() const {

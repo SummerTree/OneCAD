@@ -182,6 +182,9 @@ public slots:
     void unsuppressConstraintMarker(const QString& constraintId);
     void clearSuppressedConstraintMarkers();
     bool activateExtrudeTool();
+    // Activate the extrude tool directly on a sketch region (used by the
+    // auto-sketch-on-face fast path, which synthesizes the region selection).
+    bool activateExtrudeToolForRegion(const std::string& sketchId, const std::string& regionId);
     bool activateRevolveTool();
     bool activateLinearPatternTool();
     bool activateFilletTool();

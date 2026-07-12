@@ -10,7 +10,9 @@
  */
 
 #include "app/commands/AddOperationCommand.h"
+#include "app/commands/EditOperationInputCommand.h"
 #include "app/commands/UpdateOperationParamsCommand.h"
+#include "app/commands/UpdateSketchAttachmentCommand.h"
 #include "app/document/Document.h"
 #include "app/history/DependencyGraph.h"
 #include "app/history/RegenerationEngine.h"
@@ -1099,6 +1101,212 @@ void testCircularPatternCompoundAndDependency() {
     std::cout << " PASS\n";
 }
 
+void testUpdateAttachmentResyncsPlane() {
+    std::cout << "Test: Update Attachment re-syncs a frozen sketch plane..." << std::flush;
+
+    app::Document doc;
+    // Body A: 10x10x10 box.
+    const auto [sketchA, regionA] = createSquareSketchRegion(doc, 10.0);
+    const std::string bodyA = newId();
+    app::OperationRecord opA;
+    opA.opId = newId();
+    opA.type = app::OperationType::Extrude;
+    opA.input = app::SketchRegionRef{sketchA, regionA};
+    opA.params = app::ExtrudeParams{10.0, 0.0, app::ExtrudeMode::Blind, app::BooleanMode::NewBody};
+    opA.resultBodyIds.push_back(bodyA);
+    assert(executeAddOperation(doc, opA));
+
+    // Sketch B on A's top face (host attachment), then extrude as an independent body.
+    auto top = findTopPlanarFace(doc, bodyA);
+    assert(top.has_value());
+    const std::string topFaceId = top->first;
+    auto plane = doc.getSketchPlaneForFace(bodyA, topFaceId);
+    assert(plane.has_value());
+    auto sketchBptr = std::make_unique<core::sketch::Sketch>(*plane);
+    sketchBptr->setHostFaceAttachment(bodyA, topFaceId);
+    const std::string sketchB = doc.addSketch(std::move(sketchBptr));
+    assert(!sketchB.empty());
+    assert(doc.ensureHostFaceBoundariesProjected(sketchB));
+    const auto regionB = doc.primaryRegionId(sketchB);
+    assert(regionB.has_value());
+
+    const std::string bodyB = newId();
+    app::OperationRecord opB;
+    opB.opId = newId();
+    opB.type = app::OperationType::Extrude;
+    opB.input = app::SketchRegionRef{sketchB, *regionB};
+    opB.params = app::ExtrudeParams{5.0, 0.0, app::ExtrudeMode::Blind, app::BooleanMode::NewBody};
+    opB.resultBodyIds.push_back(bodyB);
+    assert(executeAddOperation(doc, opB));
+
+    assert(nearlyEqual(doc.getSketch(sketchB)->getPlane().origin.z, 10.0, 1e-6));
+
+    // Edit A to be 20 tall — B's frozen plane must NOT move on its own.
+    app::ExtrudeParams tallerA{20.0, 0.0, app::ExtrudeMode::Blind, app::BooleanMode::NewBody};
+    app::commands::UpdateOperationParamsCommand editA(&doc, opA.opId, tallerA);
+    assert(editA.execute());
+    assert(nearlyEqual(doc.getSketch(sketchB)->getPlane().origin.z, 10.0, 1e-6));  // frozen
+
+    // Update Attachment re-derives B's plane from the host face's new height.
+    app::commands::UpdateSketchAttachmentCommand resync(&doc, sketchB);
+    assert(resync.execute());
+    assert(nearlyEqual(doc.getSketch(sketchB)->getPlane().origin.z, 20.0, 1e-6));
+
+    std::cout << " PASS\n";
+}
+
+void testReprofileExtrudeSwapsSketchRegion() {
+    std::cout << "Test: Re-profiling an extrude swaps its source region..." << std::flush;
+
+    app::Document doc;
+    const auto [sketch1, region1] = createSquareSketchRegion(doc, 10.0);  // 10x10
+    const auto [sketch2, region2] = createSquareSketchRegion(doc, 6.0);   // 6x6
+    const std::string bodyId = newId();
+
+    app::OperationRecord op;
+    op.opId = newId();
+    op.type = app::OperationType::Extrude;
+    op.input = app::SketchRegionRef{sketch1, region1};
+    op.params = app::ExtrudeParams{5.0, 0.0, app::ExtrudeMode::Blind, app::BooleanMode::NewBody};
+    op.resultBodyIds.push_back(bodyId);
+    assert(executeAddOperation(doc, op));
+    assert(nearlyEqual(bodyVolume(doc, bodyId), 500.0, 1.0));  // 10*10*5
+
+    // Re-profile to the 6x6 region.
+    app::commands::EditOperationInputCommand reprofile(
+        &doc, op.opId, app::SketchRegionRef{sketch2, region2});
+    assert(reprofile.execute());
+    assert(nearlyEqual(bodyVolume(doc, bodyId), 180.0, 1.0));  // 6*6*5
+
+    // Undo restores the original region.
+    assert(reprofile.undo());
+    assert(nearlyEqual(bodyVolume(doc, bodyId), 500.0, 1.0));
+
+    std::cout << " PASS\n";
+}
+
+void testReprofileToFaceRefRejected() {
+    std::cout << "Test: Re-profiling an extrude to a FaceRef is rejected..." << std::flush;
+
+    app::Document doc;
+    const auto [sketchId, regionId] = createSquareSketchRegion(doc, 10.0);
+    const std::string bodyId = newId();
+
+    app::OperationRecord op;
+    op.opId = newId();
+    op.type = app::OperationType::Extrude;
+    op.input = app::SketchRegionRef{sketchId, regionId};
+    op.params = app::ExtrudeParams{5.0, 0.0, app::ExtrudeMode::Blind, app::BooleanMode::NewBody};
+    op.resultBodyIds.push_back(bodyId);
+    assert(executeAddOperation(doc, op));
+
+    app::commands::EditOperationInputCommand bad(
+        &doc, op.opId, app::FaceRef{bodyId, bodyId + "/face/0"});
+    assert(!bad.execute());
+
+    // Input must remain the original sketch region.
+    const auto* stored = doc.findOperation(op.opId);
+    assert(stored && std::holds_alternative<app::SketchRegionRef>(stored->input));
+
+    std::cout << " PASS\n";
+}
+
+void testTemporalGuardRejectsFutureTarget() {
+    std::cout << "Test: Boolean target produced by a later op is rejected..." << std::flush;
+
+    app::Document doc;
+    const auto [sketchA, regionA] = createSquareSketchRegion(doc, 10.0);
+    const auto [sketchB, regionB] = createSquareSketchRegion(doc, 8.0);
+    const auto [sketchC, regionC] = createSquareSketchRegion(doc, 6.0);
+    const std::string bodyA = newId();
+    const std::string bodyC = newId();
+
+    // op1 -> bodyA
+    app::OperationRecord op1;
+    op1.opId = newId();
+    op1.type = app::OperationType::Extrude;
+    op1.input = app::SketchRegionRef{sketchA, regionA};
+    op1.params = app::ExtrudeParams{10.0, 0.0, app::ExtrudeMode::Blind, app::BooleanMode::NewBody};
+    op1.resultBodyIds.push_back(bodyA);
+
+    // op2 -> Add targeting bodyC, which is only produced by the LATER op3 (time-travel).
+    app::OperationRecord op2;
+    op2.opId = newId();
+    op2.type = app::OperationType::Extrude;
+    op2.input = app::SketchRegionRef{sketchB, regionB};
+    app::ExtrudeParams p2;
+    p2.distance = 5.0;
+    p2.booleanMode = app::BooleanMode::Add;
+    p2.targetBodyId = bodyC;
+    op2.params = p2;
+    op2.resultBodyIds.push_back(bodyC);
+
+    // op3 -> bodyC
+    app::OperationRecord op3;
+    op3.opId = newId();
+    op3.type = app::OperationType::Extrude;
+    op3.input = app::SketchRegionRef{sketchC, regionC};
+    op3.params = app::ExtrudeParams{4.0, 0.0, app::ExtrudeMode::Blind, app::BooleanMode::NewBody};
+    op3.resultBodyIds.push_back(bodyC);
+
+    doc.addOperation(op1);
+    doc.addOperation(op2);
+    doc.addOperation(op3);
+    doc.setAppliedOpCount(doc.operations().size());
+
+    app::history::RegenerationEngine engine(&doc);
+    auto result = engine.regenerateAll();
+
+    bool op2Failed = false;
+    for (const auto& f : result.failedOps) {
+        if (f.opId == op2.opId) {
+            op2Failed = true;
+        }
+    }
+    assert(op2Failed);
+
+    std::cout << " PASS\n";
+}
+
+void testDirtyFlagSkipsCleanBranch() {
+    std::cout << "Test: Partial regen skips independent (clean) branches..." << std::flush;
+
+    app::Document doc;
+    const auto [sketchA, regionA] = createSquareSketchRegion(doc, 10.0);
+    const auto [sketchB, regionB] = createSquareSketchRegion(doc, 8.0);
+    const std::string bodyA = newId();
+    const std::string bodyB = newId();
+
+    app::OperationRecord opA;
+    opA.opId = newId();
+    opA.type = app::OperationType::Extrude;
+    opA.input = app::SketchRegionRef{sketchA, regionA};
+    opA.params = app::ExtrudeParams{10.0, 0.0, app::ExtrudeMode::Blind, app::BooleanMode::NewBody};
+    opA.resultBodyIds.push_back(bodyA);
+    assert(executeAddOperation(doc, opA));
+
+    app::OperationRecord opB;
+    opB.opId = newId();
+    opB.type = app::OperationType::Extrude;
+    opB.input = app::SketchRegionRef{sketchB, regionB};
+    opB.params = app::ExtrudeParams{5.0, 0.0, app::ExtrudeMode::Blind, app::BooleanMode::NewBody};
+    opB.resultBodyIds.push_back(bodyB);
+    assert(executeAddOperation(doc, opB));
+
+    // Regenerating from opA must not re-execute the independent opB.
+    app::history::RegenerationEngine engine(&doc);
+    auto result = engine.regenerateFrom(opA.opId);
+
+    auto ran = [&](const std::string& id) {
+        return std::find(result.succeededOps.begin(), result.succeededOps.end(), id)
+               != result.succeededOps.end();
+    };
+    assert(ran(opA.opId));
+    assert(!ran(opB.opId));
+
+    std::cout << " PASS\n";
+}
+
 void testExtrudeTwoDirections() {
     std::cout << "Test: Two-direction extrude sums both depths..." << std::flush;
 
@@ -1266,6 +1474,64 @@ void testDatumPlaneOffsetResolves() {
     std::cout << " PASS\n";
 }
 
+void testAutoSketchOnFaceCreatesEditableSketchRegion() {
+    std::cout << "Test: Auto-sketch-on-face yields an extrudable region..." << std::flush;
+
+    app::Document doc;
+    // Base body: 10x10x10 box via a sketch-region extrude.
+    const auto [baseSketchId, baseRegionId] = createSquareSketchRegion(doc, 10.0);
+    const std::string baseBodyId = newId();
+    app::OperationRecord base;
+    base.opId = newId();
+    base.type = app::OperationType::Extrude;
+    base.input = app::SketchRegionRef{baseSketchId, baseRegionId};
+    base.params = app::ExtrudeParams{10.0, 0.0, app::ExtrudeMode::Blind, app::BooleanMode::NewBody};
+    base.resultBodyIds.push_back(baseBodyId);
+    assert(executeAddOperation(doc, base));
+
+    // Locate the top planar face of the base body.
+    auto top = findTopPlanarFace(doc, baseBodyId);
+    assert(top.has_value());
+    const std::string topFaceId = top->first;
+
+    // Replicate MainWindow::createSketchOnFace at the document level (headless).
+    auto plane = doc.getSketchPlaneForFace(baseBodyId, topFaceId);
+    assert(plane.has_value());
+    auto faceSketch = std::make_unique<core::sketch::Sketch>(*plane);
+    faceSketch->setHostFaceAttachment(baseBodyId, topFaceId);
+    const std::string faceSketchId = doc.addSketch(std::move(faceSketch));
+    assert(!faceSketchId.empty());
+    assert(doc.ensureHostFaceBoundariesProjected(faceSketchId));
+
+    const core::sketch::Sketch* createdSketch = doc.getSketch(faceSketchId);
+    assert(createdSketch);
+    assert(createdSketch->hostFaceAttachment().has_value());
+    assert(createdSketch->hostFaceAttachment()->isValid());
+
+    // The projected boundary forms exactly one extrudable region.
+    const auto regionId = doc.primaryRegionId(faceSketchId);
+    assert(regionId.has_value());
+
+    // Extruding that region against the host body grows the existing solid.
+    const double volumeBefore = bodyVolume(doc, baseBodyId);
+    app::OperationRecord grow;
+    grow.opId = newId();
+    grow.type = app::OperationType::Extrude;
+    grow.input = app::SketchRegionRef{faceSketchId, *regionId};
+    app::ExtrudeParams growParams;
+    growParams.distance = 5.0;
+    growParams.booleanMode = app::BooleanMode::Add;
+    growParams.targetBodyId = baseBodyId;
+    grow.params = growParams;
+    grow.resultBodyIds.push_back(baseBodyId);
+    assert(executeAddOperation(doc, grow));
+
+    const double volumeAfter = bodyVolume(doc, baseBodyId);
+    assert(volumeAfter > volumeBefore + 1.0);
+
+    std::cout << " PASS\n";
+}
+
 void testExtrudeFaceRefRejectedByAddCommand() {
     std::cout << "Test: Extrude rejects FaceRef input at AddOperationCommand..." << std::flush;
 
@@ -1326,11 +1592,17 @@ int main(int argc, char* argv[]) {
     testProjectedReferenceGeometryIsLocked();
     testAddOperationTransactionalRollbackOnRegenFailure();
     testExtrudeFaceRefRejectedByAddCommand();
+    testAutoSketchOnFaceCreatesEditableSketchRegion();
     testDatumPlaneOffsetResolves();
+    testUpdateAttachmentResyncsPlane();
     testExtrudeTwoDirections();
     testExtrudeThroughAllCutsBox();
     testExtrudeToFaceStopsAtFace();
     testExtrudeToNextRequiresBody();
+    testTemporalGuardRejectsFutureTarget();
+    testDirtyFlagSkipsCleanBranch();
+    testReprofileExtrudeSwapsSketchRegion();
+    testReprofileToFaceRefRejected();
     testLinearPatternFuseAndCompound();
     testLinearPatternTracksSourceDependency();
     testCircularPatternCompoundAndDependency();

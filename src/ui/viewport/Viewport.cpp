@@ -1558,6 +1558,28 @@ bool Viewport::activateExtrudeTool() {
     setShellToolActive(false);
     return false;
 }
+
+bool Viewport::activateExtrudeToolForRegion(const std::string& sketchId,
+                                            const std::string& regionId) {
+    if (m_inSketchMode || !m_modelingToolManager || sketchId.empty() || regionId.empty()) {
+        return false;
+    }
+
+    app::selection::SelectionItem item;
+    item.kind = app::selection::SelectionKind::SketchRegion;
+    item.id.ownerId = sketchId;
+    item.id.elementId = regionId;
+
+    m_modelingToolManager->activateExtrude(item);
+    setRevolveToolActive(false);
+    setLinearPatternToolActive(false);
+    setFilletToolActive(false);
+    setShellToolActive(false);
+    const bool activated = m_modelingToolManager->hasActiveTool();
+    setExtrudeToolActive(activated);
+    return activated;
+}
+
 void Viewport::keyPressEvent(QKeyEvent* event) {
     if (m_planeSelectionActive && !m_inSketchMode && event->key() == Qt::Key_Escape) {
         cancelPlaneSelection();

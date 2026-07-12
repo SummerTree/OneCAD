@@ -8,6 +8,7 @@ add_library(onecad_app STATIC
     commands/AddOperationCommand.cpp
     commands/DeleteBodyCommand.cpp
     commands/DeleteSketchCommand.cpp
+    commands/EditOperationInputCommand.cpp
     commands/ModifyBodyCommand.cpp
     commands/RemoveOperationCommand.cpp
     commands/RenameBodyCommand.cpp
@@ -16,6 +17,7 @@ add_library(onecad_app STATIC
     commands/SketchDragGestureCommand.cpp
     commands/ToggleVisibilityCommand.cpp
     commands/UpdateOperationParamsCommand.cpp
+    commands/UpdateSketchAttachmentCommand.cpp
     commands/ImportStepCommand.cpp
     commands/CommandProcessor.cpp
     commands/RollbackCommand.cpp

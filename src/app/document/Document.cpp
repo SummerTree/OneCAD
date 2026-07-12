@@ -609,7 +609,103 @@ bool Document::recomputeDatumPlane(const std::string& id) {
     }
     return ok;
 }
+
+std::optional<std::string> Document::primaryRegionId(const std::string& sketchId) const {
+    const core::sketch::Sketch* sketch = getSketch(sketchId);
+    if (!sketch) {
+        return std::nullopt;
+    }
+
+    core::loop::LoopDetector detector(core::loop::makeRegionDetectionConfig());
+    const auto loopResult = detector.detect(*sketch);
+    if (!loopResult.success) {
+        return std::nullopt;
+    }
+    const auto regions = core::loop::buildRegionDefinitions(
+        loopResult, core::sketch::constants::COINCIDENCE_TOLERANCE);
+    if (regions.empty()) {
+        return std::nullopt;
+    }
+    if (regions.size() == 1) {
+        return regions.front().id;
+    }
+
+    // Multiple coplanar regions (e.g. an unusual projected boundary): pick the
+    // largest by built-face area, falling back to the first if none builds.
+    core::loop::FaceBuilder builder;
+    std::string bestId;
+    double bestArea = -1.0;
+    for (const auto& region : regions) {
+        const auto faceOpt = core::loop::resolveRegionFace(*sketch, region.id);
+        if (!faceOpt) {
+            continue;
+        }
+        const auto faceResult = builder.buildFace(*faceOpt, *sketch);
+        if (!faceResult.success || faceResult.face.IsNull()) {
+            continue;
+        }
+        GProp_GProps props;
+        BRepGProp::SurfaceProperties(faceResult.face, props);
+        if (props.Mass() > bestArea) {
+            bestArea = props.Mass();
+            bestId = region.id;
+        }
+    }
+    return bestId.empty() ? regions.front().id : bestId;
+}
+
 std::optional<std::pair<core::sketch::SketchPlane, std::string>>
+Document::resolveHostFaceResync(const std::string& sketchId) const {
+    const core::sketch::Sketch* sketch = getSketch(sketchId);
+    if (!sketch) {
+        return std::nullopt;
+    }
+    const auto& host = sketch->hostFaceAttachment();
+    if (!host || !host->isValid()) {
+        return std::nullopt;
+    }
+
+    // 1) Stored id still resolves — use it directly.
+    if (auto plane = getSketchPlaneForFace(host->bodyId, host->faceId)) {
+        return std::make_pair(*plane, host->faceId);
+    }
+
+    // 2) Geometric re-pick: the host body face whose outward normal matches the sketch's
+    //    frozen-plane normal and whose plane is nearest the frozen origin.
+    const core::sketch::SketchPlane frozen = sketch->getPlane();
+    const gp_Dir frozenNormal(frozen.normal.x, frozen.normal.y, frozen.normal.z);
+    const gp_Pnt frozenOrigin(frozen.origin.x, frozen.origin.y, frozen.origin.z);
+
+    std::string bestId;
+    core::sketch::SketchPlane bestPlane;
+    double bestDist = std::numeric_limits<double>::max();
+    for (const auto& id : elementMap_.ids()) {
+        const auto* entry = elementMap_.find(id);
+        if (!entry || entry->kind != kernel::elementmap::ElementKind::Face) {
+            continue;
+        }
+        auto plane = getSketchPlaneForFace(host->bodyId, id.value);
+        if (!plane) {
+            continue;
+        }
+        const gp_Dir normal(plane->normal.x, plane->normal.y, plane->normal.z);
+        if (normal.Dot(frozenNormal) < 0.999) {
+            continue;  // require the same orientation (rigid move of the same face)
+        }
+        const gp_Pnt origin(plane->origin.x, plane->origin.y, plane->origin.z);
+        const double dist = origin.Distance(frozenOrigin);
+        if (dist < bestDist) {
+            bestDist = dist;
+            bestId = id.value;
+            bestPlane = *plane;
+        }
+    }
+    if (bestId.empty()) {
+        return std::nullopt;
+    }
+    return std::make_pair(bestPlane, bestId);
+}
+
 bool Document::ensureHostFaceBoundariesProjected(const std::string& sketchId) {
     core::sketch::Sketch* sketch = getSketch(sketchId);
     if (!sketch) {
@@ -815,6 +911,19 @@ bool Document::updateOperationParams(const std::string& opId, const OperationPar
     }
     return false;
 }
+
+bool Document::updateOperationInput(const std::string& opId, const OperationInput& input) {
+    for (auto& op : operations_) {
+        if (op.opId == opId) {
+            op.input = input;
+            setModified(true);
+            emit operationUpdated(QString::fromStdString(opId));
+            return true;
+        }
+    }
+    return false;
+}
+
 bool Document::removeOperation(const std::string& opId) {
     const int removedIndex = operationIndex(opId);
     if (removedIndex < 0) {

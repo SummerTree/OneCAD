@@ -344,11 +344,36 @@ void DependencyGraph::rebuildEdges() {
         }
         const FeatureNode& node = nodeIt->second;
 
-        for (const auto& inputBodyId : node.inputBodyIds) {
-            auto it = bodyProducers_.find(inputBodyId);
+        auto linkToProducer = [&](const std::string& producedBodyId) {
+            auto it = bodyProducers_.find(producedBodyId);
             if (it != bodyProducers_.end() && it->second != opId) {
                 forwardEdges_[it->second].insert(opId);
                 backwardEdges_[opId].insert(it->second);
+            }
+        };
+
+        for (const auto& inputBodyId : node.inputBodyIds) {
+            linkToProducer(inputBodyId);
+        }
+
+        // Face/edge inputs also depend on the body that produced them. Element ids are
+        // "<bodyId>/<...>", so the owning body is the prefix before the first '/'. This
+        // makes fillet/chamfer/shell that consume a feature's faces/edges regenerate when
+        // that upstream feature is edited, even if the body isn't an explicit input.
+        auto ownerBodyOf = [](const std::string& elemId) -> std::string {
+            const auto pos = elemId.find('/');
+            return pos == std::string::npos ? std::string{} : elemId.substr(0, pos);
+        };
+        for (const auto& faceId : node.inputFaceIds) {
+            const std::string owner = ownerBodyOf(faceId);
+            if (!owner.empty()) {
+                linkToProducer(owner);
+            }
+        }
+        for (const auto& edgeId : node.inputEdgeIds) {
+            const std::string owner = ownerBodyOf(edgeId);
+            if (!owner.empty()) {
+                linkToProducer(owner);
             }
         }
 
@@ -356,6 +381,53 @@ void DependencyGraph::rebuildEdges() {
             bodyProducers_[bodyId] = opId;
         }
     }
+}
+
+std::string DependencyGraph::bodyProducer(const std::string& bodyId) const {
+    auto it = bodyProducers_.find(bodyId);
+    return it == bodyProducers_.end() ? std::string{} : it->second;
+}
+
+bool DependencyGraph::producesBefore(const std::string& bodyId, const std::string& opId) const {
+    // Locate opId's position in creation order.
+    int opIndex = -1;
+    for (std::size_t i = 0; i < creationOrder_.size(); ++i) {
+        if (creationOrder_[i] == opId) {
+            opIndex = static_cast<int>(i);
+            break;
+        }
+    }
+    if (opIndex < 0) {
+        return true;  // op not tracked yet — don't block
+    }
+
+    bool producedBefore = false;
+    bool producedAfter = false;
+    bool producedByOp = false;
+    for (std::size_t i = 0; i < creationOrder_.size(); ++i) {
+        const FeatureNode* node = getNode(creationOrder_[i]);
+        if (!node || node->outputBodyIds.find(bodyId) == node->outputBodyIds.end()) {
+            continue;
+        }
+        if (static_cast<int>(i) < opIndex) {
+            producedBefore = true;
+        } else if (static_cast<int>(i) == opIndex) {
+            producedByOp = true;
+        } else {
+            producedAfter = true;
+        }
+    }
+
+    if (!producedBefore && !producedByOp && !producedAfter) {
+        return true;  // base/external body: no operation produces it
+    }
+    if (producedBefore) {
+        return true;  // a valid upstream producer exists
+    }
+    if (producedByOp && !producedAfter) {
+        return true;  // op modifies a body it also produces, with no later producer
+    }
+    return false;  // only produced by a later op -> time-travel dependency
 }
 
 void DependencyGraph::collectDownstream(const std::string& opId,

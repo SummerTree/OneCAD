@@ -58,6 +58,10 @@ constexpr double kDraftAngleEpsilon = 1e-4;
 constexpr double kSideFaceDotThreshold = 0.9;
 constexpr double kMinValue = 1e-3;
 constexpr double kMinAngleDeg = 1e-3;
+// Max descriptor score accepted when re-matching a stale face/edge reference. The score
+// scale adds ~1000 for shape-type mismatch and is ~O(mm) otherwise, so this conservatively
+// accepts only close geometric matches and rejects unrelated elements.
+constexpr double kRematchRejectScore = 5.0;
 
 std::string inputSourceSummary(const OperationInput& input) {
     if (std::holds_alternative<SketchRegionRef>(input)) {
@@ -648,11 +652,21 @@ std::optional<TopoDS_Shape> RegenerationEngine::resolveEdge(const std::string& e
     }
 
     const auto* entry = doc_->elementMap().find(kernel::elementmap::ElementId{edgeId});
-    if (!entry || entry->kind != kernel::elementmap::ElementKind::Edge || entry->shape.IsNull()) {
-        return std::nullopt;
+    if (entry && entry->kind == kernel::elementmap::ElementKind::Edge && !entry->shape.IsNull()) {
+        return entry->shape;
     }
 
-    return entry->shape;
+    // Broken-reference fallback: re-match a stale edge id by descriptor (see ElementMap).
+    double rematchScore = 0.0;
+    TopoDS_Shape recovered = doc_->elementMap().resolveWithFallback(
+        kernel::elementmap::ElementId{edgeId}, kRematchRejectScore, rematchScore);
+    if (!recovered.IsNull()) {
+        qCWarning(logRegen) << "resolveEdge:reference-remapped"
+                            << "edgeId=" << QString::fromStdString(edgeId)
+                            << "score=" << rematchScore;
+        return recovered;
+    }
+    return std::nullopt;
 }
 
 std::optional<TopoDS_Shape> RegenerationEngine::resolveFace(const std::string& faceId) const {
@@ -661,11 +675,21 @@ std::optional<TopoDS_Shape> RegenerationEngine::resolveFace(const std::string& f
     }
 
     const auto* entry = doc_->elementMap().find(kernel::elementmap::ElementId{faceId});
-    if (!entry || entry->kind != kernel::elementmap::ElementKind::Face || entry->shape.IsNull()) {
-        return std::nullopt;
+    if (entry && entry->kind == kernel::elementmap::ElementKind::Face && !entry->shape.IsNull()) {
+        return entry->shape;
     }
 
-    return entry->shape;
+    // Broken-reference fallback: re-match a stale face id by descriptor (see ElementMap).
+    double rematchScore = 0.0;
+    TopoDS_Shape recovered = doc_->elementMap().resolveWithFallback(
+        kernel::elementmap::ElementId{faceId}, kRematchRejectScore, rematchScore);
+    if (!recovered.IsNull()) {
+        qCWarning(logRegen) << "resolveFace:reference-remapped"
+                            << "faceId=" << QString::fromStdString(faceId)
+                            << "score=" << rematchScore;
+        return recovered;
+    }
+    return std::nullopt;
 }
 
 std::optional<TopoDS_Shape> RegenerationEngine::resolveBody(const std::string& bodyId) const {
@@ -973,6 +997,15 @@ TopoDS_Shape RegenerationEngine::buildExtrude(const OperationRecord& op, std::st
             qCWarning(logRegen) << "buildExtrude:missing-boolean-target"
                                 << "opId=" << QString::fromStdString(op.opId)
                                 << "mode=" << static_cast<int>(params.booleanMode);
+            return {};
+        }
+
+        // Temporal-order guard: forbid targeting a body produced by a later operation.
+        if (!graph_.producesBefore(targetBodyId, op.opId)) {
+            errorOut = "Boolean target references a body created by a later operation: " + targetBodyId;
+            qCWarning(logRegen) << "buildExtrude:boolean-target-time-travel"
+                                << "opId=" << QString::fromStdString(op.opId)
+                                << "targetBodyId=" << QString::fromStdString(targetBodyId);
             return {};
         }
 

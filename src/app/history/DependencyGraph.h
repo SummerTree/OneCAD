@@ -98,6 +98,18 @@ public:
     std::vector<std::string> getUpstream(const std::string& opId) const;
 
     /**
+     * @brief Most recent operation (creation order) that outputs the given body, or "".
+     */
+    std::string bodyProducer(const std::string& bodyId) const;
+
+    /**
+     * @brief True if @p bodyId is a valid (non-time-travel) reference target for @p opId:
+     * it is a base body (no producer), has a producer strictly before opId, or is produced
+     * by opId itself with no later producer. False if only produced by a later operation.
+     */
+    bool producesBefore(const std::string& bodyId, const std::string& opId) const;
+
+    /**
      * @brief Get all operation IDs in creation order.
      */
     std::vector<std::string> getAllOpIds() const { return creationOrder_; }

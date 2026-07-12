@@ -218,6 +218,44 @@ void testReverseMapMultiId(TestContext& ctx) {
     ctx.expect(hasA && hasB, "Reverse map should keep multiple IDs for same shape");
 }
 
+void testResolveWithFallbackRematchesAndRejects(TestContext& ctx) {
+    BRepPrimAPI_MakeBox mkA(10.0, 10.0, 10.0);
+    mkA.Build();
+    const TopoDS_Shape boxA = mkA.Shape();
+    const TopoDS_Face topA = findTopFace(boxA);
+
+    BRepPrimAPI_MakeBox mkB(10.0, 10.0, 10.0);
+    mkB.Build();
+    const TopoDS_Face topB = findTopFace(mkB.Shape());
+
+    ElementMap emap;
+    emap.registerElement(ElementId{"b/face/x"}, ElementKind::Face, topA, "op");
+
+    // Literal hit: a live id resolves with score 0.
+    double score = -1.0;
+    const TopoDS_Shape hit = emap.resolveWithFallback(ElementId{"b/face/x"}, 5.0, score);
+    ctx.expect(!hit.IsNull() && nearlyEqual(score, 0.0), "Fallback returns live shape (score 0)");
+
+    // Re-match: stale id recovers a near-identical same-owner face.
+    emap.registerElement(ElementId{"b/face/y"}, ElementKind::Face, topB, "op");
+    emap.clearShape(ElementId{"b/face/x"});
+    double score2 = -1.0;
+    const TopoDS_Shape rematched = emap.resolveWithFallback(ElementId{"b/face/x"}, 5.0, score2);
+    ctx.expect(!rematched.IsNull() && score2 < 5.0, "Fallback re-matches a stale face by descriptor");
+
+    // Reject: no same-kind, same-owner candidate -> null.
+    ElementMap emap2;
+    emap2.registerElement(ElementId{"c/face/x"}, ElementKind::Face, topA, "op");
+    emap2.clearShape(ElementId{"c/face/x"});
+    TopExp_Explorer edgeExp(boxA, TopAbs_EDGE);
+    ctx.expect(edgeExp.More(), "Box should have an edge");
+    emap2.registerElement(ElementId{"c/edge/e"}, ElementKind::Edge,
+                          TopoDS::Edge(edgeExp.Current()), "op");
+    double score3 = -1.0;
+    const TopoDS_Shape rejected = emap2.resolveWithFallback(ElementId{"c/face/x"}, 5.0, score3);
+    ctx.expect(rejected.IsNull(), "Fallback rejects when no same-kind candidate exists");
+}
+
 } // namespace
 
 int main() {
@@ -229,6 +267,7 @@ int main() {
     testDeterministicIds(ctx);
     testSerializationRoundTrip(ctx);
     testReverseMapMultiId(ctx);
+    testResolveWithFallbackRematchesAndRejects(ctx);
 
     if (ctx.failures > 0) {
         std::cerr << "Tests failed: " << ctx.failures << std::endl;
