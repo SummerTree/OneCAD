@@ -365,3 +365,14 @@ add_test(NAME proto_history_io_compat COMMAND proto_history_io_compat)
 add_test(NAME proto_document_roundtrip_compat COMMAND proto_document_roundtrip_compat)
 add_test(NAME proto_timeline_rollback_dirty COMMAND proto_timeline_rollback_dirty)
 add_test(NAME test_document_workflow COMMAND test_document_workflow)
+
+# --- Assert liveness ---
+# Keep assert() live in every test binary regardless of build type.
+# CI builds Release (NDEBUG), which would otherwise turn the assert-based
+# prototypes into unconditional passes. Target COMPILE_OPTIONS are emitted
+# after CMAKE_CXX_FLAGS_<CONFIG>, so -UNDEBUG wins on GCC/Clang/AppleClang.
+get_property(_onecad_test_targets DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR} PROPERTY BUILDSYSTEM_TARGETS)
+foreach(_t IN LISTS _onecad_test_targets)
+    target_compile_options(${_t} PRIVATE -UNDEBUG)
+endforeach()
+unset(_onecad_test_targets)
