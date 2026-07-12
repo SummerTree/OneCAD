@@ -282,6 +282,17 @@ target_link_libraries(proto_model_selection_resolution
 )
 target_include_directories(proto_model_selection_resolution PRIVATE ${CMAKE_SOURCE_DIR}/src)
 
+# Document lifecycle (autosave document-swap safety)
+add_executable(proto_document_lifecycle prototypes/proto_document_lifecycle.cpp)
+target_link_libraries(proto_document_lifecycle
+    PRIVATE
+    onecad_app
+    onecad_core
+    onecad_io
+    Qt6::Core
+)
+target_include_directories(proto_document_lifecycle PRIVATE ${CMAKE_SOURCE_DIR}/src)
+
 # Regeneration Engine Prototype
 add_executable(proto_regeneration prototypes/proto_regeneration.cpp)
 target_link_libraries(proto_regeneration
@@ -360,6 +371,7 @@ add_test(NAME proto_pickmesh_integration COMMAND proto_pickmesh_integration)
 add_test(NAME proto_pick_topology_promotion COMMAND proto_pick_topology_promotion)
 add_test(NAME proto_selection_topology_resolver COMMAND proto_selection_topology_resolver)
 add_test(NAME proto_model_selection_resolution COMMAND proto_model_selection_resolution)
+add_test(NAME proto_document_lifecycle COMMAND proto_document_lifecycle)
 add_test(NAME proto_regeneration COMMAND proto_regeneration)
 add_test(NAME proto_history_io_compat COMMAND proto_history_io_compat)
 add_test(NAME proto_document_roundtrip_compat COMMAND proto_document_roundtrip_compat)

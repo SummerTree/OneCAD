@@ -1,6 +1,7 @@
 #pragma once
 
 #include <QObject>
+#include <QPointer>
 #include <QString>
 #include <QStringList>
 #include <QDateTime>
@@ -56,7 +57,11 @@ private slots:
 private:
     QString autosaveFilePath() const;
 
-    Document* m_document = nullptr;
+    // QPointer: auto-nulls when the Document is destroyed, so a stale pointer can
+    // never be dereferenced (e.g. disconnect() walking a freed sender when the owner
+    // replaces its document on file-open). Document must live on the GUI thread —
+    // QPointer tracking is not thread-safe across threads.
+    QPointer<Document> m_document;
     QString m_currentFilePath;
     QTimer m_timer;
     int m_intervalMs = 120000; // 2 minutes

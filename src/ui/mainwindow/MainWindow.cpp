@@ -1944,7 +1944,12 @@ bool MainWindow::loadDocumentFromPath(const QString& fileName) {
         return false;
     }
 
-    // Replace current document with loaded one
+    // Replace current document with loaded one. Detach listeners holding raw
+    // pointers BEFORE the swap destroys the old Document (QPointer in
+    // AutosaveManager makes this belt-and-braces).
+    if (m_autosaveManager) {
+        m_autosaveManager->setDocument(nullptr);
+    }
     m_document = std::move(loadedDoc);
     if (m_commandProcessor) {
         m_commandProcessor->clear();
