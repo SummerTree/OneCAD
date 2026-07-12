@@ -4,6 +4,7 @@ add_library(onecad_app STATIC
     Logging.cpp
     PlatformPaths.cpp
     commands/AddBodyCommand.cpp
+    commands/AddDatumPlaneCommand.cpp
     commands/AddOperationCommand.cpp
     commands/DeleteBodyCommand.cpp
     commands/DeleteSketchCommand.cpp

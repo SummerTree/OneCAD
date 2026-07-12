@@ -10,11 +10,13 @@
 #include "ElementMapIO.h"
 #include "HistoryIO.h"
 #include "../app/document/Document.h"
+#include "../app/document/DatumPlane.h"
 #include "../app/history/RegenerationEngine.h"
 #include "../core/sketch/Sketch.h"
 
 #include <QJsonDocument>
 #include <QJsonArray>
+#include <QJsonObject>
 #include <QFileInfo>
 #include <BRepTools.hxx>
 #include <BRep_Builder.hxx>
@@ -24,6 +26,38 @@
 #include <unordered_set>
 
 namespace onecad::io {
+
+namespace {
+
+QJsonArray vec3ToJson(const core::sketch::Vec3d& v) {
+    return QJsonArray{v.x, v.y, v.z};
+}
+
+core::sketch::Vec3d vec3FromJson(const QJsonArray& a, const core::sketch::Vec3d& fallback) {
+    if (a.size() != 3) return fallback;
+    return {a[0].toDouble(), a[1].toDouble(), a[2].toDouble()};
+}
+
+QJsonObject planeToJson(const core::sketch::SketchPlane& p) {
+    QJsonObject o;
+    o["origin"] = vec3ToJson(p.origin);
+    o["xAxis"] = vec3ToJson(p.xAxis);
+    o["yAxis"] = vec3ToJson(p.yAxis);
+    o["normal"] = vec3ToJson(p.normal);
+    return o;
+}
+
+core::sketch::SketchPlane planeFromJson(const QJsonObject& o) {
+    core::sketch::SketchPlane p = core::sketch::SketchPlane::XY();
+    p.origin = vec3FromJson(o["origin"].toArray(), p.origin);
+    p.xAxis = vec3FromJson(o["xAxis"].toArray(), p.xAxis);
+    p.yAxis = vec3FromJson(o["yAxis"].toArray(), p.yAxis);
+    p.normal = vec3FromJson(o["normal"].toArray(), p.normal);
+    return p;
+}
+
+} // namespace
+
 
 bool DocumentIO::saveDocument(Package* package, const app::Document* document) {
     // 1. Create and write document.json
@@ -314,7 +348,31 @@ QJsonObject DocumentIO::createDocumentJson(const app::Document* document) {
         bodies.append(QString::fromStdString(bodyId));
     }
     json["bodies"] = bodies;
-    
+
+    // Datum (reference) planes — stored inline with their resolved frame so loads
+    // need no re-derivation (robust to load ordering vs regeneration).
+    QJsonArray datums;
+    for (const auto& id : document->getDatumPlaneIds()) {
+        const app::DatumPlane* d = document->getDatumPlane(id);
+        if (!d) {
+            continue;
+        }
+        QJsonObject dj;
+        dj["id"] = QString::fromStdString(d->id);
+        dj["name"] = QString::fromStdString(d->name);
+        dj["kind"] = QString::fromStdString(app::datumPlaneKindName(d->kind));
+        dj["basePlaneId"] = QString::fromStdString(d->basePlaneId);
+        dj["baseBodyId"] = QString::fromStdString(d->baseBodyId);
+        dj["baseFaceId"] = QString::fromStdString(d->baseFaceId);
+        dj["axisEdgeId"] = QString::fromStdString(d->axisEdgeId);
+        dj["offset"] = d->offset;
+        dj["angleDeg"] = d->angleDeg;
+        dj["resolvedValid"] = d->resolvedValid;
+        dj["resolvedPlane"] = planeToJson(d->resolvedPlane);
+        datums.append(dj);
+    }
+    json["datumPlanes"] = datums;
+
     // File paths
     QJsonObject history;
     history["opsPath"] = "history/ops.jsonl";
@@ -336,7 +394,28 @@ bool DocumentIO::parseDocumentJson(const QJsonObject& json,
         errorMessage = "Missing required fields in document.json";
         return false;
     }
-    
+
+    // Datum planes are restored verbatim (with their saved resolved frame); they are
+    // not recomputed here because referenced faces may only exist after regeneration.
+    if (document && json.contains("datumPlanes")) {
+        for (const auto& v : json["datumPlanes"].toArray()) {
+            const QJsonObject dj = v.toObject();
+            app::DatumPlane d;
+            d.id = dj["id"].toString().toStdString();
+            d.name = dj["name"].toString().toStdString();
+            d.kind = app::datumPlaneKindFromName(dj["kind"].toString().toStdString());
+            d.basePlaneId = dj["basePlaneId"].toString().toStdString();
+            d.baseBodyId = dj["baseBodyId"].toString().toStdString();
+            d.baseFaceId = dj["baseFaceId"].toString().toStdString();
+            d.axisEdgeId = dj["axisEdgeId"].toString().toStdString();
+            d.offset = dj["offset"].toDouble();
+            d.angleDeg = dj["angleDeg"].toDouble();
+            d.resolvedValid = dj["resolvedValid"].toBool();
+            d.resolvedPlane = planeFromJson(dj["resolvedPlane"].toObject());
+            document->addDatumPlane(std::move(d), /*recompute=*/false);
+        }
+    }
+
     // Document structure is parsed - sketches/bodies loaded separately
     return true;
 }

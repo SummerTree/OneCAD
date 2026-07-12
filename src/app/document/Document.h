@@ -20,6 +20,7 @@
 
 #include "OperationRecord.h"
 #include "OperationMetadata.h"
+#include "DatumPlane.h"
 #include "../../core/sketch/Sketch.h"
 #include "../../kernel/elementmap/ElementMap.h"
 #include "../../render/scene/SceneMeshStore.h"
@@ -114,6 +115,19 @@ public:
     bool projectHostFaceBoundaries(core::sketch::Sketch& sketch,
                                    const std::string& bodyId,
                                    const std::string& faceId);
+
+    // ── Datum (reference) planes ──────────────────────────────────────────────
+    /// Add a datum plane. When @p recompute is true the frame is resolved from the
+    /// definition; when false the datum's pre-resolved frame is kept verbatim (used on
+    /// load, where referenced faces may not be available until regeneration). Returns
+    /// the assigned id (or the caller-provided datum.id if non-empty), or empty on failure.
+    std::string addDatumPlane(DatumPlane datum, bool recompute = true);
+    const DatumPlane* getDatumPlane(const std::string& id) const;
+    std::vector<std::string> getDatumPlaneIds() const;
+    bool removeDatumPlane(const std::string& id);
+    /// Recompute a datum's resolved frame from its definition. Returns success.
+    bool recomputeDatumPlane(const std::string& id);
+    std::size_t datumPlaneCount() const { return datumPlanes_.size(); }
     std::vector<std::string> getBodyIds() const;
     bool removeBody(const std::string& id);
     bool removeBodyPreserveElementMap(const std::string& id);
@@ -195,6 +209,9 @@ signals:
     void operationFailed(const QString& opId, const QString& reason);
     void operationSucceeded(const QString& opId);
     void appliedOpCountChanged(qulonglong appliedOpCount);
+    void datumPlaneAdded(const QString& id);
+    void datumPlaneRemoved(const QString& id);
+    void datumPlaneUpdated(const QString& id);
 
 private:
     struct BodyEntry {
@@ -210,6 +227,7 @@ private:
     std::unordered_map<std::string, std::unique_ptr<core::sketch::Sketch>> sketches_;
     std::unordered_map<std::string, std::string> sketchNames_;  // id -> display name
     std::unordered_map<std::string, bool> sketchVisibility_;    // id -> visible
+    std::unordered_map<std::string, DatumPlane> datumPlanes_;   // id -> datum plane
     std::unordered_map<std::string, BodyEntry> bodies_;
     std::unordered_map<std::string, std::string> bodyNames_;  // id -> display name
     std::unordered_map<std::string, bool> bodyVisibilityCache_;

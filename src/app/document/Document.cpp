@@ -1,12 +1,18 @@
 #include "Document.h"
 #include "../../core/sketch/Sketch.h"
+#include "../../core/sketch/SketchTypes.h"
 #include "../../core/sketch/FaceBoundaryProjector.h"
+#include "../../core/loop/LoopDetector.h"
+#include "../../core/loop/RegionUtils.h"
+#include "../../core/loop/FaceBuilder.h"
 
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QJsonArray>
 #include <algorithm>
 #include <cmath>
+#include <limits>
+#include <utility>
 #include <QUuid>
 
 #include <TopExp.hxx>
@@ -17,10 +23,17 @@
 #include <TopoDS_Face.hxx>
 
 #include <BRepAdaptor_Surface.hxx>
+#include <BRepAdaptor_Curve.hxx>
+#include <BRepGProp.hxx>
+#include <GProp_GProps.hxx>
 #include <GeomAbs_SurfaceType.hxx>
+#include <GeomAbs_CurveType.hxx>
 
+#include <gp_Ax1.hxx>
 #include <gp_Dir.hxx>
 #include <gp_Pln.hxx>
+#include <gp_Pnt.hxx>
+#include <gp_Trsf.hxx>
 #include <gp_Vec.hxx>
 
 namespace onecad::app {
@@ -160,6 +173,7 @@ void Document::clear() {
     sketches_.clear();
     sketchNames_.clear();
     sketchVisibility_.clear();
+    datumPlanes_.clear();
     bodies_.clear();
     bodyNames_.clear();
     bodyVisibilityCache_.clear();
@@ -454,6 +468,148 @@ std::optional<core::sketch::SketchPlane> Document::getSketchPlaneForFace(const s
     return sketchPlane;
 }
 
+namespace {
+
+// Offset a planar frame along its normal by `offset`.
+core::sketch::SketchPlane offsetAlongNormal(const core::sketch::SketchPlane& base, double offset) {
+    core::sketch::SketchPlane result = base;
+    result.origin = {
+        base.origin.x + base.normal.x * offset,
+        base.origin.y + base.normal.y * offset,
+        base.origin.z + base.normal.z * offset
+    };
+    return result;
+}
+
+core::sketch::Vec3d toVec3d(const gp_Pnt& p) { return {p.X(), p.Y(), p.Z()}; }
+core::sketch::Vec3d toVec3d(const gp_Dir& d) { return {d.X(), d.Y(), d.Z()}; }
+
+} // namespace
+
+std::string Document::addDatumPlane(DatumPlane datum, bool recompute) {
+    if (datum.id.empty()) {
+        datum.id = QUuid::createUuid().toString(QUuid::WithoutBraces).toStdString();
+    }
+    if (datumPlanes_.count(datum.id)) {
+        return {};
+    }
+    const std::string id = datum.id;
+    datumPlanes_.emplace(id, std::move(datum));
+    if (recompute) {
+        // Keep the datum even if its frame cannot resolve yet; callers can recompute later.
+        recomputeDatumPlane(id);
+    }
+    emit datumPlaneAdded(QString::fromStdString(id));
+    return id;
+}
+
+const DatumPlane* Document::getDatumPlane(const std::string& id) const {
+    auto it = datumPlanes_.find(id);
+    return it == datumPlanes_.end() ? nullptr : &it->second;
+}
+
+std::vector<std::string> Document::getDatumPlaneIds() const {
+    std::vector<std::string> ids;
+    ids.reserve(datumPlanes_.size());
+    for (const auto& [id, _] : datumPlanes_) {
+        ids.push_back(id);
+    }
+    return ids;
+}
+
+bool Document::removeDatumPlane(const std::string& id) {
+    if (datumPlanes_.erase(id) == 0) {
+        return false;
+    }
+    emit datumPlaneRemoved(QString::fromStdString(id));
+    return true;
+}
+
+bool Document::recomputeDatumPlane(const std::string& id) {
+    auto it = datumPlanes_.find(id);
+    if (it == datumPlanes_.end()) {
+        return false;
+    }
+    DatumPlane& datum = it->second;
+
+    // Resolve a named origin plane or another datum's resolved frame.
+    auto resolveBase = [this](const std::string& baseId) -> std::optional<core::sketch::SketchPlane> {
+        if (baseId == "XY" || baseId.empty()) return core::sketch::SketchPlane::XY();
+        if (baseId == "XZ") return core::sketch::SketchPlane::XZ();
+        if (baseId == "YZ") return core::sketch::SketchPlane::YZ();
+        if (const DatumPlane* other = getDatumPlane(baseId)) {
+            if (other->resolvedValid) return other->resolvedPlane;
+        }
+        return std::nullopt;
+    };
+
+    bool ok = false;
+    switch (datum.kind) {
+        case DatumPlane::Kind::OffsetFromPlane: {
+            if (auto base = resolveBase(datum.basePlaneId)) {
+                datum.resolvedPlane = offsetAlongNormal(*base, datum.offset);
+                ok = true;
+            }
+            break;
+        }
+        case DatumPlane::Kind::OffsetFromFace: {
+            if (auto base = getSketchPlaneForFace(datum.baseBodyId, datum.baseFaceId)) {
+                datum.resolvedPlane = offsetAlongNormal(*base, datum.offset);
+                ok = true;
+            }
+            break;
+        }
+        case DatumPlane::Kind::AngledFromEdge: {
+            auto base = resolveBase(datum.basePlaneId);
+            const auto* edgeEntry = elementMap_.find(kernel::elementmap::ElementId::From(datum.axisEdgeId));
+            if (base && edgeEntry &&
+                edgeEntry->kind == kernel::elementmap::ElementKind::Edge &&
+                !edgeEntry->shape.IsNull()) {
+                try {
+                    BRepAdaptor_Curve curve(TopoDS::Edge(edgeEntry->shape));
+                    const gp_Pnt axisPnt = curve.Value(curve.FirstParameter());
+                    gp_Vec tangent;
+                    gp_Pnt tmp;
+                    curve.D1(curve.FirstParameter(), tmp, tangent);
+                    if (tangent.Magnitude() > 1e-9) {
+                        const gp_Ax1 axis(axisPnt, gp_Dir(tangent));
+                        gp_Trsf rot;
+                        rot.SetRotation(axis, datum.angleDeg * M_PI / 180.0);
+
+                        gp_Pnt origin(base->origin.x, base->origin.y, base->origin.z);
+                        origin.Transform(rot);
+                        auto rotateDir = [&](const core::sketch::Vec3d& v) {
+                            gp_Dir d(v.x, v.y, v.z);
+                            d.Transform(rot);
+                            return toVec3d(d);
+                        };
+                        core::sketch::SketchPlane result;
+                        result.origin = toVec3d(origin);
+                        result.xAxis = rotateDir(base->xAxis);
+                        result.yAxis = rotateDir(base->yAxis);
+                        result.normal = rotateDir(base->normal);
+                        datum.resolvedPlane = result;
+                        ok = true;
+                    }
+                } catch (const Standard_Failure&) {
+                    ok = false;
+                }
+            }
+            break;
+        }
+        case DatumPlane::Kind::ThreePoint:
+            // Reserved: three-point construction not yet implemented.
+            ok = false;
+            break;
+    }
+
+    datum.resolvedValid = ok;
+    if (ok) {
+        emit datumPlaneUpdated(QString::fromStdString(id));
+    }
+    return ok;
+}
+std::optional<std::pair<core::sketch::SketchPlane, std::string>>
 bool Document::ensureHostFaceBoundariesProjected(const std::string& sketchId) {
     core::sketch::Sketch* sketch = getSketch(sketchId);
     if (!sketch) {
@@ -659,7 +815,6 @@ bool Document::updateOperationParams(const std::string& opId, const OperationPar
     }
     return false;
 }
-
 bool Document::removeOperation(const std::string& opId) {
     const int removedIndex = operationIndex(opId);
     if (removedIndex < 0) {

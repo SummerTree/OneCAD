@@ -1222,6 +1222,50 @@ void testExtrudeToNextRequiresBody() {
     std::cout << " PASS\n";
 }
 
+void testDatumPlaneOffsetResolves() {
+    std::cout << "Test: Datum plane offset resolves + hosts a sketch..." << std::flush;
+
+    app::Document doc;
+
+    app::DatumPlane datum;
+    datum.name = "offset20";
+    datum.kind = app::DatumPlane::Kind::OffsetFromPlane;
+    datum.basePlaneId = "XY";
+    datum.offset = 20.0;
+    const std::string datumId = doc.addDatumPlane(datum);
+    assert(!datumId.empty());
+
+    const app::DatumPlane* resolved = doc.getDatumPlane(datumId);
+    assert(resolved && resolved->resolvedValid);
+    assert(nearlyEqual(resolved->resolvedPlane.origin.z, 20.0, 1e-9));
+    assert(nearlyEqual(resolved->resolvedPlane.normal.z, 1.0, 1e-9));
+
+    // A sketch on the datum extrudes into a valid body at the offset height.
+    auto sketch = std::make_unique<core::sketch::Sketch>(resolved->resolvedPlane);
+    auto p1 = sketch->addPoint(0.0, 0.0);
+    auto p2 = sketch->addPoint(10.0, 0.0);
+    auto p3 = sketch->addPoint(10.0, 10.0);
+    auto p4 = sketch->addPoint(0.0, 10.0);
+    sketch->addLine(p1, p2);
+    sketch->addLine(p2, p3);
+    sketch->addLine(p3, p4);
+    sketch->addLine(p4, p1);
+    const std::string sketchId = doc.addSketch(std::move(sketch));
+    const std::string regionId = firstRegionId(*doc.getSketch(sketchId));
+
+    const std::string bodyId = newId();
+    app::OperationRecord op;
+    op.opId = newId();
+    op.type = app::OperationType::Extrude;
+    op.input = app::SketchRegionRef{sketchId, regionId};
+    op.params = app::ExtrudeParams{5.0, 0.0, app::ExtrudeMode::Blind, app::BooleanMode::NewBody};
+    op.resultBodyIds.push_back(bodyId);
+    assert(executeAddOperation(doc, op));
+    assert(nearlyEqual(bodyVolume(doc, bodyId), 500.0, 1.0));
+
+    std::cout << " PASS\n";
+}
+
 void testExtrudeFaceRefRejectedByAddCommand() {
     std::cout << "Test: Extrude rejects FaceRef input at AddOperationCommand..." << std::flush;
 
@@ -1282,6 +1326,7 @@ int main(int argc, char* argv[]) {
     testProjectedReferenceGeometryIsLocked();
     testAddOperationTransactionalRollbackOnRegenFailure();
     testExtrudeFaceRefRejectedByAddCommand();
+    testDatumPlaneOffsetResolves();
     testExtrudeTwoDirections();
     testExtrudeThroughAllCutsBox();
     testExtrudeToFaceStopsAtFace();

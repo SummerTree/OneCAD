@@ -1,4 +1,5 @@
 #include "app/document/Document.h"
+#include "app/document/DatumPlane.h"
 #include "app/history/RegenerationEngine.h"
 #include "core/loop/LoopDetector.h"
 #include "core/loop/RegionUtils.h"
@@ -10,6 +11,7 @@
 #include <QUuid>
 
 #include <cassert>
+#include <cmath>
 #include <iostream>
 #include <string>
 
@@ -81,6 +83,15 @@ int main() {
     source.setOperationMetadata(op.opId, metadata);
     source.setAppliedOpCount(source.operations().size());
 
+    // A datum plane must survive the round-trip with its resolved frame intact.
+    onecad::app::DatumPlane datum;
+    datum.id = "datum-test-1";
+    datum.name = "offset25";
+    datum.kind = onecad::app::DatumPlane::Kind::OffsetFromPlane;
+    datum.basePlaneId = "XY";
+    datum.offset = 25.0;
+    source.addDatumPlane(datum);
+
     onecad::app::history::RegenerationEngine regen(&source);
     const auto regenResult = regen.regenerateAll();
     if (regenResult.status == onecad::app::history::RegenStatus::CriticalFailure) {
@@ -123,6 +134,26 @@ int main() {
     const auto loadedMeta = loaded->operationMetadata(op.opId);
     if (!loadedMeta.has_value() || loadedMeta->uiAlias != QStringLiteral("PushPull")) {
         std::cerr << "Operation metadata mismatch after roundtrip\n";
+        return 1;
+    }
+
+    if (loaded->datumPlaneCount() != source.datumPlaneCount()) {
+        std::cerr << "Datum plane count mismatch after roundtrip\n";
+        return 1;
+    }
+    const auto* loadedDatum = loaded->getDatumPlane("datum-test-1");
+    if (!loadedDatum || !loadedDatum->resolvedValid ||
+        std::abs(loadedDatum->resolvedPlane.origin.z - 25.0) > 1e-6 ||
+        loadedDatum->kind != onecad::app::DatumPlane::Kind::OffsetFromPlane) {
+        std::cerr << "Datum plane mismatch after roundtrip\n";
+        return 1;
+    }
+
+    // Document::clear() must reset datum planes too (regression: datums leaked
+    // across File>New and were saved into unrelated documents).
+    loaded->clear();
+    if (loaded->datumPlaneCount() != 0) {
+        std::cerr << "Document::clear() left datum planes behind\n";
         return 1;
     }
 
