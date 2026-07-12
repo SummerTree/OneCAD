@@ -5,8 +5,10 @@
 #include "AddOperationCommand.h"
 #include "OperationCommandUtils.h"
 #include "../document/Document.h"
+#include "../document/OperationValidation.h"
 
 #include <algorithm>
+#include <string>
 
 namespace onecad::app::commands {
 
@@ -20,6 +22,11 @@ bool AddOperationCommand::execute() {
         return false;
     }
     if (document_->findOperation(record_.opId)) {
+        return false;
+    }
+
+    std::string invalidReason;
+    if (!validateOperationInputType(record_.type, record_.input, &invalidReason)) {
         return false;
     }
 

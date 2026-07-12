@@ -91,10 +91,16 @@ enum class ExtrudeMode {
 struct ExtrudeParams {
     double distance = 0.0;
     double draftAngleDeg = 0.0;
-    ExtrudeMode extrudeMode = ExtrudeMode::Blind;
+    ExtrudeMode extrudeMode = ExtrudeMode::Blind;   // Direction-1 end condition
     BooleanMode booleanMode = BooleanMode::NewBody;
     std::string targetBodyId;               // Optional explicit boolean target body
-    std::string targetFaceId;               // For ToFace mode
+    std::string targetFaceId;               // For ToFace mode (direction 1)
+
+    // Two-directions: independent direction-2 condition (mutually exclusive with Symmetric).
+    bool twoDirections = false;
+    ExtrudeMode extrudeMode2 = ExtrudeMode::Blind;  // Direction-2 end condition
+    double distance2 = 0.0;                          // Direction-2 blind distance
+    std::string targetFaceId2;                       // For ToFace mode (direction 2)
 };
 
 struct RevolveParams {

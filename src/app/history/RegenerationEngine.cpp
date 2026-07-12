@@ -7,7 +7,6 @@
 #include "../document/Document.h"
 #include "../../core/loop/RegionUtils.h"
 #include "../../core/loop/FaceBuilder.h"
-#include "../../core/modeling/FaceExtrudeProfileBuilder.h"
 #include "../../core/modeling/FacePatchResolver.h"
 #include "../../core/modeling/EdgeChainer.h"
 #include "../../core/sketch/Sketch.h"
@@ -196,6 +195,28 @@ bool planarFacePlaneAndNormal(const TopoDS_Face& face, gp_Pln& planeOut, gp_Dir&
     } catch (...) {
         return false;
     }
+}
+
+// Nearest planar face of `body` crossed by a ray from `origin` along `dir` (forward).
+// Returns the positive distance, or -1 if no face lies ahead. Used for "To Next".
+double distanceToNextPlanarFace(const gp_Pnt& origin, const gp_Dir& dir, const TopoDS_Shape& body) {
+    double best = -1.0;
+    for (TopExp_Explorer exp(body, TopAbs_FACE); exp.More(); exp.Next()) {
+        gp_Pln pln;
+        gp_Dir n;
+        if (!planarFacePlaneAndNormal(TopoDS::Face(exp.Current()), pln, n)) {
+            continue;
+        }
+        const double denom = dir.Dot(n);
+        if (std::abs(denom) < 1e-7) {
+            continue;  // ray parallel to the face plane
+        }
+        const double t = gp_Vec(origin, pln.Location()).Dot(gp_Vec(n)) / denom;
+        if (t > 1e-4 && (best < 0.0 || t < best)) {
+            best = t;
+        }
+    }
+    return best;
 }
 
 std::optional<core::modeling::FacePatchSelection> resolveFacePatchSelection(
@@ -740,144 +761,143 @@ TopoDS_Shape RegenerationEngine::buildExtrude(const OperationRecord& op, std::st
     }
 
     const auto& params = std::get<ExtrudeParams>(op.params);
-    if (std::abs(params.distance) < kMinValue) {
+    // Only Blind/Symmetric are driven by the literal distance; ThroughAll/ToFace/ToNext
+    // compute their own extent, so a zero `distance` is valid for those.
+    const bool distanceDriven = !params.twoDirections &&
+        (params.extrudeMode == ExtrudeMode::Blind || params.extrudeMode == ExtrudeMode::Symmetric);
+    if (distanceDriven && std::abs(params.distance) < kMinValue) {
         errorOut = "Extrude distance too small";
         return {};
     }
 
+    // Extrude is a strictly sketch-region feature (face/body push-pull was removed;
+    // the user creates a sketch on the face first — see the auto-sketch-on-face path).
     TopoDS_Face baseFace;
-    std::vector<TopoDS_Face> patchFaces;
-    bool usedLegacyPatchFallback = false;
-
     if (std::holds_alternative<SketchRegionRef>(op.input)) {
         auto faceOpt = resolveFaceInput(op.input, errorOut);
         if (!faceOpt) {
             return {};
         }
         baseFace = *faceOpt;
-        patchFaces = {baseFace};
-    } else if (std::holds_alternative<FaceRef>(op.input)) {
-        const auto& faceRef = std::get<FaceRef>(op.input);
-        if (faceRef.bodyId.empty()) {
-            errorOut = "Face owner body is required";
-            return {};
-        }
-
-        auto bodyOpt = resolveBody(faceRef.bodyId);
-        if (!bodyOpt) {
-            errorOut = "Face owner body not found: " + faceRef.bodyId;
-            return {};
-        }
-
-        auto patch = resolveFacePatchSelection(faceRef, *bodyOpt, doc_->elementMap(), errorOut,
-                                               usedLegacyPatchFallback);
-        if (!patch) {
-            return {};
-        }
-        patchFaces = patch->memberFaces;
-        if (patchFaces.empty()) {
-            errorOut = "Face patch is empty";
-            return {};
-        }
-
-        if (!faceRef.faceId.empty()) {
-            auto seedFaceOpt = resolveFace(faceRef.faceId);
-            if (seedFaceOpt) {
-                baseFace = TopoDS::Face(*seedFaceOpt);
-            }
-        }
-        if (baseFace.IsNull()) {
-            baseFace = patchFaces.front();
-        }
-
-        qCDebug(logRegen) << "buildExtrude:coplanar-patch"
-                          << "opId=" << QString::fromStdString(op.opId)
-                          << "seedFaceId=" << QString::fromStdString(faceRef.faceId)
-                          << "patchFaces=" << patchFaces.size()
-                          << "patchFaceIds=" << patch->memberFaceIds.size()
-                          << "legacyFallback=" << usedLegacyPatchFallback;
     } else {
-        errorOut = "Invalid input type for extrude";
+        errorOut = "Extrude requires a sketch region input";
         return {};
     }
 
-    // Get direction from a valid planar patch face.
+    // Direction from the planar profile face.
     gp_Pln plane;
     gp_Dir direction(0.0, 0.0, 1.0);
     if (!planarFacePlaneAndNormal(baseFace, plane, direction)) {
-        bool resolvedDirection = false;
-        for (const TopoDS_Face& patchFace : patchFaces) {
-            if (planarFacePlaneAndNormal(patchFace, plane, direction)) {
-                baseFace = patchFace;
-                resolvedDirection = true;
-                break;
-            }
-        }
-        if (!resolvedDirection) {
-            errorOut = "Only planar faces supported for extrusion";
-            return {};
-        }
+        errorOut = "Only planar faces supported for extrusion";
+        return {};
     }
 
     TopoDS_Shape profileShape = baseFace;
-    if (std::holds_alternative<FaceRef>(op.input) && patchFaces.size() > 1) {
-        std::string profileError;
-        std::optional<core::modeling::FaceExtrudeProfileBuilder::Result> mergedProfile;
-        try {
-            mergedProfile = core::modeling::FaceExtrudeProfileBuilder::build(
-                baseFace, patchFaces, profileError);
-        } catch (const Standard_Failure& failure) {
-            errorOut = "Extrude merged profile failed: " + std::string(failure.GetMessageString());
-            qCWarning(logRegen) << "buildExtrude:merged-profile-exception"
-                                << "opId=" << QString::fromStdString(op.opId)
-                                << "patchFaces=" << patchFaces.size()
-                                << "legacyFallback=" << usedLegacyPatchFallback
-                                << "reason=" << QString::fromStdString(errorOut);
-            return {};
-        } catch (...) {
-            errorOut = "Extrude merged profile failed";
-            qCWarning(logRegen) << "buildExtrude:merged-profile-exception"
-                                << "opId=" << QString::fromStdString(op.opId)
-                                << "patchFaces=" << patchFaces.size()
-                                << "legacyFallback=" << usedLegacyPatchFallback
-                                << "reason=" << QString::fromStdString(errorOut);
-            return {};
-        }
-        if (!mergedProfile || mergedProfile->profileShape.IsNull()) {
-            errorOut = "Extrude merged profile failed";
-            if (!profileError.empty()) {
-                errorOut += ": " + profileError;
-            }
-            qCWarning(logRegen) << "buildExtrude:merged-profile-failed"
-                                << "opId=" << QString::fromStdString(op.opId)
-                                << "patchFaces=" << patchFaces.size()
-                                << "legacyFallback=" << usedLegacyPatchFallback
-                                << "reason=" << QString::fromStdString(profileError);
-            return {};
-        }
-        profileShape = mergedProfile->profileShape;
-        qCDebug(logRegen) << "buildExtrude:merged-profile"
-                          << "opId=" << QString::fromStdString(op.opId)
-                          << "inputPatchFaces=" << mergedProfile->inputFaceCount
-                          << "mergedFaces=" << mergedProfile->mergedFaceCount
-                          << "legacyFallback=" << usedLegacyPatchFallback;
-    } else if (std::holds_alternative<FaceRef>(op.input)) {
-        qCDebug(logRegen) << "buildExtrude:single-face-profile"
-                          << "opId=" << QString::fromStdString(op.opId)
-                          << "patchFaces=" << patchFaces.size()
-                          << "legacyFallback=" << usedLegacyPatchFallback;
-    }
 
-    // Build prism based on extrude mode
+    // Resolve the signed distance to extrude along a reference direction for a given end
+    // condition. Blind uses the literal distance; ThroughAll a large extent; ToFace
+    // projects onto refDir to reach a target planar face; ToNext stops at the nearest
+    // planar face of the target body along refDir. (Planar-target approach — robust and
+    // avoids the BRepFeat_MakePrism fragility; curved-target up-to-surface is future work.)
+    const gp_Pnt prismOrigin = plane.Location();
+    auto effectiveDistance = [&](ExtrudeMode mode, double blind, const std::string& faceTargetId,
+                                 const gp_Dir& refDir, std::string& err) -> std::optional<double> {
+        switch (mode) {
+            case ExtrudeMode::Blind:
+                return blind;
+            case ExtrudeMode::ThroughAll:
+                return blind >= 0.0 ? 1.0e5 : -1.0e5;
+            case ExtrudeMode::ToFace: {
+                auto faceOpt = resolveFace(faceTargetId);
+                if (!faceOpt) {
+                    err = "To Face target face not found: " + faceTargetId;
+                    return std::nullopt;
+                }
+                gp_Pln targetPln;
+                gp_Dir targetN;
+                if (!planarFacePlaneAndNormal(TopoDS::Face(*faceOpt), targetPln, targetN)) {
+                    err = "To Face target face is not planar";
+                    return std::nullopt;
+                }
+                const double d = gp_Vec(prismOrigin, targetPln.Location()).Dot(gp_Vec(refDir));
+                if (std::abs(d) < kMinValue) {
+                    err = "To Face target coincides with the sketch plane";
+                    return std::nullopt;
+                }
+                return d;
+            }
+            case ExtrudeMode::ToNext: {
+                const std::string nextBodyId = resolveBooleanTargetBodyId(op, params.targetBodyId);
+                if (nextBodyId.empty()) {
+                    err = "To Next requires an existing target body";
+                    return std::nullopt;
+                }
+                auto bodyOpt = resolveBody(nextBodyId);
+                if (!bodyOpt) {
+                    err = "To Next target body not found: " + nextBodyId;
+                    return std::nullopt;
+                }
+                const double d = distanceToNextPlanarFace(prismOrigin, refDir, *bodyOpt);
+                if (d <= 0.0) {
+                    err = "To Next: no face found ahead along the extrude direction";
+                    return std::nullopt;
+                }
+                return d;
+            }
+            case ExtrudeMode::Symmetric:
+                return blind;  // handled separately below
+        }
+        return blind;
+    };
+
+    auto makePrism = [&](const gp_Dir& refDir, double signedDistance, std::string& err) -> TopoDS_Shape {
+        gp_Vec prismVec(refDir.X() * signedDistance, refDir.Y() * signedDistance, refDir.Z() * signedDistance);
+        BRepPrimAPI_MakePrism prism(profileShape, prismVec, true);
+        if (prism.Shape().IsNull()) {
+            err = "Extrude prism produced null shape";
+        }
+        return prism.Shape();
+    };
+
     TopoDS_Shape result;
-    if (params.extrudeMode == ExtrudeMode::Symmetric) {
-        double halfDist = params.distance * 0.5;
+    if (params.twoDirections) {
+        if (params.extrudeMode == ExtrudeMode::Symmetric ||
+            params.extrudeMode2 == ExtrudeMode::Symmetric) {
+            errorOut = "Symmetric is not valid with two directions";
+            return {};
+        }
+        const gp_Dir dir2 = direction.Reversed();
+        auto d1 = effectiveDistance(params.extrudeMode, params.distance, params.targetFaceId,
+                                    direction, errorOut);
+        if (!d1) {
+            return {};
+        }
+        auto d2 = effectiveDistance(params.extrudeMode2, params.distance2, params.targetFaceId2,
+                                    dir2, errorOut);
+        if (!d2) {
+            return {};
+        }
+        TopoDS_Shape p1 = makePrism(direction, *d1, errorOut);
+        if (p1.IsNull()) {
+            return {};
+        }
+        TopoDS_Shape p2 = makePrism(dir2, *d2, errorOut);
+        if (p2.IsNull()) {
+            return {};
+        }
+        BRepAlgoAPI_Fuse fuse(p1, p2);
+        fuse.Build();
+        if (!fuse.IsDone()) {
+            errorOut = "Two-direction extrude fuse failed";
+            return {};
+        }
+        result = fuse.Shape();
+    } else if (params.extrudeMode == ExtrudeMode::Symmetric) {
+        const double halfDist = params.distance * 0.5;
         gp_Vec fwdVec(direction.X() * halfDist, direction.Y() * halfDist, direction.Z() * halfDist);
         gp_Vec bwdVec = fwdVec.Reversed();
-
         BRepPrimAPI_MakePrism fwdPrism(profileShape, fwdVec, true);
         BRepPrimAPI_MakePrism bwdPrism(profileShape, bwdVec, true);
-
         if (fwdPrism.Shape().IsNull() || bwdPrism.Shape().IsNull()) {
             errorOut = "Symmetric extrude prism produced null shape";
             return {};
@@ -888,20 +908,16 @@ TopoDS_Shape RegenerationEngine::buildExtrude(const OperationRecord& op, std::st
             return {};
         }
         result = fuse.Shape();
-    } else if (params.extrudeMode == ExtrudeMode::ThroughAll) {
-        // Use a large distance (1e5 mm) to approximate through-all
-        double throughDist = (params.distance >= 0) ? 1e5 : -1e5;
-        gp_Vec prismVec(direction.X() * throughDist, direction.Y() * throughDist, direction.Z() * throughDist);
-        BRepPrimAPI_MakePrism prism(profileShape, prismVec, true);
-        result = prism.Shape();
     } else {
-        // Blind (default), ToNext, ToFace — use distance directly
-        // ToNext and ToFace require caller to pre-compute distance
-        gp_Vec prismVec(direction.X() * params.distance,
-                        direction.Y() * params.distance,
-                        direction.Z() * params.distance);
-        BRepPrimAPI_MakePrism prism(profileShape, prismVec, true);
-        result = prism.Shape();
+        auto d1 = effectiveDistance(params.extrudeMode, params.distance, params.targetFaceId,
+                                    direction, errorOut);
+        if (!d1) {
+            return {};
+        }
+        result = makePrism(direction, *d1, errorOut);
+        if (result.IsNull()) {
+            return {};
+        }
     }
 
     if (result.IsNull()) {

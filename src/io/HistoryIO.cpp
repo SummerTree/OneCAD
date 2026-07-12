@@ -387,6 +387,16 @@ QJsonObject HistoryIO::serializeOperation(const OperationRecord& op,
         if (!p.targetFaceId.empty()) {
             params["targetFaceId"] = QString::fromStdString(p.targetFaceId);
         }
+        if (p.twoDirections) {
+            params["twoDirections"] = true;
+            params["distance2"] = p.distance2;
+            if (p.extrudeMode2 != ExtrudeMode::Blind) {
+                params["extrudeMode2"] = QString::fromLatin1(extrudeModeName(p.extrudeMode2));
+            }
+            if (!p.targetFaceId2.empty()) {
+                params["targetFaceId2"] = QString::fromStdString(p.targetFaceId2);
+            }
+        }
     }
     else if (std::holds_alternative<RevolveParams>(op.params)) {
         const auto& p = std::get<RevolveParams>(op.params);
@@ -571,6 +581,20 @@ OperationRecord HistoryIO::deserializeOperation(const QJsonObject& json) {
         }
         if (params.contains("targetFaceId")) {
             p.targetFaceId = params["targetFaceId"].toString().toStdString();
+        }
+        if (params.contains("twoDirections")) {
+            p.twoDirections = params["twoDirections"].toBool();
+        }
+        p.distance2 = params["distance2"].toDouble();
+        if (params.contains("extrudeMode2")) {
+            const QString mode2 = params["extrudeMode2"].toString();
+            if (mode2 == "ThroughAll") p.extrudeMode2 = ExtrudeMode::ThroughAll;
+            else if (mode2 == "Symmetric") p.extrudeMode2 = ExtrudeMode::Symmetric;
+            else if (mode2 == "ToNext") p.extrudeMode2 = ExtrudeMode::ToNext;
+            else if (mode2 == "ToFace") p.extrudeMode2 = ExtrudeMode::ToFace;
+        }
+        if (params.contains("targetFaceId2")) {
+            p.targetFaceId2 = params["targetFaceId2"].toString().toStdString();
         }
         op.params = p;
     }

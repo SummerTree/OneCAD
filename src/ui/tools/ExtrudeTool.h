@@ -17,7 +17,6 @@
 #include <gp_Pln.hxx>
 #include <cstddef>
 #include <string>
-#include <vector>
 
 namespace onecad::app {
 class Document;
@@ -55,7 +54,6 @@ public:
 
 private:
     bool prepareInput(const app::selection::SelectionItem& selection);
-    bool isPlanarFace(const TopoDS_Face& face) const;
     void updatePreview(double distance);
     void clearPreview();
     TopoDS_Shape buildExtrudeShape(double distance) const;
@@ -65,14 +63,11 @@ private:
     app::Document* document_ = nullptr;
     app::commands::CommandProcessor* commandProcessor_ = nullptr;
     app::selection::SelectionItem selection_{};
-    core::sketch::Sketch* sketch_ = nullptr; // Null if extruding a body face
-    std::string targetBodyId_; // ID of the body owning the selected face (if any)
-    TopoDS_Shape targetShape_; // The original shape of the body being modified (for boolean ops)
+    core::sketch::Sketch* sketch_ = nullptr; // Host sketch of the extruded region
+    std::string targetBodyId_; // ID of the host body for a sketch-on-face boolean (if any)
+    TopoDS_Shape targetShape_; // The original shape of the host body (for boolean ops)
     TopoDS_Face baseFace_;
     TopoDS_Shape baseProfileShape_;
-    std::vector<TopoDS_Face> basePatchFaces_;
-    std::vector<std::string> basePatchFaceIds_;
-    std::string basePatchLeaderFaceId_;
     gp_Pnt baseCenter_;
     gp_Dir direction_;
     gp_Pln neutralPlane_;
@@ -82,7 +77,6 @@ private:
     QPoint dragStart_;
     double currentDistance_ = 0.0;
     double draftAngleDeg_ = 0.0;
-    std::size_t basePatchFaceCount_ = 0;
     app::BooleanMode booleanMode_ = app::BooleanMode::NewBody;
 
     render::TessellationCache previewTessellator_;

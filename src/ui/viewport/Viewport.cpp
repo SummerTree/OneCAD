@@ -1925,14 +1925,12 @@ void Viewport::handleModelSelectionChanged() {
         }
     }
 
-    // Auto-activate Extrude if selection is valid (SketchRegion OR Face)
+    // Auto-activate Extrude only for a closed sketch region. A selected planar face
+    // routes through the auto-sketch-on-face fast path instead (see MainWindow).
     bool canExtrude = false;
-    if (selection.size() == 1) {
-        if (selection.front().kind == app::selection::SelectionKind::SketchRegion) {
-            canExtrude = true;
-        } else if (selection.front().kind == app::selection::SelectionKind::Face) {
-            canExtrude = true;
-        }
+    if (selection.size() == 1 &&
+        selection.front().kind == app::selection::SelectionKind::SketchRegion) {
+        canExtrude = true;
     }
 
     if (canExtrude) {

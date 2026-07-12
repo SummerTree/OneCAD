@@ -17,7 +17,6 @@
 #include "app/selection/SelectionManager.h"
 #include "core/loop/LoopDetector.h"
 #include "core/loop/RegionUtils.h"
-#include "core/modeling/FacePatchResolver.h"
 #include "core/sketch/Sketch.h"
 #include "io/HistoryIO.h"
 
@@ -137,136 +136,6 @@ double bodyVolume(const app::Document& doc, const std::string& bodyId) {
     const TopoDS_Shape* body = doc.getBodyShape(bodyId);
     assert(body && !body->IsNull());
     return shapeVolume(*body);
-}
-
-std::optional<std::string> findExtremeFace(const app::Document& doc,
-                                           const std::string& bodyId,
-                                           const gp_Dir& desiredNormal,
-                                           const gp_Dir& scoreDirection,
-                                           double normalDotThreshold = 0.95) {
-    std::optional<std::string> bestId;
-    double bestScore = -std::numeric_limits<double>::infinity();
-
-    for (const auto& id : doc.elementMap().ids()) {
-        const auto* entry = doc.elementMap().find(id);
-        if (!entry || entry->kind != kernel::elementmap::ElementKind::Face || entry->shape.IsNull()) {
-            continue;
-        }
-
-        auto plane = doc.getSketchPlaneForFace(bodyId, id.value);
-        if (!plane.has_value()) {
-            continue;
-        }
-
-        gp_Dir normal(plane->normal.x, plane->normal.y, plane->normal.z);
-        if (normal.Dot(desiredNormal) < normalDotThreshold) {
-            continue;
-        }
-
-        GProp_GProps props;
-        BRepGProp::SurfaceProperties(TopoDS::Face(entry->shape), props);
-        const gp_Pnt center = props.CentreOfMass();
-        const double score = center.X() * scoreDirection.X() +
-                             center.Y() * scoreDirection.Y() +
-                             center.Z() * scoreDirection.Z();
-        if (score > bestScore) {
-            bestScore = score;
-            bestId = id.value;
-        }
-    }
-
-    return bestId;
-}
-
-std::vector<std::string> topFaceIdsAtMaxZ(const app::Document& doc, const std::string& bodyId) {
-    struct Candidate {
-        std::string id;
-        double z = 0.0;
-        const void* shapeKey = nullptr;
-    };
-
-    std::vector<Candidate> candidates;
-    std::unordered_set<const void*> seenShapeKeys;
-
-    for (const auto& id : doc.elementMap().ids()) {
-        const auto* entry = doc.elementMap().find(id);
-        if (!entry || entry->kind != kernel::elementmap::ElementKind::Face || entry->shape.IsNull()) {
-            continue;
-        }
-
-        auto plane = doc.getSketchPlaneForFace(bodyId, id.value);
-        if (!plane.has_value()) {
-            continue;
-        }
-
-        gp_Dir normal(plane->normal.x, plane->normal.y, plane->normal.z);
-        if (normal.Dot(gp_Dir(0.0, 0.0, 1.0)) < 0.95) {
-            continue;
-        }
-
-        const void* shapeKey = entry->shape.TShape().get();
-        if (!shapeKey || seenShapeKeys.count(shapeKey) > 0) {
-            continue;
-        }
-
-        GProp_GProps props;
-        BRepGProp::SurfaceProperties(TopoDS::Face(entry->shape), props);
-        candidates.push_back(Candidate{id.value, props.CentreOfMass().Z(), shapeKey});
-        seenShapeKeys.insert(shapeKey);
-    }
-
-    std::vector<std::string> out;
-    if (candidates.empty()) {
-        return out;
-    }
-
-    double maxZ = -std::numeric_limits<double>::infinity();
-    for (const auto& candidate : candidates) {
-        maxZ = std::max(maxZ, candidate.z);
-    }
-
-    constexpr double kTolerance = 1e-4;
-    for (const auto& candidate : candidates) {
-        if (std::abs(candidate.z - maxZ) <= kTolerance) {
-            out.push_back(candidate.id);
-        }
-    }
-    return out;
-}
-
-double totalFaceArea(const app::Document& doc, const std::vector<std::string>& faceIds) {
-    double area = 0.0;
-    for (const auto& faceId : faceIds) {
-        const auto* entry = doc.elementMap().find(kernel::elementmap::ElementId::From(faceId));
-        if (!entry || entry->kind != kernel::elementmap::ElementKind::Face || entry->shape.IsNull()) {
-            continue;
-        }
-        GProp_GProps props;
-        BRepGProp::SurfaceProperties(TopoDS::Face(entry->shape), props);
-        area += props.Mass();
-    }
-    return area;
-}
-
-std::optional<app::FaceRef> makeFaceRefWithPatch(const app::Document& doc,
-                                                 const std::string& bodyId,
-                                                 const std::string& seedFaceId) {
-    const TopoDS_Shape* bodyShape = doc.getBodyShape(bodyId);
-    if (!bodyShape || bodyShape->IsNull()) {
-        return std::nullopt;
-    }
-
-    auto patch = core::modeling::FacePatchResolver::resolveFromSeedFaceId(
-        *bodyShape, doc.elementMap(), seedFaceId);
-    if (!patch) {
-        return std::nullopt;
-    }
-
-    app::FaceRef ref;
-    ref.bodyId = bodyId;
-    ref.faceId = patch->leaderFaceId.empty() ? seedFaceId : patch->leaderFaceId;
-    ref.patchFaceIds = patch->memberFaceIds;
-    return ref;
 }
 
 } // namespace
@@ -1004,176 +873,6 @@ void testProjectedReferenceGeometryIsLocked() {
     std::cout << " PASS\n";
 }
 
-void testFacePushPullChainReplayStable() {
-    std::cout << "Test 18: Face push/pull chain replay remains stable..." << std::flush;
-
-    app::Document doc;
-    const auto [sketchId, regionId] = createSquareSketchRegion(doc, 10.0);
-    const std::string bodyId = newId();
-
-    app::OperationRecord op1;
-    op1.opId = newId();
-    op1.type = app::OperationType::Extrude;
-    op1.input = app::SketchRegionRef{sketchId, regionId};
-    op1.params = app::ExtrudeParams{10.0, 0.0, app::ExtrudeMode::Blind, app::BooleanMode::NewBody};
-    op1.resultBodyIds.push_back(bodyId);
-    assert(executeAddOperation(doc, op1));
-
-    const double volume1 = bodyVolume(doc, bodyId);
-
-    auto sideFaceId = findExtremeFace(doc, bodyId, gp_Dir(1.0, 0.0, 0.0), gp_Dir(1.0, 0.0, 0.0));
-    if (!sideFaceId) {
-        sideFaceId = findExtremeFace(doc, bodyId, gp_Dir(-1.0, 0.0, 0.0), gp_Dir(-1.0, 0.0, 0.0));
-    }
-    if (!sideFaceId) {
-        sideFaceId = findExtremeFace(doc, bodyId, gp_Dir(0.0, 1.0, 0.0), gp_Dir(0.0, 1.0, 0.0));
-    }
-    if (!sideFaceId) {
-        sideFaceId = findExtremeFace(doc, bodyId, gp_Dir(0.0, -1.0, 0.0), gp_Dir(0.0, -1.0, 0.0));
-    }
-    assert(sideFaceId.has_value());
-    auto op2FaceRef = makeFaceRefWithPatch(doc, bodyId, *sideFaceId);
-    assert(op2FaceRef.has_value());
-    assert(!op2FaceRef->patchFaceIds.empty());
-
-    app::OperationRecord op2;
-    op2.opId = newId();
-    op2.type = app::OperationType::Extrude;
-    op2.input = *op2FaceRef;
-    app::ExtrudeParams op2Params;
-    op2Params.distance = 10.0;
-    op2Params.booleanMode = app::BooleanMode::Add;
-    op2Params.targetBodyId = bodyId;
-    op2.params = op2Params;
-    op2.resultBodyIds.push_back(bodyId);
-    assert(executeAddOperation(doc, op2));
-
-    const double volume2 = bodyVolume(doc, bodyId);
-    assert(volume2 > volume1 + 1.0);
-
-    const auto topFaces = topFaceIdsAtMaxZ(doc, bodyId);
-    assert(!topFaces.empty());
-    auto op3FaceRef = makeFaceRefWithPatch(doc, bodyId, topFaces.front());
-    assert(op3FaceRef.has_value());
-    assert(!op3FaceRef->patchFaceIds.empty());
-
-    app::OperationRecord op3;
-    op3.opId = newId();
-    op3.type = app::OperationType::Extrude;
-    op3.input = *op3FaceRef;
-    app::ExtrudeParams op3Params;
-    op3Params.distance = 5.0;
-    op3Params.booleanMode = app::BooleanMode::Add;
-    op3Params.targetBodyId = bodyId;
-    op3.params = op3Params;
-    op3.resultBodyIds.push_back(bodyId);
-    assert(executeAddOperation(doc, op3));
-
-    const double volume3 = bodyVolume(doc, bodyId);
-    assert(volume3 > volume2 + 1.0);
-
-    auto fourthFaceId = findExtremeFace(doc, bodyId, gp_Dir(0.0, 1.0, 0.0), gp_Dir(0.0, 1.0, 0.0));
-    if (!fourthFaceId) {
-        fourthFaceId = findExtremeFace(doc, bodyId, gp_Dir(0.0, -1.0, 0.0), gp_Dir(0.0, -1.0, 0.0));
-    }
-    if (!fourthFaceId) {
-        fourthFaceId = findExtremeFace(doc, bodyId, gp_Dir(1.0, 0.0, 0.0), gp_Dir(1.0, 0.0, 0.0));
-    }
-    if (!fourthFaceId) {
-        fourthFaceId = findExtremeFace(doc, bodyId, gp_Dir(-1.0, 0.0, 0.0), gp_Dir(-1.0, 0.0, 0.0));
-    }
-    assert(fourthFaceId.has_value());
-    auto op4FaceRef = makeFaceRefWithPatch(doc, bodyId, *fourthFaceId);
-    assert(op4FaceRef.has_value());
-    assert(!op4FaceRef->patchFaceIds.empty());
-
-    constexpr double kOp4Distance = 3.0;
-    const double op4PatchArea = totalFaceArea(doc, op4FaceRef->patchFaceIds);
-    assert(op4PatchArea > 0.0);
-
-    app::OperationRecord op4;
-    op4.opId = newId();
-    op4.type = app::OperationType::Extrude;
-    op4.input = *op4FaceRef;
-    app::ExtrudeParams op4Params;
-    op4Params.distance = kOp4Distance;
-    op4Params.booleanMode = app::BooleanMode::Add;
-    op4Params.targetBodyId = bodyId;
-    op4.params = op4Params;
-    op4.resultBodyIds.push_back(bodyId);
-    assert(executeAddOperation(doc, op4));
-
-    const double volume4 = bodyVolume(doc, bodyId);
-    assert(volume4 > volume3 + 1.0);
-    const double expectedDelta4 = op4PatchArea * kOp4Distance;
-    const double actualDelta4 = volume4 - volume3;
-    assert(nearlyEqual(actualDelta4, expectedDelta4, 40.0));
-
-    const auto* storedOp2 = doc.findOperation(op2.opId);
-    const auto* storedOp3 = doc.findOperation(op3.opId);
-    const auto* storedOp4 = doc.findOperation(op4.opId);
-    assert(storedOp2 && std::holds_alternative<app::FaceRef>(storedOp2->input));
-    assert(storedOp3 && std::holds_alternative<app::FaceRef>(storedOp3->input));
-    assert(storedOp4 && std::holds_alternative<app::FaceRef>(storedOp4->input));
-    assert(!std::get<app::FaceRef>(storedOp2->input).patchFaceIds.empty());
-    assert(!std::get<app::FaceRef>(storedOp3->input).patchFaceIds.empty());
-    assert(!std::get<app::FaceRef>(storedOp4->input).patchFaceIds.empty());
-
-    app::history::RegenerationEngine engine(&doc);
-    auto result = engine.regenerateToAppliedCount(doc.appliedOpCount());
-    assert(result.status == app::history::RegenStatus::Success);
-    assert(result.failedOps.empty());
-
-    const double replayVolume = bodyVolume(doc, bodyId);
-    assert(nearlyEqual(replayVolume, volume4, 35.0));
-
-    std::cout << " PASS\n";
-}
-
-void testCoplanarPatchExtrudeUsesWholeTopArea() {
-    std::cout << "Test 19: Coplanar patch push/pull uses full connected area..." << std::flush;
-
-    app::Document doc;
-    TopoDS_Shape left = BRepPrimAPI_MakeBox(10.0, 10.0, 10.0).Shape();
-    TopoDS_Shape right = BRepPrimAPI_MakeBox(gp_Pnt(10.0, 0.0, 0.0), 10.0, 10.0, 10.0).Shape();
-    BRepAlgoAPI_Fuse baseFuse(left, right);
-    baseFuse.Build();
-    assert(baseFuse.IsDone());
-
-    const std::string bodyId = doc.addBody(baseFuse.Shape());
-    assert(!bodyId.empty());
-    doc.addBaseBodyId(bodyId);
-
-    const double volumeBefore = bodyVolume(doc, bodyId);
-    const auto topFaces = topFaceIdsAtMaxZ(doc, bodyId);
-    assert(topFaces.size() >= 2);
-    const double topArea = totalFaceArea(doc, topFaces);
-    assert(topArea > 150.0);
-
-    constexpr double kDistance = 4.0;
-    app::OperationRecord op;
-    op.opId = newId();
-    op.type = app::OperationType::Extrude;
-    op.input = app::FaceRef{bodyId, topFaces.front()};
-    app::ExtrudeParams params;
-    params.distance = kDistance;
-    params.booleanMode = app::BooleanMode::Add;
-    params.targetBodyId = bodyId;
-    op.params = params;
-    op.resultBodyIds.push_back(bodyId);
-    assert(executeAddOperation(doc, op));
-    const auto* storedOp = doc.findOperation(op.opId);
-    assert(storedOp && std::holds_alternative<app::FaceRef>(storedOp->input));
-    assert(std::get<app::FaceRef>(storedOp->input).patchFaceIds.empty());
-
-    const double volumeAfter = bodyVolume(doc, bodyId);
-    const double expectedDelta = topArea * kDistance;
-    const double actualDelta = volumeAfter - volumeBefore;
-    assert(nearlyEqual(actualDelta, expectedDelta, 25.0));
-
-    std::cout << " PASS\n";
-}
-
 void testAddOperationTransactionalRollbackOnRegenFailure() {
     std::cout << "Test 20: AddOperationCommand rolls back on replay failure..." << std::flush;
 
@@ -1196,13 +895,12 @@ void testAddOperationTransactionalRollbackOnRegenFailure() {
     app::OperationRecord invalidOp;
     invalidOp.opId = newId();
     invalidOp.type = app::OperationType::Extrude;
-    invalidOp.input = app::FaceRef{bodyId, bodyId + "/face/not-found"};
+    invalidOp.input = app::SketchRegionRef{sketchId, "nonexistent-region-id"};
     app::ExtrudeParams invalidParams;
     invalidParams.distance = 3.0;
-    invalidParams.booleanMode = app::BooleanMode::Add;
-    invalidParams.targetBodyId = bodyId;
+    invalidParams.booleanMode = app::BooleanMode::NewBody;
     invalidOp.params = invalidParams;
-    invalidOp.resultBodyIds.push_back(bodyId);
+    invalidOp.resultBodyIds.push_back(newId());
 
     app::commands::AddOperationCommand command(&doc, invalidOp);
     const bool success = command.execute();
@@ -1217,63 +915,6 @@ void testAddOperationTransactionalRollbackOnRegenFailure() {
     auto regen = engine.regenerateToAppliedCount(doc.appliedOpCount());
     assert(regen.status == app::history::RegenStatus::Success);
     assert(regen.failedOps.empty());
-
-    std::cout << " PASS\n";
-}
-
-void testFacePatchReplayDeterministic() {
-    std::cout << "Test 21: Explicit face patch IDs replay deterministically..." << std::flush;
-
-    app::Document doc;
-    const auto [sketchId, regionId] = createSquareSketchRegion(doc, 10.0);
-    const std::string bodyId = newId();
-
-    app::OperationRecord op1;
-    op1.opId = newId();
-    op1.type = app::OperationType::Extrude;
-    op1.input = app::SketchRegionRef{sketchId, regionId};
-    op1.params = app::ExtrudeParams{10.0, 0.0, app::ExtrudeMode::Blind, app::BooleanMode::NewBody};
-    op1.resultBodyIds.push_back(bodyId);
-    assert(executeAddOperation(doc, op1));
-
-    auto sideFaceId = findExtremeFace(doc, bodyId, gp_Dir(1.0, 0.0, 0.0), gp_Dir(1.0, 0.0, 0.0));
-    if (!sideFaceId) {
-        sideFaceId = findExtremeFace(doc, bodyId, gp_Dir(-1.0, 0.0, 0.0), gp_Dir(-1.0, 0.0, 0.0));
-    }
-    if (!sideFaceId) {
-        sideFaceId = findExtremeFace(doc, bodyId, gp_Dir(0.0, 1.0, 0.0), gp_Dir(0.0, 1.0, 0.0));
-    }
-    if (!sideFaceId) {
-        sideFaceId = findExtremeFace(doc, bodyId, gp_Dir(0.0, -1.0, 0.0), gp_Dir(0.0, -1.0, 0.0));
-    }
-    assert(sideFaceId.has_value());
-
-    auto faceRef = makeFaceRefWithPatch(doc, bodyId, *sideFaceId);
-    assert(!bodyId.empty());
-    assert(faceRef.has_value());
-    assert(!faceRef->patchFaceIds.empty());
-
-    app::OperationRecord op;
-    op.opId = newId();
-    op.type = app::OperationType::Extrude;
-    op.input = *faceRef;
-    app::ExtrudeParams params;
-    params.distance = 3.0;
-    params.booleanMode = app::BooleanMode::Add;
-    params.targetBodyId = bodyId;
-    op.params = params;
-    op.resultBodyIds.push_back(bodyId);
-    assert(executeAddOperation(doc, op));
-
-    const double volumeAfter = bodyVolume(doc, bodyId);
-
-    app::history::RegenerationEngine engine(&doc);
-    auto result = engine.regenerateToAppliedCount(doc.appliedOpCount());
-    assert(result.status == app::history::RegenStatus::Success);
-    assert(result.failedOps.empty());
-
-    const double replayVolume = bodyVolume(doc, bodyId);
-    assert(nearlyEqual(replayVolume, volumeAfter, 25.0));
 
     std::cout << " PASS\n";
 }
@@ -1458,6 +1099,165 @@ void testCircularPatternCompoundAndDependency() {
     std::cout << " PASS\n";
 }
 
+void testExtrudeTwoDirections() {
+    std::cout << "Test: Two-direction extrude sums both depths..." << std::flush;
+
+    app::Document doc;
+    const auto [sketchId, regionId] = createSquareSketchRegion(doc, 10.0);
+    const std::string bodyId = newId();
+
+    app::OperationRecord op;
+    op.opId = newId();
+    op.type = app::OperationType::Extrude;
+    op.input = app::SketchRegionRef{sketchId, regionId};
+    app::ExtrudeParams params;
+    params.distance = 5.0;            // direction 1
+    params.extrudeMode = app::ExtrudeMode::Blind;
+    params.twoDirections = true;
+    params.distance2 = 3.0;           // direction 2 (opposite)
+    params.extrudeMode2 = app::ExtrudeMode::Blind;
+    params.booleanMode = app::BooleanMode::NewBody;
+    op.params = params;
+    op.resultBodyIds.push_back(bodyId);
+    assert(executeAddOperation(doc, op));
+    // 10 x 10 footprint, total depth 5 + 3 = 8.
+    assert(nearlyEqual(bodyVolume(doc, bodyId), 800.0, 1.0));
+
+    std::cout << " PASS\n";
+}
+
+void testExtrudeThroughAllCutsBox() {
+    std::cout << "Test: Through-all cut removes a full-height column..." << std::flush;
+
+    app::Document doc;
+    // Base 20x20x10 box.
+    const auto [baseSketch, baseRegion] = createSquareSketchRegion(doc, 20.0);
+    const std::string baseBody = newId();
+    app::OperationRecord base;
+    base.opId = newId();
+    base.type = app::OperationType::Extrude;
+    base.input = app::SketchRegionRef{baseSketch, baseRegion};
+    base.params = app::ExtrudeParams{10.0, 0.0, app::ExtrudeMode::Blind, app::BooleanMode::NewBody};
+    base.resultBodyIds.push_back(baseBody);
+    assert(executeAddOperation(doc, base));
+    assert(nearlyEqual(bodyVolume(doc, baseBody), 4000.0, 1.0));
+
+    // 5x5 column cut through the whole box.
+    const auto [cutSketch, cutRegion] = createSquareSketchRegion(doc, 5.0);
+    app::OperationRecord cut;
+    cut.opId = newId();
+    cut.type = app::OperationType::Extrude;
+    cut.input = app::SketchRegionRef{cutSketch, cutRegion};
+    app::ExtrudeParams cutParams;
+    cutParams.distance = 1.0;  // sign -> +direction through-all
+    cutParams.extrudeMode = app::ExtrudeMode::ThroughAll;
+    cutParams.booleanMode = app::BooleanMode::Cut;
+    cutParams.targetBodyId = baseBody;
+    cut.params = cutParams;
+    cut.resultBodyIds.push_back(baseBody);
+    assert(executeAddOperation(doc, cut));
+    // 4000 - (5*5*10) = 3750.
+    assert(nearlyEqual(bodyVolume(doc, baseBody), 3750.0, 1.0));
+
+    std::cout << " PASS\n";
+}
+
+void testExtrudeToFaceStopsAtFace() {
+    std::cout << "Test: To-Face extrude stops at the target face..." << std::flush;
+
+    app::Document doc;
+    // Base 20x20x10 box provides a top face at z = 10.
+    const auto [baseSketch, baseRegion] = createSquareSketchRegion(doc, 20.0);
+    const std::string baseBody = newId();
+    app::OperationRecord base;
+    base.opId = newId();
+    base.type = app::OperationType::Extrude;
+    base.input = app::SketchRegionRef{baseSketch, baseRegion};
+    base.params = app::ExtrudeParams{10.0, 0.0, app::ExtrudeMode::Blind, app::BooleanMode::NewBody};
+    base.resultBodyIds.push_back(baseBody);
+    assert(executeAddOperation(doc, base));
+
+    auto top = findTopPlanarFace(doc, baseBody);
+    assert(top.has_value());
+
+    // 5x5 region on XY (z=0) extruded up to the top face -> height 10 -> volume 250.
+    const auto [sketchId, regionId] = createSquareSketchRegion(doc, 5.0);
+    const std::string newBody = newId();
+    app::OperationRecord op;
+    op.opId = newId();
+    op.type = app::OperationType::Extrude;
+    op.input = app::SketchRegionRef{sketchId, regionId};
+    app::ExtrudeParams params;
+    params.extrudeMode = app::ExtrudeMode::ToFace;
+    params.targetFaceId = top->first;
+    params.booleanMode = app::BooleanMode::NewBody;
+    op.params = params;
+    op.resultBodyIds.push_back(newBody);
+    assert(executeAddOperation(doc, op));
+    assert(nearlyEqual(bodyVolume(doc, newBody), 250.0, 1.0));
+
+    std::cout << " PASS\n";
+}
+
+void testExtrudeToNextRequiresBody() {
+    std::cout << "Test: To-Next without a target body is rejected..." << std::flush;
+
+    app::Document doc;
+    const auto [sketchId, regionId] = createSquareSketchRegion(doc, 10.0);
+    const std::string bodyId = newId();
+
+    app::OperationRecord op;
+    op.opId = newId();
+    op.type = app::OperationType::Extrude;
+    op.input = app::SketchRegionRef{sketchId, regionId};
+    app::ExtrudeParams params;
+    params.extrudeMode = app::ExtrudeMode::ToNext;
+    params.booleanMode = app::BooleanMode::NewBody;  // no target body
+    op.params = params;
+    op.resultBodyIds.push_back(bodyId);
+
+    // Regeneration must fail -> AddOperationCommand rolls back and reports failure.
+    assert(!executeAddOperation(doc, op));
+
+    std::cout << " PASS\n";
+}
+
+void testExtrudeFaceRefRejectedByAddCommand() {
+    std::cout << "Test: Extrude rejects FaceRef input at AddOperationCommand..." << std::flush;
+
+    app::Document doc;
+    const auto [sketchId, regionId] = createSquareSketchRegion(doc, 10.0);
+    const std::string bodyId = newId();
+
+    app::OperationRecord op1;
+    op1.opId = newId();
+    op1.type = app::OperationType::Extrude;
+    op1.input = app::SketchRegionRef{sketchId, regionId};
+    op1.params = app::ExtrudeParams{10.0, 0.0, app::ExtrudeMode::Blind, app::BooleanMode::NewBody};
+    op1.resultBodyIds.push_back(bodyId);
+    assert(executeAddOperation(doc, op1));
+
+    const std::size_t opCountBefore = doc.operations().size();
+
+    // Face/body push-pull is no longer a valid extrude input.
+    app::OperationRecord faceOp;
+    faceOp.opId = newId();
+    faceOp.type = app::OperationType::Extrude;
+    faceOp.input = app::FaceRef{bodyId, bodyId + "/face/anything"};
+    app::ExtrudeParams faceParams;
+    faceParams.distance = 5.0;
+    faceParams.booleanMode = app::BooleanMode::Add;
+    faceParams.targetBodyId = bodyId;
+    faceOp.params = faceParams;
+    faceOp.resultBodyIds.push_back(bodyId);
+
+    assert(!executeAddOperation(doc, faceOp));
+    assert(doc.operations().size() == opCountBefore);
+    assert(doc.findOperation(faceOp.opId) == nullptr);
+
+    std::cout << " PASS\n";
+}
+
 int main(int argc, char* argv[]) {
     QCoreApplication app(argc, argv);
 
@@ -1480,10 +1280,12 @@ int main(int argc, char* argv[]) {
     testSketchHostProjectionVersionRequired();
     testSelectionPriorityPrefersSketchRegion();
     testProjectedReferenceGeometryIsLocked();
-    testFacePushPullChainReplayStable();
-    testCoplanarPatchExtrudeUsesWholeTopArea();
     testAddOperationTransactionalRollbackOnRegenFailure();
-    testFacePatchReplayDeterministic();
+    testExtrudeFaceRefRejectedByAddCommand();
+    testExtrudeTwoDirections();
+    testExtrudeThroughAllCutsBox();
+    testExtrudeToFaceStopsAtFace();
+    testExtrudeToNextRequiresBody();
     testLinearPatternFuseAndCompound();
     testLinearPatternTracksSourceDependency();
     testCircularPatternCompoundAndDependency();
