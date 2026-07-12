@@ -12,6 +12,7 @@
 
 #include <cassert>
 #include <cmath>
+#include <filesystem>
 #include <iostream>
 #include <string>
 
@@ -155,6 +156,85 @@ int main() {
     if (loaded->datumPlaneCount() != 0) {
         std::cerr << "Document::clear() left datum planes behind\n";
         return 1;
+    }
+
+    // ── Atomic save: re-saving a directory package must not resurrect deleted
+    // content (the old in-place save left stale files that load-by-listing read).
+    {
+        const QString pkgPath = QDir::temp().absoluteFilePath(
+            QString("onecad_roundtrip_%1.onecadpkg")
+                .arg(QUuid::createUuid().toString(QUuid::WithoutBraces)));
+        const std::size_t baseCount = source.sketchCount();
+
+        const std::string extraSketchId = buildClosedRegionSketch(source);
+        if (!onecad::io::OneCADFileIO::save(pkgPath, &source).success) {
+            std::cerr << "Directory package save failed\n";
+            return 1;
+        }
+        QString pkgError;
+        auto pkgLoaded = onecad::io::OneCADFileIO::load(pkgPath, pkgError);
+        if (!pkgLoaded || pkgLoaded->sketchCount() != baseCount + 1) {
+            std::cerr << "Directory package roundtrip mismatch before deletion\n";
+            return 1;
+        }
+
+        source.removeSketch(extraSketchId);
+        if (!onecad::io::OneCADFileIO::save(pkgPath, &source).success) {
+            std::cerr << "Directory package re-save failed\n";
+            return 1;
+        }
+        pkgLoaded = onecad::io::OneCADFileIO::load(pkgPath, pkgError);
+        if (!pkgLoaded || pkgLoaded->sketchCount() != baseCount) {
+            std::cerr << "Deleted sketch resurrected on directory package re-save\n";
+            return 1;
+        }
+        std::filesystem::remove_all(std::filesystem::path(pkgPath.toStdString()));
+    }
+
+    // ── Atomic save: a failing save must leave the previously saved file intact
+    // (old behavior truncated the destination before writing anything).
+    {
+        namespace fs = std::filesystem;
+        const QString atomicDir = QDir::temp().absoluteFilePath(
+            QString("onecad_atomic_%1")
+                .arg(QUuid::createUuid().toString(QUuid::WithoutBraces)));
+        QDir().mkpath(atomicDir);
+        const QString docPath = atomicDir + "/doc.onecad";
+
+        if (!onecad::io::OneCADFileIO::save(docPath, &source).success) {
+            std::cerr << "Initial atomic-save baseline failed\n";
+            return 1;
+        }
+        const std::size_t savedSketchCount = source.sketchCount();
+
+        // Make the parent directory unwritable so the next save cannot create
+        // its temp artifact; the original file must survive untouched.
+        const fs::path dirPath(atomicDir.toStdString());
+        fs::permissions(dirPath, fs::perms::owner_read | fs::perms::owner_exec,
+                        fs::perm_options::replace);
+        const auto failedSave = onecad::io::OneCADFileIO::save(docPath, &source);
+        fs::permissions(dirPath, fs::perms::owner_all, fs::perm_options::replace);
+
+        if (failedSave.success) {
+            std::cerr << "Save into a read-only directory unexpectedly succeeded\n";
+            return 1;
+        }
+        QString survivedError;
+        auto survived = onecad::io::OneCADFileIO::load(docPath, survivedError);
+        if (!survived || survived->sketchCount() != savedSketchCount) {
+            std::cerr << "Failed save destroyed the previously saved file\n";
+            return 1;
+        }
+
+        // No temp artifacts may remain next to a successful save.
+        const QStringList leftovers =
+            QDir(atomicDir).entryList(QStringList() << ".*.saving.*" << "*.old.*",
+                                      QDir::AllEntries | QDir::Hidden | QDir::NoDotAndDotDot);
+        if (!leftovers.isEmpty()) {
+            std::cerr << "Atomic save left temp artifacts behind\n";
+            return 1;
+        }
+        fs::remove_all(dirPath);
     }
 
     std::cout << "Document roundtrip compatibility test passed\n";

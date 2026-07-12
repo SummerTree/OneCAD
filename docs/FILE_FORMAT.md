@@ -3045,11 +3045,15 @@ flowchart TD
 
 ### 16.1 Atomic save
 
-* Write into a temporary file/folder next to the target:
+Implemented in `OneCADFileIO::save` (all save paths — manual, save-as, autosave — funnel through it):
 
-  * `model.onecad.tmp`
-* Flush and close.
-* Rename over original.
+* All content is written into a hidden temp sibling of the target:
+  * `.<name>.saving.<pid>` (container format decided from the FINAL path, so `.onecadpkg` stays a directory package).
+* Only after `finalize()` succeeds is the temp swapped into place:
+  * plain file over plain file: one atomic `rename`;
+  * directory packages (or container-type change): `final -> <final>.old.<pid>`, `temp -> final`, then the `.old` copy is removed — previous data is only dropped after the new data is in place, with best-effort rollback on a mid-swap failure.
+* Any earlier failure deletes the temp artifact and leaves the original untouched.
+* Bonus: because every save produces a fresh directory, re-saving a directory package cannot resurrect files deleted from the document (the loader reads by listing).
 
 ### 16.2 Save steps
 

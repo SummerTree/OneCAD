@@ -107,12 +107,26 @@ public:
      * @brief Create new package for writing
      * @param path Path to .onecad file (ZIP) or .onecadpkg directory
      * @return Package instance, or nullptr on error
-     * 
+     *
      * If path ends with ".onecad", creates ZIP package.
      * If path ends with ".onecadpkg" or is a directory, creates directory package.
      */
     static std::unique_ptr<Package> createForWrite(const QString& path);
-    
+
+    /**
+     * @brief Package container format for createForWrite().
+     */
+    enum class Format { Auto, Zip, Directory };
+
+    /**
+     * @brief Create new package for writing with an explicit format.
+     *
+     * Used for atomic saves: the temp file the package writes to carries a
+     * suffix that does not encode the container format, so the caller decides
+     * the format from the FINAL destination path instead.
+     */
+    static std::unique_ptr<Package> createForWrite(const QString& path, Format format);
+
 protected:
     Package() = default;
 };

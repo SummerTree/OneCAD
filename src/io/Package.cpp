@@ -48,4 +48,16 @@ std::unique_ptr<Package> Package::createForWrite(const QString& path) {
     return DirectoryPackage::createWrite(path);
 }
 
+std::unique_ptr<Package> Package::createForWrite(const QString& path, Format format) {
+    switch (format) {
+        case Format::Zip:
+            return ZipPackage::isSupported() ? ZipPackage::createWrite(path) : nullptr;
+        case Format::Directory:
+            return DirectoryPackage::createWrite(path);
+        case Format::Auto:
+            break;
+    }
+    return createForWrite(path);
+}
+
 } // namespace onecad::io

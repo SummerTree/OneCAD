@@ -11,8 +11,11 @@
 #include "HistoryIO.h"
 #include "../app/document/Document.h"
 
+#include <QCoreApplication>
+#include <QFileInfo>
 #include <QJsonDocument>
 #include <QBuffer>
+#include <filesystem>
 #include <optional>
 
 namespace onecad::io {
@@ -47,6 +50,81 @@ std::optional<QJsonObject> readAndValidateManifest(Package* package, QString& er
     return manifestDoc.object();
 }
 
+// Atomic-save plumbing (docs/FILE_FORMAT.md §16): all content goes to a hidden
+// temp sibling of the destination and is swapped in only after finalize()
+// succeeds, so no failure or crash mid-save can destroy the previous file.
+
+Package::Format formatForFinalPath(const QString& finalPath) {
+    if (finalPath.endsWith(".onecadpkg", Qt::CaseInsensitive)) {
+        return Package::Format::Directory;
+    }
+    return Package::Format::Auto;  // ZIP when supported, directory fallback
+}
+
+QString tempSavePath(const QString& finalPath) {
+    const QFileInfo info(finalPath);
+    return info.absolutePath() + "/." + info.fileName() + ".saving." +
+           QString::number(QCoreApplication::applicationPid());
+}
+
+void removeSaveArtifact(const QString& path) {
+    std::error_code ec;
+    std::filesystem::remove_all(std::filesystem::path(path.toStdString()), ec);
+}
+
+bool commitTempToFinal(const QString& tempPath, const QString& finalPath,
+                       QString& errorMessage) {
+    namespace fs = std::filesystem;
+    const fs::path temp(tempPath.toStdString());
+    const fs::path dest(finalPath.toStdString());
+    std::error_code ec;
+
+    const bool tempIsDir = fs::is_directory(temp, ec);
+    const bool destExists = fs::exists(dest, ec);
+    const bool destIsDir = destExists && fs::is_directory(dest, ec);
+
+    // Plain file over plain file (or nothing): a single atomic rename.
+    if (!tempIsDir && !destIsDir) {
+        fs::rename(temp, dest, ec);
+        if (ec) {
+            errorMessage = QString("Failed to move saved file into place: %1")
+                               .arg(QString::fromStdString(ec.message()));
+            removeSaveArtifact(tempPath);
+            return false;
+        }
+        return true;
+    }
+
+    // Directory package (or container-type change): two-rename swap with rollback.
+    // The previous data is only removed after the new data is in place.
+    fs::path oldPath = dest;
+    oldPath += ".old." + std::to_string(QCoreApplication::applicationPid());
+    if (destExists) {
+        fs::rename(dest, oldPath, ec);
+        if (ec) {
+            errorMessage = QString("Failed to stage previous file for replacement: %1")
+                               .arg(QString::fromStdString(ec.message()));
+            removeSaveArtifact(tempPath);
+            return false;
+        }
+    }
+    fs::rename(temp, dest, ec);
+    if (ec) {
+        if (destExists) {
+            std::error_code rollback;
+            fs::rename(oldPath, dest, rollback);  // best-effort restore
+        }
+        errorMessage = QString("Failed to move saved file into place: %1")
+                           .arg(QString::fromStdString(ec.message()));
+        removeSaveArtifact(tempPath);
+        return false;
+    }
+    if (destExists) {
+        fs::remove_all(oldPath, ec);
+    }
+    return true;
+}
+
 } // namespace
 
 FileIOResult OneCADFileIO::save(const QString& filepath,
@@ -55,12 +133,21 @@ FileIOResult OneCADFileIO::save(const QString& filepath,
     FileIOResult result;
     result.filepath = filepath;
 
-    // 1. Create package for writing
-    auto package = Package::createForWrite(filepath);
+    // 1. Create package for writing — against a TEMP path, so the destination is
+    // never truncated before the new content is complete (atomic save).
+    const QString tempPath = tempSavePath(filepath);
+    removeSaveArtifact(tempPath);  // stale leftover from a crashed save
+    auto package = Package::createForWrite(tempPath, formatForFinalPath(filepath));
     if (!package) {
         result.errorMessage = QString("Failed to create file: %1").arg(filepath);
         return result;
     }
+    const auto fail = [&](const QString& message) {
+        result.errorMessage = message;
+        package.reset();  // release handles before deleting the temp artifact
+        removeSaveArtifact(tempPath);
+        return result;
+    };
 
     // 2. Compute operations hash for manifest
     QString opsHash = HistoryIO::computeOpsHash(document->operations());
@@ -68,14 +155,12 @@ FileIOResult OneCADFileIO::save(const QString& filepath,
     // 3. Write manifest.json first
     QJsonObject manifest = ManifestIO::createManifest(document, opsHash);
     if (!package->writeFile("manifest.json", JSONUtils::toCanonicalJson(manifest))) {
-        result.errorMessage = "Failed to write manifest.json";
-        return result;
+        return fail("Failed to write manifest.json");
     }
 
     // 4. Save all document components
     if (!DocumentIO::saveDocument(package.get(), document)) {
-        result.errorMessage = "Failed to save document contents: " + package->errorString();
-        return result;
+        return fail("Failed to save document contents: " + package->errorString());
     }
 
     // 5. Write thumbnail if provided
@@ -94,7 +179,14 @@ FileIOResult OneCADFileIO::save(const QString& filepath,
 
     // 6. Finalize package
     if (!package->finalize()) {
-        result.errorMessage = "Failed to finalize file: " + package->errorString();
+        return fail("Failed to finalize file: " + package->errorString());
+    }
+    package.reset();  // close all handles before the swap
+
+    // 7. Swap the finished temp artifact into place.
+    QString commitError;
+    if (!commitTempToFinal(tempPath, filepath, commitError)) {
+        result.errorMessage = commitError;
         return result;
     }
 
