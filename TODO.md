@@ -95,14 +95,7 @@
 - [x] PlatformPaths utility (QStandardPaths-based cross-platform paths)
 - [x] Linux apt deps in Makefile (apt-get install for Qt6/OCCT/Eigen3/GL)
 
-## Active: MVP Stabilization Commit Slices
-
-- [ ] Slice 1: Kernel target + moved topology/modeling helpers
-- [ ] Slice 2: Document/regeneration/tessellation rollback safety
-- [ ] Slice 3: Selection/topology promotion + viewport picking regressions
-- [ ] Slice 4: Beginner MVP UI gating + Sketch→Extrude→Edit stabilization
-
-## Active: Sketch-Only Extrude + Parametric Core Hardening
+## ✅ Landed: Sketch-Only Extrude + Parametric Core Hardening
 
 Plan: `~/.claude/plans/act-as-senior-c-hashed-shell.md`
 
@@ -122,7 +115,7 @@ Gate every phase: `proto_regeneration`, `proto_elementmap_rigorous`, `proto_face
 
 Follow-ups (non-blocking): datum planes in 3D plane-picker overlay; curved-surface sketch/up-to-surface; ElementMap snapshot in preview backup/restore; EditParameterDialog boolean-mode + re-profile buttons + previewFrom rewire.
 
-## Active: UI Design Refinement (Phases A–D)
+## ✅ Landed: UI Design Refinement (Phases A–D)
 
 Plan: `~/.claude/plans/act-as-senior-c-whimsical-toucan.md`. Refines existing UI infra (no rebuilds). Adopt accent cyan #2E9BDA; full design-token extraction.
 
@@ -133,5 +126,21 @@ Plan: `~/.claude/plans/act-as-senior-c-whimsical-toucan.md`. Refines existing UI
 
 Gate: `test_compile`, full app build, headless smoke; `proto_elementmap_rigorous` + `proto_regeneration` before commit.
 
-✅ **ALL PHASES A–D COMPLETE & VERIFIED** — full app builds+links; headless smoke exit 0 (SF Pro applied, no malformed-QSS); 29/29 ctest green. Caught+fixed: `Qt::UniqueConnection` is illegal with lambdas (ToggleSwitch/CommandPalette → switched to PMF). Not committed (per instruction).
+✅ **ALL PHASES A–D COMPLETE & VERIFIED** — full app builds+links; headless smoke exit 0 (SF Pro applied, no malformed-QSS); 29/29 ctest green. Caught+fixed: `Qt::UniqueConnection` is illegal with lambdas (ToggleSwitch/CommandPalette → switched to PMF).
 Manual visual checks remaining for user: theme toggle (cyan accent everywhere, contrast), ⌘K shortcuts/badges, modal primary/ghost buttons, Inspector on body/op select, sketch panels no click-through, Fit/Home buttons, start-screen search/sort/import.
+
+**Both workstreams landed on master as 8 sliced commits** (da6f782..6c2dc20): .gitignore, assert-liveness (-UNDEBUG), extrude end-modes + FaceRef severance, datum plane (+ `Document::clear()` datum-leak fix), parametric robustness, UI 5a theme/5b palette+start/5c panels+MainWindow (+ merge-artifact repair at the history-collapse handler).
+
+## Active: Hardening Roadmap → Daily-Driver CAD
+
+Plan: `~/.claude/plans/act-as-senior-c-floating-fountain.md` (full findings + decisions + phase detail). Phase 0 (validate/slice/land WIP diff) ✅ done.
+
+- [ ] **H1** Crash + data-loss criticals, CI truth: buildRevolve/checkedBooleanResult/executeOperation OCCT exception boundaries; temporal-guard parity (revolve/boolean/patterns/mirror); closeEvent + Quit → maybeSave; atomic save (temp+rename at OneCADFileIO::save); AutosaveManager QPointer UAF fix; CI Boost dep + Linux ASan/UBSan lane + register 3 orphaned viewport protos; new tests (revolve-crash, temporal, proto_document_lifecycle, atomic-save).
+- [ ] **H2** Lifecycle/undo coherence + dead-code purge: delete KernelScheduler + shadow harness; busy feedback (commandStarted/Finished → wait cursor); UpdateSketchAttachmentCommand rollback-on-failure; AddSketchCommand + datum+sketch transaction; delete empty-lambda Edit actions / MeasureTool / appearance stub / dead G-handler / exploratory comments; ThemeUiColors::textSecondary.
+- [ ] **H3** Persistence: corrupt .brep guard; legacy FaceRef suppress-on-load + message; wire MigrationRegistry + FORMAT_VERSION 1.1.0; compat tests.
+- [ ] **H4** Kernel math: reversed-face normals; vertex double-transform; detectMode probe classification; ThroughAll bbox extent; DOF via PlaneGCS diagnose(); delete previewFrom/backup API + solveAsync + calculateDOF; hide ellipse creation; datum recompute in regen epilogue.
+- [ ] **H5** ElementMap hardening: rebindBody identity pre-pass + type hard-skip + translation compensation + reject threshold; resolveWithFallback 5.0→1.0 + uniqueness margin; generalize update() to BRepBuilderAPI_MakeShape + lastHistory_ threading (booleans of two persistent bodies stay rebind-only). proto_elementmap_rigorous before EVERY commit.
+- [ ] **H6** Sketch undo: command-per-gesture via generalized SketchDragGestureCommand; 3 capture choke points; cancel restores; 200-entry cap.
+- [ ] **H7** Edit-dialog coverage (Fillet/Chamfer/Shell/Boolean/CircularPattern/MirrorBody/Loft); twoDirections UI; ToFace one-shot picker; re-profile button; suppress-and-apply failure recovery; tools deactivate after commit.
+- [ ] **H8** Action architecture: MainWindowActions + ActionRegistry convergence; Edit>Delete/Select All wired; Move-Sketch button; LinearPattern entry; CircularPattern/MirrorBody ModalOverlay forms.
+- [ ] **H9** Datum minimal UI (ModalOverlay + navigator + quad render); DocumentSession extraction (buffer); docs truth-up (FILE_FORMAT §16, CLAUDE.md, AGENTS.md, README); final dead-code sweep; manual daily-driver acceptance script.
