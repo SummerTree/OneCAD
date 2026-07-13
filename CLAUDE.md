@@ -31,7 +31,7 @@ src/
 ├── app/
 │   ├── commands/      # Command pattern (undo/redo via CommandProcessor)
 │   ├── document/      # Document model: sketches, bodies, operations, ElementMap
-│   ├── history/       # DependencyGraph, RegenerationEngine, KernelScheduler
+│   ├── history/       # DependencyGraph, RegenerationEngine
 │   └── selection/     # SelectionManager (sketch/model modes, deep select)
 ├── core/
 │   ├── sketch/        # Entities, tools, solver, constraints, SnapManager, AutoConstrainer
@@ -56,7 +56,7 @@ tests/                 # ~31 standalone prototype executables for regression tes
 - `OperationRecord`: opId, type (Extrude/Revolve/Fillet/Chamfer/Shell/Boolean/LinearPattern/CircularPattern/Loft/Sweep/MirrorBody — see `OperationType` in `OperationRecord.h`), input (`std::variant`: SketchRegionRef/FaceRef/BodyRef), params (`std::variant` of typed params), resultBodyIds. Sidecar `OperationMetadata.h`/`OperationValidation.h` hold display metadata + input validation; `DatumPlane.h` defines datum plane geometry
 - `DependencyGraph`: forward/backward adjacency, Kahn's topological sort, suppression propagation, failure tracking
 - `RegenerationEngine`: replays operations in topo-sorted order → produces bodies. Supports `regenerateAll()`, `regenerateFrom(opId)`, `previewFrom(opId, newParams)`
-- `KernelScheduler`: single-writer background thread for non-blocking regeneration
+- Regeneration is synchronous on the UI thread with busy feedback (wait cursor + status). No background regen: the former KernelScheduler was deleted — reintroducing async requires document snapshotting, a thread-safe SceneMeshStore, and a TSan CI lane (see TODO.md)
 
 **Command System** (`src/app/commands/`):
 

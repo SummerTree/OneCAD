@@ -23,7 +23,6 @@ add_library(onecad_app STATIC
     commands/RollbackCommand.cpp
     document/Document.cpp
     history/DependencyGraph.cpp
-    history/KernelScheduler.cpp
     history/RegenerationEngine.cpp
     selection/SelectionManager.cpp
 )

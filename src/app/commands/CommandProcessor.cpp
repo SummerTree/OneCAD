@@ -56,7 +56,10 @@ bool CommandProcessor::execute(std::unique_ptr<Command> command) {
         return false;
     }
 
-    if (!command->execute()) {
+    emit commandStarted(QString::fromStdString(command->label()));
+    const bool executed = command->execute();
+    emit commandFinished();
+    if (!executed) {
         if (inTransaction_) {
             cancelTransaction();
         }
@@ -88,10 +91,15 @@ void CommandProcessor::undo() {
     std::unique_ptr<Command> command = std::move(undoStack_.back());
     undoStack_.pop_back();
 
-    if (command && command->undo()) {
-        redoStack_.push_back(std::move(command));
-    } else if (command) {
-        undoStack_.push_back(std::move(command));
+    if (command) {
+        emit commandStarted(QString::fromStdString(command->label()));
+        const bool undone = command->undo();
+        emit commandFinished();
+        if (undone) {
+            redoStack_.push_back(std::move(command));
+        } else {
+            undoStack_.push_back(std::move(command));
+        }
     }
 
     emitStateChange(prevUndo, prevRedo);
@@ -108,10 +116,15 @@ void CommandProcessor::redo() {
     std::unique_ptr<Command> command = std::move(redoStack_.back());
     redoStack_.pop_back();
 
-    if (command && command->execute()) {
-        undoStack_.push_back(std::move(command));
-    } else if (command) {
-        redoStack_.push_back(std::move(command));
+    if (command) {
+        emit commandStarted(QString::fromStdString(command->label()));
+        const bool redone = command->execute();
+        emit commandFinished();
+        if (redone) {
+            undoStack_.push_back(std::move(command));
+        } else {
+            redoStack_.push_back(std::move(command));
+        }
     }
 
     emitStateChange(prevUndo, prevRedo);

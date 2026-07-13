@@ -8,6 +8,7 @@
 #include "Command.h"
 
 #include <QObject>
+#include <QString>
 #include <memory>
 #include <string>
 #include <vector>
@@ -36,6 +37,11 @@ public:
 signals:
     void canUndoChanged(bool canUndo);
     void canRedoChanged(bool canRedo);
+    // Busy feedback: emitted synchronously around execute/undo/redo so the UI
+    // can show a wait cursor during long regenerations (regen runs on the UI
+    // thread). Always emitted in pairs, including on failure.
+    void commandStarted(const QString& label);
+    void commandFinished();
 
 private:
     void emitStateChange(bool prevUndo, bool prevRedo);

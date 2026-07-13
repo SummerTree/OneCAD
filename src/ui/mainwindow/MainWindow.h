@@ -182,6 +182,7 @@ private:
     // Document model (owns all sketches)
     std::unique_ptr<app::Document> m_document;
     std::unique_ptr<app::commands::CommandProcessor> m_commandProcessor;
+    int m_busyDepth = 0;  // commandStarted/commandFinished nesting for wait cursor
     app::AutosaveManager* m_autosaveManager = nullptr;
     std::vector<QMetaObject::Connection> m_documentConnections;
 
