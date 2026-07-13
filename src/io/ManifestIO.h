@@ -19,7 +19,9 @@ namespace onecad::io {
  */
 struct ManifestConstants {
     static constexpr const char* MAGIC = "ONECAD";
-    static constexpr const char* FORMAT_VERSION = "1.0.0";
+    // 1.1.0: extrude two-direction params + datum planes (additive; 1.0.0
+    // files migrate via MigrationRegistry).
+    static constexpr const char* FORMAT_VERSION = "1.1.0";
     static constexpr const char* SCHEMA_VERSION = "1.0.0";
 };
 

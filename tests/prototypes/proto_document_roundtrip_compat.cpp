@@ -4,10 +4,13 @@
 #include "core/loop/LoopDetector.h"
 #include "core/loop/RegionUtils.h"
 #include "core/sketch/Sketch.h"
+#include "io/HistoryIO.h"
 #include "io/OneCADFileIO.h"
 
 #include <QDir>
 #include <QFile>
+#include <QJsonDocument>
+#include <QJsonObject>
 #include <QUuid>
 
 #include <cassert>
@@ -235,6 +238,111 @@ int main() {
             return 1;
         }
         fs::remove_all(dirPath);
+    }
+
+    // ── Persistence hardening: version gate, legacy FaceRef, corrupt .brep ──
+    {
+        namespace fs = std::filesystem;
+        const QString pkgPath = QDir::temp().absoluteFilePath(
+            QString("onecad_compat_%1.onecadpkg")
+                .arg(QUuid::createUuid().toString(QUuid::WithoutBraces)));
+        if (!onecad::io::OneCADFileIO::save(pkgPath, &source).success) {
+            std::cerr << "Compat package save failed\n";
+            return 1;
+        }
+
+        // A fresh save must carry the current format version.
+        const auto readManifestVersion = [&]() -> QString {
+            QFile manifest(pkgPath + "/manifest.json");
+            manifest.open(QIODevice::ReadOnly);
+            return QJsonDocument::fromJson(manifest.readAll())
+                .object()["formatVersion"].toString();
+        };
+        const auto writeManifestVersion = [&](const QString& version) {
+            QFile manifest(pkgPath + "/manifest.json");
+            manifest.open(QIODevice::ReadOnly);
+            QJsonObject obj = QJsonDocument::fromJson(manifest.readAll()).object();
+            manifest.close();
+            obj["formatVersion"] = version;
+            manifest.open(QIODevice::WriteOnly | QIODevice::Truncate);
+            manifest.write(QJsonDocument(obj).toJson());
+        };
+        if (readManifestVersion() != "1.1.0") {
+            std::cerr << "Saved manifest does not read formatVersion 1.1.0\n";
+            return 1;
+        }
+
+        // Inject a legacy FaceRef extrude line + downgrade the manifest to
+        // 1.0.0: the file must load through the migration chain with the
+        // legacy op suppressed and a user-facing failure reason recorded.
+        onecad::app::OperationRecord legacyOp;
+        legacyOp.opId = "legacy-faceref-op";
+        legacyOp.type = onecad::app::OperationType::Extrude;
+        legacyOp.input = onecad::app::FaceRef{bodyId, bodyId + "/face/legacy"};
+        onecad::app::ExtrudeParams legacyParams;
+        legacyParams.distance = 3.0;
+        legacyParams.booleanMode = onecad::app::BooleanMode::Add;
+        legacyParams.targetBodyId = bodyId;
+        legacyOp.params = legacyParams;
+        legacyOp.resultBodyIds.push_back(bodyId);
+        const QByteArray legacyLine =
+            QJsonDocument(onecad::io::HistoryIO::serializeOperation(legacyOp, nullptr))
+                .toJson(QJsonDocument::Compact) + "\n";
+        {
+            QFile ops(pkgPath + "/history/ops.jsonl");
+            ops.open(QIODevice::Append);
+            ops.write(legacyLine);
+        }
+        writeManifestVersion("1.0.0");
+        QString compatError;
+        auto legacyLoaded = onecad::io::OneCADFileIO::load(pkgPath, compatError);
+        if (!legacyLoaded) {
+            std::cerr << "1.0.0 file with legacy FaceRef failed to load: "
+                      << compatError.toStdString() << "\n";
+            return 1;
+        }
+        if (!legacyLoaded->findOperation("legacy-faceref-op") ||
+            !legacyLoaded->isOperationSuppressed("legacy-faceref-op") ||
+            legacyLoaded->operationFailureReason("legacy-faceref-op").empty()) {
+            std::cerr << "Legacy FaceRef extrude was not suppressed with a message\n";
+            return 1;
+        }
+        if (legacyLoaded->operations().size() != source.operations().size() + 1) {
+            std::cerr << "Legacy load lost non-legacy operations\n";
+            return 1;
+        }
+
+        // A file version with no migration path (newer OneCAD) must refuse cleanly.
+        writeManifestVersion("1.9.9");
+        QString futureError;
+        if (onecad::io::OneCADFileIO::load(pkgPath, futureError) || futureError.isEmpty()) {
+            std::cerr << "Future-version file did not refuse with a message\n";
+            return 1;
+        }
+        writeManifestVersion("1.1.0");
+
+        // Truncate every .brep to half length: the open must survive (bad
+        // bodies degrade to load warnings / history rebuild), never crash.
+        const QStringList breps = QDir(pkgPath + "/bodies")
+                                      .entryList(QStringList() << "*.brep", QDir::Files);
+        for (const QString& b : breps) {
+            QFile f(pkgPath + "/bodies/" + b);
+            f.open(QIODevice::ReadOnly);
+            QByteArray data = f.readAll();
+            f.close();
+            data.truncate(data.size() / 2);
+            f.open(QIODevice::WriteOnly | QIODevice::Truncate);
+            f.write(data);
+        }
+        QString truncError;
+        auto truncLoaded = onecad::io::OneCADFileIO::load(pkgPath, truncError);
+        if (!truncLoaded) {
+            std::cerr << "Truncated-brep package failed to open gracefully: "
+                      << truncError.toStdString() << "\n";
+            return 1;
+        }
+
+        fs::remove_all(fs::path(pkgPath.toStdString()));
     }
 
     std::cout << "Document roundtrip compatibility test passed\n";

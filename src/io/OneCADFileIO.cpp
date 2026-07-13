@@ -7,6 +7,7 @@
 #include "Package.h"
 #include "JSONUtils.h"
 #include "ManifestIO.h"
+#include "MigrationRegistry.h"
 #include "DocumentIO.h"
 #include "HistoryIO.h"
 #include "../app/document/Document.h"
@@ -205,10 +206,25 @@ std::unique_ptr<app::Document> OneCADFileIO::load(const QString& filepath,
     }
     
     // 2. Read and validate manifest
-    if (!readAndValidateManifest(package.get(), errorMessage)) {
+    auto manifestOpt = readAndValidateManifest(package.get(), errorMessage);
+    if (!manifestOpt) {
         return nullptr;
     }
-    
+
+    // 2b. Version gate: run the migration chain for older files; refuse when no
+    // path exists (including files written by a NEWER OneCAD).
+    const QString fileVersion = ManifestIO::getFormatVersion(*manifestOpt);
+    auto& migrations = MigrationRegistry::instance();
+    if (migrations.needsMigration(fileVersion)) {
+        QJsonObject manifest = *manifestOpt;
+        if (!migrations.migrate(fileVersion, manifest)) {
+            errorMessage = QString("Cannot open file version %1 (this build reads %2 "
+                                   "and has no migration path)")
+                               .arg(fileVersion, migrations.currentVersion());
+            return nullptr;
+        }
+    }
+
     // 3. Load document
     return DocumentIO::loadDocument(package.get(), parent, errorMessage);
 }

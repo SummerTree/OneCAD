@@ -20,6 +20,8 @@
 #include <QFileInfo>
 #include <BRepTools.hxx>
 #include <BRep_Builder.hxx>
+#include <Standard_ErrorHandler.hxx>
+#include <Standard_Failure.hxx>
 #include <Standard_Stream.hxx>
 #include <sstream>
 #include <unordered_map>
@@ -169,6 +171,22 @@ std::unique_ptr<app::Document> DocumentIO::loadDocument(Package* package,
     QString historyError;
     HistoryIO::loadHistory(package, document.get(), historyError);
 
+    // 4a. Legacy compatibility: face/push-pull extrudes (FaceRef input) were
+    // removed — the op still parses but would hard-fail regeneration. Suppress
+    // it now (preserves dependency links; regeneration skips it); the
+    // user-facing failure message is recorded AFTER the load-time regeneration,
+    // which clears operation failures.
+    std::vector<std::string> legacyFaceRefOps;
+    for (const auto& op : document->operations()) {
+        if (op.type == app::OperationType::Extrude &&
+            std::holds_alternative<app::FaceRef>(op.input)) {
+            document->setOperationSuppressed(op.opId, true);
+            legacyFaceRefOps.push_back(op.opId);
+            qWarning() << "Suppressed legacy FaceRef extrude on load:"
+                       << QString::fromStdString(op.opId);
+        }
+    }
+
     // 4b. Load ElementMap for stable topology references (if present)
     QString elementMapError;
     ElementMapIO::loadElementMap(package, document->elementMap(), elementMapError);
@@ -222,7 +240,22 @@ std::unique_ptr<app::Document> DocumentIO::loadDocument(Package* package,
         BRep_Builder builder;
         std::string brepString(brepData.constData(), brepData.size());
         std::istringstream stream(brepString);
-        BRepTools::Read(shape, stream, builder);
+        // Corrupt/truncated .brep raises OCCT exceptions from BRepTools::Read;
+        // a bad body must degrade to a load warning, never crash the open.
+        try {
+            OCC_CATCH_SIGNALS
+            BRepTools::Read(shape, stream, builder);
+        } catch (const Standard_Failure& failure) {
+            qWarning() << "Corrupt BREP for body:" << QString::fromStdString(bodyId)
+                       << (failure.GetMessageString() ? failure.GetMessageString() : "OCCT failure");
+            return false;
+        } catch (const std::exception& ex) {
+            qWarning() << "Corrupt BREP for body:" << QString::fromStdString(bodyId) << ex.what();
+            return false;
+        } catch (...) {
+            qWarning() << "Corrupt BREP for body:" << QString::fromStdString(bodyId);
+            return false;
+        }
         if (stream.fail() || shape.IsNull()) {
             qWarning() << "Failed to read BREP for body:" << QString::fromStdString(bodyId);
             return false;
@@ -295,6 +328,15 @@ std::unique_ptr<app::Document> DocumentIO::loadDocument(Package* package,
                 qWarning() << "  " << QString::fromStdString(f.opId)
                            << ":" << QString::fromStdString(f.errorMessage);
             }
+        }
+
+        // Surface the legacy FaceRef suppression through the regen-failure UI
+        // (recorded post-regeneration; regeneration clears operation failures).
+        for (const auto& opId : legacyFaceRefOps) {
+            document->setOperationFailed(
+                opId,
+                "Legacy face extrude (push/pull) is no longer supported; "
+                "recreate it as a sketch-on-face extrude");
         }
 
         // Apply metadata for regenerated bodies (including base bodies)

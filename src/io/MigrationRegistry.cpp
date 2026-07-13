@@ -4,7 +4,13 @@
 namespace onecad::io {
 
 MigrationRegistry& MigrationRegistry::instance() {
-    static MigrationRegistry registry;
+    static MigrationRegistry registry = [] {
+        MigrationRegistry r;
+        // 1.0.0 -> 1.1.0: additive-only change (extrude two-direction params,
+        // datumPlanes array); the manifest itself needs no transformation.
+        r.registerMigration("1.0.0", "1.1.0", [](QJsonObject&) { return true; });
+        return r;
+    }();
     return registry;
 }
 
