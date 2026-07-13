@@ -256,6 +256,84 @@ void testResolveWithFallbackRematchesAndRejects(TestContext& ctx) {
     ctx.expect(rejected.IsNull(), "Fallback rejects when no same-kind candidate exists");
 }
 
+void testRebindTranslationKeepsIds(TestContext& ctx) {
+    // A pure rigid translation of the whole body must keep every ID: the
+    // rebind compensates stale descriptors by the body-center delta.
+    ElementMap emap;
+    const std::string bodyId = "body-move";
+
+    const TopoDS_Shape box = BRepPrimAPI_MakeBox(10.0, 10.0, 10.0).Shape();
+    emap.rebindBody(bodyId, box, "op-base");
+    const std::size_t idsBefore = emap.ids().size();
+
+    const TopoDS_Shape movedBox =
+        BRepPrimAPI_MakeBox(gp_Pnt(100.0, 0.0, 0.0), gp_Pnt(110.0, 10.0, 10.0)).Shape();
+    emap.rebindBody(bodyId, movedBox, "op-move");
+
+    ctx.expect(emap.ids().size() == idsBefore,
+               "Translation rebind creates no new generated children");
+    for (const auto& id : emap.ids()) {
+        const auto* entry = emap.find(id);
+        ctx.expect(entry != nullptr && !entry->shape.IsNull(),
+                   "Translation rebind keeps every ID bound: " + id.value);
+    }
+}
+
+void testRebindRejectsFarMatches(TestContext& ctx) {
+    // When an entry's geometry is gone and every candidate is far away, the
+    // entry must LOSE its shape (explicit downstream failure), not silently
+    // migrate onto unrelated geometry.
+    ElementMap emap;
+    const std::string bodyId = "body-reject";
+
+    const TopoDS_Shape box = BRepPrimAPI_MakeBox(10.0, 10.0, 10.0).Shape();
+    emap.rebindBody(bodyId, box, "op-base");
+
+    // Register an extra face entry whose descriptor sits far outside any
+    // face of the replacement body (same surface type, ~60mm away).
+    const TopoDS_Shape farBox =
+        BRepPrimAPI_MakeBox(gp_Pnt(60.0, 60.0, 60.0), gp_Pnt(70.0, 70.0, 70.0)).Shape();
+    const TopoDS_Face farFace = findTopFace(farBox);
+    const ElementId farId{bodyId + "/face-far"};
+    emap.registerElement(farId, ElementKind::Face, farFace, "op-far");
+
+    // Rebind to the original box again: nothing matches the far entry within
+    // max(1mm, 0.5 x bbox diagonal ~ 8.7mm).
+    emap.rebindBody(bodyId, box, "op-rebind");
+    const auto* farEntry = emap.find(farId);
+    ctx.expect(farEntry != nullptr, "Far entry survives as an entry");
+    ctx.expect(farEntry != nullptr && farEntry->shape.IsNull(),
+               "Far entry loses its shape instead of migrating to a wrong face");
+}
+
+void testFallbackRefusesSymmetricTwins(TestContext& ctx) {
+    // Two equidistant same-kind candidates: a re-match would be a coin flip,
+    // so resolveWithFallback must refuse (uniqueness margin).
+    ElementMap emap;
+    const std::string owner = "twin";
+
+    const TopoDS_Shape leftBox =
+        BRepPrimAPI_MakeBox(gp_Pnt(-20.0, 0.0, 0.0), gp_Pnt(-10.0, 10.0, 10.0)).Shape();
+    const TopoDS_Shape rightBox =
+        BRepPrimAPI_MakeBox(gp_Pnt(10.0, 0.0, 0.0), gp_Pnt(20.0, 10.0, 10.0)).Shape();
+    emap.registerElement(ElementId{owner + "/face-left"}, ElementKind::Face,
+                         findTopFace(leftBox), "op");
+    emap.registerElement(ElementId{owner + "/face-right"}, ElementKind::Face,
+                         findTopFace(rightBox), "op");
+
+    // Stale entry exactly between the twins (top face of a centered box).
+    const TopoDS_Shape centerBox =
+        BRepPrimAPI_MakeBox(gp_Pnt(-5.0, 0.0, 0.0), gp_Pnt(5.0, 10.0, 10.0)).Shape();
+    const ElementId staleId{owner + "/face-center"};
+    emap.registerElement(staleId, ElementKind::Face, findTopFace(centerBox), "op");
+    emap.clearShape(staleId);
+
+    double score = 0.0;
+    const TopoDS_Shape rematched = emap.resolveWithFallback(staleId, 100.0, score);
+    ctx.expect(rematched.IsNull(),
+               "Fallback refuses equidistant symmetric candidates");
+}
+
 } // namespace
 
 int main() {
@@ -268,6 +346,9 @@ int main() {
     testSerializationRoundTrip(ctx);
     testReverseMapMultiId(ctx);
     testResolveWithFallbackRematchesAndRejects(ctx);
+    testRebindTranslationKeepsIds(ctx);
+    testRebindRejectsFarMatches(ctx);
+    testFallbackRefusesSymmetricTwins(ctx);
 
     if (ctx.failures > 0) {
         std::cerr << "Tests failed: " << ctx.failures << std::endl;

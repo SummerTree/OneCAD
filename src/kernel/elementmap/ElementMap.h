@@ -229,7 +229,8 @@ inline TopoDS_Shape ElementMap::resolveWithFallback(const ElementId& id, double 
     const std::string owner = ownerOf(id.value);
 
     const Entry* best = nullptr;
-    double bestScore = maxScore;
+    double bestScore = std::numeric_limits<double>::max();
+    double secondBestScore = std::numeric_limits<double>::max();
     for (const auto& [key, cand] : entries_) {
         if (cand.kind != stale.kind || cand.shape.IsNull()) {
             continue;
@@ -242,15 +243,24 @@ inline TopoDS_Shape ElementMap::resolveWithFallback(const ElementId& id, double 
         }
         const double candidateScore = score(stale.descriptor, cand.descriptor);
         if (candidateScore < bestScore) {
+            secondBestScore = bestScore;
             bestScore = candidateScore;
             best = &cand;
+        } else if (candidateScore < secondBestScore) {
+            secondBestScore = candidateScore;
         }
     }
-    if (best) {
-        scoreOut = bestScore;
-        return best->shape;
+    if (!best || bestScore > maxScore) {
+        return TopoDS_Shape();
     }
-    return TopoDS_Shape();
+    // Uniqueness margin: with two near-equidistant candidates (symmetric
+    // twins) a re-match is a coin flip — refuse rather than guess.
+    if (secondBestScore != std::numeric_limits<double>::max() &&
+        secondBestScore - bestScore < std::max(0.5, bestScore)) {
+        return TopoDS_Shape();
+    }
+    scoreOut = bestScore;
+    return best->shape;
 }
 
 inline std::vector<ElementId> ElementMap::ids() const {
@@ -315,7 +325,23 @@ inline void ElementMap::rebindBody(const std::string& bodyId, const TopoDS_Shape
         return;
     }
 
+    // Rigid-translation compensation: when the whole body moved (its bbox
+    // center shifted), stale descriptors are compared as if translated by the
+    // same delta, so a pure move keeps every ID without inflating scores.
+    // Capture the OLD body center before attachShape() recomputes it.
+    gp_Vec bodyCenterDelta(0.0, 0.0, 0.0);
+    const ElementDescriptor newBodyDescriptor = computeDescriptor(shape);
     ElementId bodyElem = ElementId::From(bodyId);
+    if (const Entry* bodyEntry = find(bodyElem)) {
+        if (bodyEntry->descriptor.shapeType != TopAbs_SHAPE) {
+            bodyCenterDelta = gp_Vec(bodyEntry->descriptor.center, newBodyDescriptor.center);
+        }
+    }
+    // Accept a rebind only when it is geometrically close: beyond this the
+    // "match" would silently land on unrelated geometry — losing the shape
+    // (explicit downstream failure) beats resolving to the wrong face.
+    const double maxAcceptScore = std::max(1.0, 0.5 * newBodyDescriptor.size);
+
     if (contains(bodyElem)) {
         attachShape(bodyElem, shape, opId);
     } else {
@@ -373,21 +399,56 @@ inline void ElementMap::rebindBody(const std::string& bodyId, const TopoDS_Shape
         auto entries = collectEntries(kind);
         auto candidates = collectCandidates(shapeKind);
 
+        // Identity pre-pass: an entry whose stored shape survives IsSame() in
+        // the new body keeps it outright. This makes exact assignments (e.g.
+        // from OCCT-history update()) sticky — the greedy scoring pass below
+        // can no longer steal them in entry-id order.
+        std::vector<Entry*> unresolved;
+        unresolved.reserve(entries.size());
         for (auto* entry : entries) {
+            bool identity = false;
+            if (!entry->shape.IsNull()) {
+                for (auto& candidate : candidates) {
+                    if (!candidate.assigned && candidate.shape.IsSame(entry->shape)) {
+                        attachShape(entry->id, candidate.shape, opId);
+                        candidate.assigned = true;
+                        identity = true;
+                        break;
+                    }
+                }
+            }
+            if (!identity) {
+                unresolved.push_back(entry);
+            }
+        }
+
+        for (auto* entry : unresolved) {
+            // Compare as if the stale descriptor moved with the body.
+            ElementDescriptor shifted = entry->descriptor;
+            shifted.center.Translate(bodyCenterDelta);
+
             double bestScore = std::numeric_limits<double>::max();
             int bestIndex = -1;
             for (std::size_t i = 0; i < candidates.size(); ++i) {
                 if (candidates[i].assigned) {
                     continue;
                 }
-                double currentScore = score(entry->descriptor, candidates[i].descriptor);
+                // Hard-skip cross-type candidates: the soft score penalties
+                // allowed a face id to silently migrate onto a face of a
+                // different surface type (or edge curve type) when the real
+                // geometry disappeared.
+                if (candidates[i].descriptor.surfaceType != shifted.surfaceType ||
+                    candidates[i].descriptor.curveType != shifted.curveType) {
+                    continue;
+                }
+                double currentScore = score(shifted, candidates[i].descriptor);
                 if (currentScore < bestScore) {
                     bestScore = currentScore;
                     bestIndex = static_cast<int>(i);
                 }
             }
 
-            if (bestIndex >= 0) {
+            if (bestIndex >= 0 && bestScore <= maxAcceptScore) {
                 attachShape(entry->id, candidates[bestIndex].shape, opId);
                 candidates[bestIndex].assigned = true;
             } else {

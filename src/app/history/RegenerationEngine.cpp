@@ -61,9 +61,10 @@ constexpr double kSideFaceDotThreshold = 0.9;
 constexpr double kMinValue = 1e-3;
 constexpr double kMinAngleDeg = 1e-3;
 // Max descriptor score accepted when re-matching a stale face/edge reference. The score
-// scale adds ~1000 for shape-type mismatch and is ~O(mm) otherwise, so this conservatively
-// accepts only close geometric matches and rejects unrelated elements.
-constexpr double kRematchRejectScore = 5.0;
+// scale is ~O(mm) for geometric terms, so ~1mm of drift is the most a re-match may
+// silently absorb; anything looser resolved deleted geometry onto its nearest neighbor.
+// (ElementMap::resolveWithFallback additionally requires a uniqueness margin.)
+constexpr double kRematchRejectScore = 1.0;
 
 std::string inputSourceSummary(const OperationInput& input) {
     if (std::holds_alternative<SketchRegionRef>(input)) {
