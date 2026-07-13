@@ -43,7 +43,19 @@ bool UpdateSketchAttachmentCommand::execute() {
     if (resolved->second != oldFaceId_) {
         sketch->setHostFaceAttachment(bodyId, resolved->second);  // re-matched id
     }
-    return regenerateDocument(document_);
+    // Strict, like the other document-mutating commands: any op failure after
+    // the re-sync means the command failed.
+    if (regenerateDocumentStrict(document_)) {
+        return true;
+    }
+
+    // Restore the captured state so the failed command leaves zero net
+    // mutation (it never reaches the undo stack).
+    sketch->setPlane(oldPlane_);
+    sketch->setHostFaceAttachment(oldBodyId_, oldFaceId_);
+    hasOldState_ = false;
+    regenerateDocument(document_);  // best-effort return to the pre-command state
+    return false;
 }
 
 bool UpdateSketchAttachmentCommand::undo() {

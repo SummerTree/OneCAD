@@ -1157,6 +1157,65 @@ void testUpdateAttachmentResyncsPlane() {
     std::cout << " PASS\n";
 }
 
+void testUpdateAttachmentRollsBackOnRegenFailure() {
+    std::cout << "Test: Update Attachment restores state on regen failure..." << std::flush;
+
+    app::Document doc;
+    // Body A: 10x10x10 box.
+    const auto [sketchA, regionA] = createSquareSketchRegion(doc, 10.0);
+    const std::string bodyA = newId();
+    app::OperationRecord opA;
+    opA.opId = newId();
+    opA.type = app::OperationType::Extrude;
+    opA.input = app::SketchRegionRef{sketchA, regionA};
+    opA.params = app::ExtrudeParams{10.0, 0.0, app::ExtrudeMode::Blind, app::BooleanMode::NewBody};
+    opA.resultBodyIds.push_back(bodyA);
+    assert(executeAddOperation(doc, opA));
+
+    // Sketch B attached to A's top face.
+    auto top = findTopPlanarFace(doc, bodyA);
+    assert(top.has_value());
+    auto plane = doc.getSketchPlaneForFace(bodyA, top->first);
+    assert(plane.has_value());
+    auto sketchBptr = std::make_unique<core::sketch::Sketch>(*plane);
+    sketchBptr->setHostFaceAttachment(bodyA, top->first);
+    const std::string sketchB = doc.addSketch(std::move(sketchBptr));
+    assert(doc.ensureHostFaceBoundariesProjected(sketchB));
+
+    // Edit A taller so a resync would move B's frozen plane from z=10 to z=20.
+    app::ExtrudeParams tallerA{20.0, 0.0, app::ExtrudeMode::Blind, app::BooleanMode::NewBody};
+    app::commands::UpdateOperationParamsCommand editA(&doc, opA.opId, tallerA);
+    assert(editA.execute());
+
+    // Inject an applied op that always fails, so the command's strict
+    // regeneration fails AFTER the new plane has already been applied.
+    app::OperationRecord badOp;
+    badOp.opId = newId();
+    badOp.type = app::OperationType::Extrude;
+    badOp.input = app::SketchRegionRef{sketchA, "no-such-region"};
+    badOp.params = app::ExtrudeParams{5.0, 0.0, app::ExtrudeMode::Blind, app::BooleanMode::NewBody};
+    badOp.resultBodyIds.push_back(newId());
+    doc.addOperation(badOp);
+    doc.setAppliedOpCount(doc.operations().size());
+
+    const double planeZBefore = doc.getSketch(sketchB)->getPlane().origin.z;
+    const std::string faceIdBefore = doc.getSketch(sketchB)->hostFaceAttachment()->faceId;
+
+    app::commands::UpdateSketchAttachmentCommand resync(&doc, sketchB);
+    if (resync.execute()) {
+        std::fprintf(stderr, "resync unexpectedly succeeded despite failing op\n");
+        std::exit(1);
+    }
+    // Zero net mutation: plane and attachment must be exactly as before.
+    if (!nearlyEqual(doc.getSketch(sketchB)->getPlane().origin.z, planeZBefore, 1e-9) ||
+        doc.getSketch(sketchB)->hostFaceAttachment()->faceId != faceIdBefore) {
+        std::fprintf(stderr, "failed resync left a partial mutation behind\n");
+        std::exit(1);
+    }
+
+    std::cout << " PASS\n";
+}
+
 void testReprofileExtrudeSwapsSketchRegion() {
     std::cout << "Test: Re-profiling an extrude swaps its source region..." << std::flush;
 
@@ -1722,6 +1781,7 @@ int main(int argc, char* argv[]) {
     testAutoSketchOnFaceCreatesEditableSketchRegion();
     testDatumPlaneOffsetResolves();
     testUpdateAttachmentResyncsPlane();
+    testUpdateAttachmentRollsBackOnRegenFailure();
     testExtrudeTwoDirections();
     testExtrudeThroughAllCutsBox();
     testExtrudeToFaceStopsAtFace();
