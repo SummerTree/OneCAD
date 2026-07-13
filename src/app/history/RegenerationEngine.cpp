@@ -492,6 +492,16 @@ RegenResult RegenerationEngine::regenerateToAppliedCount(std::size_t appliedCoun
         }
     }
 
+    // Re-derive datum frames from the regenerated geometry: OffsetFromFace /
+    // AngledFromEdge datums must follow upstream edits (previously recompute
+    // only ran at creation, so their frames went permanently stale).
+    for (const auto& datumId : doc_->getDatumPlaneIds()) {
+        if (!doc_->recomputeDatumPlane(datumId)) {
+            qCWarning(logRegen) << "regenerateAll:datum-recompute-failed"
+                                << "datumId=" << QString::fromStdString(datumId);
+        }
+    }
+
     qCInfo(logRegen) << "regenerateAll:done"
                      << "status=" << static_cast<int>(result.status)
                      << "succeeded=" << result.succeededOps.size()
@@ -609,57 +619,6 @@ RegenResult RegenerationEngine::regenerateFrom(const std::string& opId) {
     }
 
     return result;
-}
-
-RegenResult RegenerationEngine::previewFrom(const std::string& opId, const OperationParams& newParams) {
-    if (!doc_) {
-        RegenResult result;
-        result.status = RegenStatus::CriticalFailure;
-        return result;
-    }
-
-    // Backup current state
-    backupCurrentState();
-    previewActive_ = true;
-    previewOpId_ = opId;
-
-    // Find and temporarily modify the operation
-    if (auto* op = doc_->findOperation(opId)) {
-        previewOriginalParams_ = op->params;
-        op->params = newParams;
-    }
-
-    // Regenerate from this op
-    return regenerateFrom(opId);
-}
-
-void RegenerationEngine::commitPreview() {
-    if (!previewActive_) {
-        return;
-    }
-
-    // Clear backup (keep current state)
-    backupShapes_.clear();
-    previewActive_ = false;
-    previewOpId_.clear();
-}
-
-void RegenerationEngine::discardPreview() {
-    if (!previewActive_ || !doc_) {
-        return;
-    }
-
-    // Restore original params
-    if (auto* op = doc_->findOperation(previewOpId_)) {
-        op->params = previewOriginalParams_;
-    }
-
-    // Restore body shapes
-    restoreBackupState();
-
-    previewActive_ = false;
-    previewOpId_.clear();
-    backupShapes_.clear();
 }
 
 std::optional<TopoDS_Shape> RegenerationEngine::resolveEdge(const std::string& edgeId) const {
@@ -1704,36 +1663,6 @@ std::optional<TopoDS_Face> RegenerationEngine::buildFaceFromSketchRegion(const s
     }
 
     return faceResult.face;
-}
-
-void RegenerationEngine::backupCurrentState() {
-    if (!doc_) {
-        return;
-    }
-
-    backupShapes_.clear();
-    for (const auto& bodyId : doc_->getBodyIds()) {
-        const TopoDS_Shape* shape = doc_->getBodyShape(bodyId);
-        if (shape && !shape->IsNull()) {
-            backupShapes_[bodyId] = *shape;
-        }
-    }
-}
-
-void RegenerationEngine::restoreBackupState() {
-    if (!doc_) {
-        return;
-    }
-
-    // Remove current bodies
-    for (const auto& bodyId : doc_->getBodyIds()) {
-        doc_->removeBody(bodyId);
-    }
-
-    // Restore backed up bodies
-    for (const auto& [bodyId, shape] : backupShapes_) {
-        doc_->addBodyWithId(bodyId, shape);
-    }
 }
 
 bool RegenerationEngine::applyBodyResult(const std::string& bodyId, const TopoDS_Shape& shape,

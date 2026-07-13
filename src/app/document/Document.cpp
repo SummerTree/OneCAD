@@ -553,7 +553,46 @@ bool Document::recomputeDatumPlane(const std::string& id) {
             break;
         }
         case DatumPlane::Kind::OffsetFromFace: {
-            if (auto base = getSketchPlaneForFace(datum.baseBodyId, datum.baseFaceId)) {
+            auto base = getSketchPlaneForFace(datum.baseBodyId, datum.baseFaceId);
+            if (!base && datum.resolvedValid) {
+                // Descriptor-based face ids remap when the face moves (e.g. the
+                // parent extrude grew). Geometric re-pick, mirroring
+                // resolveHostFaceResync: the body face with the same outward
+                // normal whose plane is nearest the previous base frame.
+                const core::sketch::SketchPlane oldBase =
+                    offsetAlongNormal(datum.resolvedPlane, -datum.offset);
+                const gp_Dir oldNormal(oldBase.normal.x, oldBase.normal.y, oldBase.normal.z);
+                const gp_Pnt oldOrigin(oldBase.origin.x, oldBase.origin.y, oldBase.origin.z);
+                std::string bestId;
+                std::optional<core::sketch::SketchPlane> bestPlane;
+                double bestDist = std::numeric_limits<double>::max();
+                for (const auto& candidateId : elementMap_.ids()) {
+                    const auto* entry = elementMap_.find(candidateId);
+                    if (!entry || entry->kind != kernel::elementmap::ElementKind::Face) {
+                        continue;
+                    }
+                    auto plane = getSketchPlaneForFace(datum.baseBodyId, candidateId.value);
+                    if (!plane) {
+                        continue;
+                    }
+                    const gp_Dir normal(plane->normal.x, plane->normal.y, plane->normal.z);
+                    if (normal.Dot(oldNormal) < 0.999) {
+                        continue;
+                    }
+                    const double dist =
+                        gp_Pnt(plane->origin.x, plane->origin.y, plane->origin.z).Distance(oldOrigin);
+                    if (dist < bestDist) {
+                        bestDist = dist;
+                        bestId = candidateId.value;
+                        bestPlane = plane;
+                    }
+                }
+                if (bestPlane) {
+                    datum.baseFaceId = bestId;  // heal the stored reference
+                    base = bestPlane;
+                }
+            }
+            if (base) {
                 datum.resolvedPlane = offsetAlongNormal(*base, datum.offset);
                 ok = true;
             }

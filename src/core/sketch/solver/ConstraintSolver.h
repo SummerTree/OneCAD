@@ -118,20 +118,6 @@ struct SolverResult {
 };
 
 /**
- * @brief Degrees of freedom calculation result
- */
-struct DOFResult {
-    /// Total DOF in the system
-    int total = 0;
-
-    /// DOF contribution from each entity (for debugging)
-    std::vector<std::pair<EntityID, int>> entityContributions;
-
-    /// DOF removed by each constraint (for debugging)
-    std::vector<std::pair<ConstraintID, int>> constraintReductions;
-};
-
-/**
  * @brief Constraint solver wrapper for PlaneGCS
  *
  * This class manages the PlaneGCS solver instance and provides
@@ -275,22 +261,6 @@ public:
     // ========== DOF & Analysis ==========
 
     /**
-     * @brief Calculate degrees of freedom
-     *
-     * Per SPECIFICATION.md §23.8:
-     * DOF = Σ(entity DOF) - Σ(constraint DOF removed)
-     *
-     * Entity DOF:
-     * - Point: 2 (x, y)
-     * - Line: 0 (derived from points)
-     * - Arc: 3 (radius, startAngle, endAngle)
-     * - Circle: 1 (radius)
-     *
-     * Constraint DOF reduction - see spec Table 23.8
-     */
-    DOFResult calculateDOF() const;
-
-    /**
      * @brief Analyze constraint system for redundancies
      *
      * Uses PlaneGCS redundancy analysis to find:
@@ -318,29 +288,6 @@ public:
 
     /// True when the last solve/diagnose found redundant constraints.
     bool hasRedundant() const;
-
-    // ========== Threading Support ==========
-
-    /**
-     * @brief Solve asynchronously
-     * @param callback Called when solve completes
-     *
-     * Per SPECIFICATION.md §23.6:
-     * Background solving for >100 entities
-     *
-     * TODO: QtConcurrent integration for large sketches.
-     */
-    void solveAsync(std::function<void(SolverResult)> callback);
-
-    /**
-     * @brief Check if async solve is in progress
-     */
-    bool isSolving() const { return solving_; }
-
-    /**
-     * @brief Cancel ongoing async solve
-     */
-    void cancelSolve();
 
 private:
     struct DragSolveSnapshot {
@@ -388,8 +335,6 @@ private:
     int nextConstraintTag_ = 1;
 
     /// Async solve state
-    std::atomic<bool> solving_{false};
-    std::atomic<bool> cancelRequested_{false};
 
     /// Statistics
     int totalSolves_ = 0;

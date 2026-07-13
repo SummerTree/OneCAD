@@ -84,31 +84,12 @@ public:
      * @brief Regenerate from a specific operation onwards.
      *
      * Rebuilds the specified op and all downstream dependents.
+     * NOT production-wired: only exercised by proto_regeneration
+     * (testDirtyFlagSkipsCleanBranch). Kept as the harness for incremental
+     * DependencyGraph semantics and as a future partial-regen perf lever.
+     * Unlike regenerateAll it performs no stale-body cleanup.
      */
     RegenResult regenerateFrom(const std::string& opId);
-
-    /**
-     * @brief Preview regeneration with modified parameters.
-     *
-     * Temporarily modifies an operation's params and regenerates.
-     * Use commitPreview() to keep changes, or discardPreview() to revert.
-     */
-    RegenResult previewFrom(const std::string& opId, const OperationParams& newParams);
-
-    /**
-     * @brief Commit preview as permanent state.
-     */
-    void commitPreview();
-
-    /**
-     * @brief Discard preview and restore original state.
-     */
-    void discardPreview();
-
-    /**
-     * @brief Check if preview is currently active.
-     */
-    bool isPreviewActive() const { return previewActive_; }
 
     /**
      * @brief Set progress callback for long operations.
@@ -235,24 +216,6 @@ private:
     std::string resolveBooleanTargetBodyId(const OperationRecord& op,
                                            const std::string& explicitTargetBodyId) const;
 
-    // ─────────────────────────────────────────────────────────────────────────
-    // State Management
-    // ─────────────────────────────────────────────────────────────────────────
-
-    /**
-     * @brief Clear bodies produced by specified operations.
-     */
-
-    /**
-     * @brief Backup current body shapes for preview restore.
-     */
-    void backupCurrentState();
-
-    /**
-     * @brief Restore body shapes from backup.
-     */
-    void restoreBackupState();
-
     /**
      * @brief Add or update a body in the document.
      */
@@ -262,12 +225,6 @@ private:
     Document* doc_;
     DependencyGraph graph_;
     ProgressCallback progressCallback_;
-
-    // Preview state
-    bool previewActive_ = false;
-    std::unordered_map<std::string, TopoDS_Shape> backupShapes_;
-    std::string previewOpId_;
-    OperationParams previewOriginalParams_;
 };
 
 } // namespace onecad::app::history

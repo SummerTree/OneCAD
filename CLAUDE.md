@@ -55,7 +55,7 @@ tests/                 # ~31 standalone prototype executables for regression tes
 - `Document` is the central QObject storing sketches (UUID map), bodies (TopoDS_Shape), and operations (`OperationRecord` vector)
 - `OperationRecord`: opId, type (Extrude/Revolve/Fillet/Chamfer/Shell/Boolean/LinearPattern/CircularPattern/Loft/Sweep/MirrorBody — see `OperationType` in `OperationRecord.h`), input (`std::variant`: SketchRegionRef/FaceRef/BodyRef), params (`std::variant` of typed params), resultBodyIds. Sidecar `OperationMetadata.h`/`OperationValidation.h` hold display metadata + input validation; `DatumPlane.h` defines datum plane geometry
 - `DependencyGraph`: forward/backward adjacency, Kahn's topological sort, suppression propagation, failure tracking
-- `RegenerationEngine`: replays operations in topo-sorted order → produces bodies. Supports `regenerateAll()`, `regenerateFrom(opId)`, `previewFrom(opId, newParams)`
+- `RegenerationEngine`: replays operations in topo-sorted order → produces bodies. Supports `regenerateAll()` and `regenerateFrom(opId)` (the latter is not production-wired — test harness + future partial-regen lever). Datum plane frames are re-derived in the regen epilogue
 - Regeneration is synchronous on the UI thread with busy feedback (wait cursor + status). No background regen: the former KernelScheduler was deleted — reintroducing async requires document snapshotting, a thread-safe SceneMeshStore, and a TSan CI lane (see TODO.md)
 
 **Command System** (`src/app/commands/`):
@@ -112,7 +112,7 @@ tests/                 # ~31 standalone prototype executables for regression tes
 - **SnapManager**: 2mm radius (sketch coords), priority Vertex > Endpoint > Midpoint > Center > Quadrant > Intersection > Grid. Always check `snapped` flag
 - **AutoConstrainer**: infers H/V (±5°), Coincident (2mm), Perpendicular, Tangent. Ghost entities at 50% opacity, applied on commit
 - **Suppression vs Deletion**: suppress for rollback (preserves deps), delete for permanent removal
-- **Preview state**: RegenerationEngine backs up/restores bodies for non-destructive parameter preview
+- **Preview state**: EditParameterDialog previews on a cloned Document with its own RegenerationEngine; the real document is untouched until Apply
 
 ## Critical Implementation Notes
 

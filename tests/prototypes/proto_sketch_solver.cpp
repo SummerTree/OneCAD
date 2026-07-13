@@ -227,10 +227,6 @@ int main() {
     ConstraintSolver solver;
     SolverAdapter::populateSolver(sketch, solver);
 
-    DOFResult dof = solver.calculateDOF();
-    int expectedTotal = 10;
-    assert(dof.total == expectedTotal);
-
     SolveResult solveResult = sketch.solve();
     assert(solveResult.success);
 

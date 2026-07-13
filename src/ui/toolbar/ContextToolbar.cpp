@@ -140,8 +140,8 @@ void ContextToolbar::setupUi() {
     m_arcButton = SidebarToolButton::fromSvgIcon(":/icons/ic_arc.svg", tr("Draw arc (A)"), this);
     connect(m_arcButton, &SidebarToolButton::clicked, this, &ContextToolbar::arcToolActivated);
 
-    m_ellipseButton = SidebarToolButton::fromSvgIcon(":/icons/ic_ellipse.svg", tr("Draw ellipse (E)"), this);
-    connect(m_ellipseButton, &SidebarToolButton::clicked, this, &ContextToolbar::ellipseToolActivated);
+    // Ellipse creation hidden: SketchEllipse is not solver-registered, so the
+    // entity cannot be constrained. Button returns with solver support.
 
     m_trimButton = SidebarToolButton::fromSvgIcon(":/icons/ic_trim.svg", tr("Trim entity (T)"), this);
     connect(m_trimButton, &SidebarToolButton::clicked, this, &ContextToolbar::trimToolActivated);
@@ -159,7 +159,6 @@ void ContextToolbar::setupUi() {
     m_layout->addWidget(m_rectangleButton);
     m_layout->addWidget(m_circleButton);
     m_layout->addWidget(m_arcButton);
-    m_layout->addWidget(m_ellipseButton);
     m_layout->addWidget(m_trimButton);
     m_layout->addWidget(m_mirrorButton);
     m_layout->addStretch();
@@ -202,9 +201,6 @@ void ContextToolbar::updateVisibleButtons() {
     }
     if (m_arcButton) {
         m_arcButton->setVisible(inSketch);
-    }
-    if (m_ellipseButton) {
-        m_ellipseButton->setVisible(inSketch);
     }
     if (m_trimButton) {
         m_trimButton->setVisible(inSketch);

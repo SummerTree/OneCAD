@@ -609,14 +609,10 @@ void MainWindow::setupMenuBar() {
     });
     addAction(arcAction);
 
-    QAction* ellipseAction = new QAction(tr("Ellipse Tool"), this);
-    ellipseAction->setShortcut(Qt::Key_E);
-    connect(ellipseAction, &QAction::triggered, this, [this]() {
-        if (m_viewport && m_viewport->isInSketchMode()) {
-            m_viewport->activateEllipseTool();
-        }
-    });
-    addAction(ellipseAction);
+    // NOTE: ellipse creation is intentionally hidden — SketchEllipse is not
+    // registered with the PlaneGCS solver, so created ellipses could not be
+    // constrained or dimensioned. The entity, IO, and rendering remain so
+    // existing documents still load; creation returns with solver support.
 
     QAction* trimAction = new QAction(tr("Trim Tool"), this);
     trimAction->setShortcut(Qt::Key_T);
@@ -791,9 +787,8 @@ void MainWindow::setupToolBar() {
         connect(m_toolbar, &ContextToolbar::arcToolActivated, this, [this, activateTool]() {
             activateTool(&Viewport::activateArcTool);
         });
-        connect(m_toolbar, &ContextToolbar::ellipseToolActivated, this, [this, activateTool]() {
-            activateTool(&Viewport::activateEllipseTool);
-        });
+        // ellipseToolActivated intentionally unwired (uncontrainable entity;
+        // see the ellipse note in setupActions).
         connect(m_toolbar, &ContextToolbar::trimToolActivated, this, [this, activateTool]() {
             activateTool(&Viewport::activateTrimTool);
         });

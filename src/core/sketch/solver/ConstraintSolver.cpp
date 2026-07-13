@@ -729,44 +729,6 @@ void ConstraintSolver::revertSolution() {
     }
     restoreParameters();
 }
-
-DOFResult ConstraintSolver::calculateDOF() const {
-    DOFResult result;
-
-    for (const auto& [id, point] : pointsById_) {
-        (void)point;
-        result.total += 2;
-        result.entityContributions.emplace_back(id, 2);
-    }
-
-    for (const auto& [id, arc] : arcsById_) {
-        (void)arc;
-        result.total += 3;
-        result.entityContributions.emplace_back(id, 3);
-    }
-
-    for (const auto& [id, circle] : circlesById_) {
-        (void)circle;
-        result.total += 1;
-        result.entityContributions.emplace_back(id, 1);
-    }
-
-    for (const auto& constraint : constraints_) {
-        if (!constraint) {
-            continue;
-        }
-        int reduction = getConstraintDOFReduction(constraint->type());
-        result.total -= reduction;
-        result.constraintReductions.emplace_back(constraint->id(), reduction);
-    }
-
-    if (result.total < 0) {
-        result.total = 0;
-    }
-
-    return result;
-}
-
 std::vector<ConstraintID> ConstraintSolver::findRedundantConstraints() const {
     std::vector<ConstraintID> result;
     if (!gcsSystem_) {
@@ -807,23 +769,6 @@ bool ConstraintSolver::hasConflicting() const {
 bool ConstraintSolver::hasRedundant() const {
     return gcsSystem_ && gcsSystem_->hasRedundant();
 }
-
-void ConstraintSolver::solveAsync(std::function<void(SolverResult)> callback) {
-    if (solving_) {
-        return;
-    }
-    solving_ = true;
-    SolverResult result = solve();
-    solving_ = false;
-    if (callback) {
-        callback(result);
-    }
-}
-
-void ConstraintSolver::cancelSolve() {
-    cancelRequested_ = true;
-}
-
 void ConstraintSolver::backupParameters() {
     parameterBackup_.clear();
 

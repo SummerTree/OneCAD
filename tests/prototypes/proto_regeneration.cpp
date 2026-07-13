@@ -1626,6 +1626,51 @@ void testDatumPlaneOffsetResolves() {
     std::cout << " PASS\n";
 }
 
+void testDatumOffsetFromFaceFollowsParentEdit() {
+    std::cout << "Test: OffsetFromFace datum follows an upstream edit..." << std::flush;
+
+    app::Document doc;
+    const auto [sketchId, regionId] = createSquareSketchRegion(doc, 10.0);
+    const std::string bodyId = newId();
+    app::OperationRecord op;
+    op.opId = newId();
+    op.type = app::OperationType::Extrude;
+    op.input = app::SketchRegionRef{sketchId, regionId};
+    op.params = app::ExtrudeParams{10.0, 0.0, app::ExtrudeMode::Blind, app::BooleanMode::NewBody};
+    op.resultBodyIds.push_back(bodyId);
+    assert(executeAddOperation(doc, op));
+
+    auto top = findTopPlanarFace(doc, bodyId);
+    assert(top.has_value());
+
+    app::DatumPlane datum;
+    datum.name = "face-offset";
+    datum.kind = app::DatumPlane::Kind::OffsetFromFace;
+    datum.baseBodyId = bodyId;
+    datum.baseFaceId = top->first;
+    datum.offset = 5.0;
+    const std::string datumId = doc.addDatumPlane(datum);
+    assert(!datumId.empty());
+    const auto* created = doc.getDatumPlane(datumId);
+    assert(created && created->resolvedValid);
+    assert(nearlyEqual(created->resolvedPlane.origin.z, 15.0, 1e-6));  // 10 + 5
+
+    // Grow the extrude: the regen epilogue must re-derive the datum frame.
+    app::ExtrudeParams taller{20.0, 0.0, app::ExtrudeMode::Blind, app::BooleanMode::NewBody};
+    app::commands::UpdateOperationParamsCommand edit(&doc, op.opId, taller);
+    assert(edit.execute());
+
+    const auto* moved = doc.getDatumPlane(datumId);
+    assert(moved && moved->resolvedValid);
+    if (!nearlyEqual(moved->resolvedPlane.origin.z, 25.0, 1e-6)) {  // 20 + 5
+        std::fprintf(stderr, "datum did not follow parent edit: z=%f\n",
+                     moved->resolvedPlane.origin.z);
+        std::exit(1);
+    }
+
+    std::cout << " PASS\n";
+}
+
 void testAutoSketchOnFaceCreatesEditableSketchRegion() {
     std::cout << "Test: Auto-sketch-on-face yields an extrudable region..." << std::flush;
 
@@ -1871,6 +1916,7 @@ int main(int argc, char* argv[]) {
     testExtrudeFaceRefRejectedByAddCommand();
     testAutoSketchOnFaceCreatesEditableSketchRegion();
     testDatumPlaneOffsetResolves();
+    testDatumOffsetFromFaceFollowsParentEdit();
     testUpdateAttachmentResyncsPlane();
     testUpdateAttachmentRollsBackOnRegenFailure();
     testExtrudeTwoDirections();
