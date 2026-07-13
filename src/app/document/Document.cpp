@@ -345,7 +345,8 @@ bool Document::addBodyWithId(const std::string& id,
 
 bool Document::updateBodyShape(const std::string& id, const TopoDS_Shape& shape,
                                bool emitSignal, const std::string& opId,
-                               std::string* errorOut) {
+                               std::string* errorOut,
+                               BRepBuilderAPI_MakeShape* history) {
     if (shape.IsNull()) {
         if (errorOut) {
             *errorOut = "Cannot update body with null shape";
@@ -370,6 +371,13 @@ bool Document::updateBodyShape(const std::string& id, const TopoDS_Shape& shape,
     }
 
     it->second.shape = shape;
+    if (history) {
+        // Exact-history pass first: OCCT's Modified/Generated/Deleted mapping
+        // reassigns surviving elements precisely; the rebind below then only
+        // reconciles what history could not (its assignments are sticky via
+        // the rebind identity pre-pass).
+        elementMap_.update(*history, opId);
+    }
     elementMap_.rebindBody(id, shape, opId);
     std::string meshError;
     if (!updateBodyMesh(id, shape, emitSignal, &meshError)) {

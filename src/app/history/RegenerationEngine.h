@@ -15,10 +15,13 @@
 #include <TopoDS_Face.hxx>
 
 #include <functional>
+#include <memory>
 #include <optional>
 #include <string>
 #include <unordered_map>
 #include <vector>
+
+class BRepBuilderAPI_MakeShape;
 
 namespace onecad::app {
 class Document;
@@ -225,6 +228,11 @@ private:
     Document* doc_;
     DependencyGraph graph_;
     ProgressCallback progressCallback_;
+    // OCCT history of the current operation's shape-making algorithm (boolean,
+    // fillet, chamfer). Set by the builder, consumed by applyBodyResult to run
+    // the exact ElementMap::update() path before the rebind sweep, and cleared
+    // per-operation so stale TopoDS graphs are never retained across a regen.
+    std::unique_ptr<BRepBuilderAPI_MakeShape> lastHistory_;
 };
 
 } // namespace onecad::app::history

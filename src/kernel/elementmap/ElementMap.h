@@ -12,7 +12,7 @@
 #include <utility>
 #include <vector>
 
-#include <BRepAlgoAPI_BooleanOperation.hxx>
+#include <BRepBuilderAPI_MakeShape.hxx>
 #include <BRepAdaptor_Curve.hxx>
 #include <BRepAdaptor_Surface.hxx>
 #include <BRepBndLib.hxx>
@@ -31,6 +31,7 @@
 #include <TopoDS_Edge.hxx>
 #include <TopoDS_Face.hxx>
 #include <TopoDS_Vertex.hxx>
+#include <TopExp.hxx>
 #include <TopExp_Explorer.hxx>
 #include <TopTools_ListOfShape.hxx>
 #include <TopTools_ListIteratorOfListOfShape.hxx>
@@ -94,11 +95,18 @@ public:
     void clear();
     void clearShape(const ElementId& id);
     void removeElementsForBody(const std::string& bodyId);
+    /// Clear the bound shapes of every entry owned by @p bodyId while KEEPING
+    /// the entries (descriptors) as tombstones. Used before regeneration:
+    /// replayed/edited geometry re-adopts these ids via update()/rebindBody,
+    /// which is what keeps downstream references alive across parameter edits.
+    void clearShapesForBody(const std::string& bodyId);
     void rebindBody(const std::string& bodyId, const TopoDS_Shape& shape,
                     const std::string& opId = {});
 
-    // Updates tracked shapes using the history from a boolean operation. Returns IDs that were deleted.
-    std::vector<ElementId> update(BRepAlgoAPI_BooleanOperation& algo, const std::string& opId);
+    // Consume OCCT Modified/Generated/Deleted history from any shape-making
+    // algorithm (booleans, fillets, chamfers, ...). The exact-history path:
+    // prefer this over rebindBody wherever the algorithm is available.
+    std::vector<ElementId> update(BRepBuilderAPI_MakeShape& algo, const std::string& opId);
 
     // Resolve a (possibly stale) id to a live shape. If the literal id still has a bound
     // shape, returns it (scoreOut = 0). Otherwise, if the id is known, re-matches by stored
@@ -319,6 +327,22 @@ inline void ElementMap::removeElementsForBody(const std::string& bodyId) {
     }
 }
 
+inline void ElementMap::clearShapesForBody(const std::string& bodyId) {
+    if (bodyId.empty()) {
+        return;
+    }
+    const std::string prefix = bodyId + "/";
+    for (auto& [id, entry] : entries_) {
+        if (id != bodyId && id.rfind(prefix, 0) != 0) {
+            continue;
+        }
+        if (!entry.shape.IsNull()) {
+            unbindShape(entry.shape, entry.id);
+            entry.shape = TopoDS_Shape();
+        }
+    }
+}
+
 inline void ElementMap::rebindBody(const std::string& bodyId, const TopoDS_Shape& shape,
                                    const std::string& opId) {
     if (bodyId.empty() || shape.IsNull()) {
@@ -422,37 +446,54 @@ inline void ElementMap::rebindBody(const std::string& bodyId, const TopoDS_Shape
             }
         }
 
-        for (auto* entry : unresolved) {
+        // Global best-first assignment: score every viable (entry, candidate)
+        // pair and assign in ascending-score order. Per-entry greedy matching
+        // in entry-id order let a stale entry steal another entry's exact
+        // candidate simply because its id sorted first.
+        struct ScoredPair {
+            double value;
+            std::size_t entryIndex;
+            std::size_t candidateIndex;
+        };
+        std::vector<ScoredPair> pairs;
+        for (std::size_t e = 0; e < unresolved.size(); ++e) {
             // Compare as if the stale descriptor moved with the body.
-            ElementDescriptor shifted = entry->descriptor;
+            ElementDescriptor shifted = unresolved[e]->descriptor;
             shifted.center.Translate(bodyCenterDelta);
-
-            double bestScore = std::numeric_limits<double>::max();
-            int bestIndex = -1;
-            for (std::size_t i = 0; i < candidates.size(); ++i) {
-                if (candidates[i].assigned) {
+            for (std::size_t c = 0; c < candidates.size(); ++c) {
+                if (candidates[c].assigned) {
                     continue;
                 }
                 // Hard-skip cross-type candidates: the soft score penalties
                 // allowed a face id to silently migrate onto a face of a
                 // different surface type (or edge curve type) when the real
                 // geometry disappeared.
-                if (candidates[i].descriptor.surfaceType != shifted.surfaceType ||
-                    candidates[i].descriptor.curveType != shifted.curveType) {
+                if (candidates[c].descriptor.surfaceType != shifted.surfaceType ||
+                    candidates[c].descriptor.curveType != shifted.curveType) {
                     continue;
                 }
-                double currentScore = score(shifted, candidates[i].descriptor);
-                if (currentScore < bestScore) {
-                    bestScore = currentScore;
-                    bestIndex = static_cast<int>(i);
+                const double value = score(shifted, candidates[c].descriptor);
+                if (value <= maxAcceptScore) {
+                    pairs.push_back(ScoredPair{value, e, c});
                 }
             }
+        }
+        std::sort(pairs.begin(), pairs.end(),
+                  [](const ScoredPair& a, const ScoredPair& b) { return a.value < b.value; });
 
-            if (bestIndex >= 0 && bestScore <= maxAcceptScore) {
-                attachShape(entry->id, candidates[bestIndex].shape, opId);
-                candidates[bestIndex].assigned = true;
-            } else {
-                clearShape(entry->id);
+        std::vector<bool> entryAssigned(unresolved.size(), false);
+        for (const auto& pair : pairs) {
+            if (entryAssigned[pair.entryIndex] || candidates[pair.candidateIndex].assigned) {
+                continue;
+            }
+            attachShape(unresolved[pair.entryIndex]->id,
+                        candidates[pair.candidateIndex].shape, opId);
+            candidates[pair.candidateIndex].assigned = true;
+            entryAssigned[pair.entryIndex] = true;
+        }
+        for (std::size_t e = 0; e < unresolved.size(); ++e) {
+            if (!entryAssigned[e]) {
+                clearShape(unresolved[e]->id);
             }
         }
 
@@ -830,7 +871,7 @@ inline ElementKind ElementMap::kindFromString(const std::string& value) const {
     return ElementKind::Unknown;
 }
 
-inline std::vector<ElementId> ElementMap::update(BRepAlgoAPI_BooleanOperation& algo, const std::string& opId) {
+inline std::vector<ElementId> ElementMap::update(BRepBuilderAPI_MakeShape& algo, const std::string& opId) {
     std::vector<ElementId> deleted;
     struct PendingEntry {
         ElementId id;
@@ -1021,6 +1062,40 @@ inline std::vector<ElementId> ElementMap::update(BRepAlgoAPI_BooleanOperation& a
                 }
 
                 ElementKind childKind = inferKind(candidate.shape, entry.kind);
+
+                // Adopt an orphaned same-owner entry (tombstone) before minting
+                // a new child id: parameter edits move generated geometry, and
+                // the old id must reconnect so downstream references survive.
+                const std::string ownerPrefix = [&] {
+                    const auto pos = entry.id.value.find('/');
+                    return (pos == std::string::npos ? entry.id.value
+                                                     : entry.id.value.substr(0, pos)) + "/";
+                }();
+                Entry* adopted = nullptr;
+                double adoptedScore = 5.0;  // mm-scale, mirrors the re-match tolerance
+                for (auto& [orphanKey, orphan] : entries_) {
+                    if (!orphan.shape.IsNull() || orphan.kind != childKind) {
+                        continue;
+                    }
+                    if (orphan.id.value.rfind(ownerPrefix, 0) != 0) {
+                        continue;
+                    }
+                    if (orphan.descriptor.surfaceType != candidate.descriptor.surfaceType ||
+                        orphan.descriptor.curveType != candidate.descriptor.curveType) {
+                        continue;
+                    }
+                    const double orphanScore = score(orphan.descriptor, candidate.descriptor);
+                    if (orphanScore < adoptedScore) {
+                        adoptedScore = orphanScore;
+                        adopted = &orphan;
+                    }
+                }
+                if (adopted) {
+                    attachShape(adopted->id, candidate.shape, opId);
+                    addSourceToId(adopted->id, entry.id);
+                    continue;
+                }
+
                 ElementId childId = makeChildId(entry.id, childKind, candidate.descriptor, opId,
                                                 ChildReason::Generated, index);
                 registerPending(PendingEntry{
@@ -1035,13 +1110,18 @@ inline std::vector<ElementId> ElementMap::update(BRepAlgoAPI_BooleanOperation& a
         }
     }
 
+    // Deleted elements become TOMBSTONES (shape cleared, descriptor kept),
+    // not erased entries: operations still reference these ids parametrically
+    // (e.g. a fillet's input edge is IsDeleted by the fillet itself), and on
+    // the next full replay the id must be able to re-adopt the recreated
+    // geometry via the rebind sweep. Erasing killed such references for good.
     for (auto const& [idKey, shape] : toErase) {
         if (auto it = entries_.find(idKey); it != entries_.end()) {
             unbindShape(shape, it->second.id);
+            it->second.shape = TopoDS_Shape();
         } else {
             unbindShape(shape);
         }
-        entries_.erase(idKey);
     }
 
     for (auto& entry : pending) {

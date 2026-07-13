@@ -145,7 +145,8 @@ TopoDS_Shape checkedBooleanResult(const TopoDS_Shape& target,
                                   const TopoDS_Shape& tool,
                                   BooleanMode mode,
                                   const std::string& context,
-                                  std::string& errorOut) {
+                                  std::string& errorOut,
+                                  std::unique_ptr<BRepBuilderAPI_MakeShape>* historyOut = nullptr) {
     if (target.IsNull() || tool.IsNull()) {
         errorOut = context + " boolean input is null";
         return {};
@@ -153,36 +154,31 @@ TopoDS_Shape checkedBooleanResult(const TopoDS_Shape& target,
 
     // OCCT boolean algorithms can raise Standard_Failure from their constructors on
     // degenerate inputs; a boolean failure must never escape as an app crash.
+    // The algo is heap-allocated so its Modified/Generated/Deleted history can
+    // outlive this call and drive the exact ElementMap::update() path.
     try {
-        TopoDS_Shape result;
+        std::unique_ptr<BRepAlgoAPI_BooleanOperation> algo;
         if (mode == BooleanMode::Add) {
-            BRepAlgoAPI_Fuse fuse(target, tool);
-            if (!fuse.IsDone()) {
-                errorOut = context + " fuse failed";
-                return {};
-            }
-            result = fuse.Shape();
+            algo = std::make_unique<BRepAlgoAPI_Fuse>(target, tool);
         } else if (mode == BooleanMode::Cut) {
-            BRepAlgoAPI_Cut cut(target, tool);
-            if (!cut.IsDone()) {
-                errorOut = context + " cut failed";
-                return {};
-            }
-            result = cut.Shape();
+            algo = std::make_unique<BRepAlgoAPI_Cut>(target, tool);
         } else if (mode == BooleanMode::Intersect) {
-            BRepAlgoAPI_Common common(target, tool);
-            if (!common.IsDone()) {
-                errorOut = context + " intersect failed";
-                return {};
-            }
-            result = common.Shape();
+            algo = std::make_unique<BRepAlgoAPI_Common>(target, tool);
         } else {
             errorOut = context + " unsupported boolean mode";
             return {};
         }
+        if (!algo->IsDone()) {
+            errorOut = context + " boolean failed";
+            return {};
+        }
+        TopoDS_Shape result = algo->Shape();
 
         if (!checkedShapeResult(result, context + " boolean", errorOut)) {
             return {};
+        }
+        if (historyOut) {
+            *historyOut = std::move(algo);
         }
         return result;
     } catch (const Standard_Failure& failure) {
@@ -385,7 +381,10 @@ RegenResult RegenerationEngine::regenerateToAppliedCount(std::size_t appliedCoun
     for (const auto& bodyId : replayOutputBodyIds) {
         const bool bodyExisted = doc_->getBodyShape(bodyId) != nullptr;
         const bool bodyRemoved = doc_->removeBodyPreserveElementMap(bodyId);
-        doc_->elementMap().removeElementsForBody(bodyId);
+        // Tombstone (do NOT erase) this body's element entries: the replayed
+        // geometry re-adopts the ids via history/rebind, keeping downstream
+        // parametric references (fillet edges, host faces) alive across edits.
+        doc_->elementMap().clearShapesForBody(bodyId);
         qCDebug(logRegen) << "regenerateAll:pre-reset-body"
                           << "bodyId=" << QString::fromStdString(bodyId)
                           << "bodyExisted=" << bodyExisted
@@ -690,6 +689,7 @@ bool RegenerationEngine::executeOperation(const OperationRecord& op, std::string
     // future) may escape the regeneration loop — a modeling failure is an op
     // failure, never an app crash.
     try {
+    lastHistory_.reset();
     TopoDS_Shape result;
 
     switch (op.type) {
@@ -752,6 +752,7 @@ bool RegenerationEngine::executeOperation(const OperationRecord& op, std::string
         }
     }
 
+    lastHistory_.reset();  // never retain OCCT shape graphs across operations
     qCDebug(logRegen) << "executeOperation:done"
                       << "opId=" << QString::fromStdString(op.opId);
     return true;
@@ -1042,7 +1043,8 @@ TopoDS_Shape RegenerationEngine::buildExtrude(const OperationRecord& op, std::st
             return {};
         }
 
-        result = checkedBooleanResult(*targetOpt, result, params.booleanMode, "Extrude", errorOut);
+        result = checkedBooleanResult(*targetOpt, result, params.booleanMode, "Extrude", errorOut,
+                                      &lastHistory_);
         if (result.IsNull()) {
             return {};
         }
@@ -1273,7 +1275,8 @@ TopoDS_Shape RegenerationEngine::buildRevolve(const OperationRecord& op, std::st
             return {};
         }
 
-        result = checkedBooleanResult(*targetOpt, result, params.booleanMode, "Revolve", errorOut);
+        result = checkedBooleanResult(*targetOpt, result, params.booleanMode, "Revolve", errorOut,
+                                      &lastHistory_);
         if (result.IsNull()) {
             return {};
         }
@@ -1317,7 +1320,8 @@ TopoDS_Shape RegenerationEngine::buildFillet(const OperationRecord& op, std::str
     }
 
     try {
-        BRepFilletAPI_MakeFillet fillet(targetShape);
+        // Heap-allocated so the fillet's OCCT history can drive ElementMap::update().
+        auto fillet = std::make_unique<BRepFilletAPI_MakeFillet>(targetShape);
         std::size_t addedEdges = 0;
 
         for (const auto& edgeId : params.edgeIds) {
@@ -1326,7 +1330,7 @@ TopoDS_Shape RegenerationEngine::buildFillet(const OperationRecord& op, std::str
                 continue;
             }
             TopoDS_Edge edge = TopoDS::Edge(*edgeOpt);
-            fillet.Add(params.radius, edge);
+            fillet->Add(params.radius, edge);
             ++addedEdges;
         }
 
@@ -1335,9 +1339,11 @@ TopoDS_Shape RegenerationEngine::buildFillet(const OperationRecord& op, std::str
             return {};
         }
 
-        fillet.Build();
-        if (fillet.IsDone()) {
-            return fillet.Shape();
+        fillet->Build();
+        if (fillet->IsDone()) {
+            TopoDS_Shape result = fillet->Shape();
+            lastHistory_ = std::move(fillet);
+            return result;
         }
 
         errorOut = "Fillet operation failed";
@@ -1382,7 +1388,8 @@ TopoDS_Shape RegenerationEngine::buildChamfer(const OperationRecord& op, std::st
     }
 
     try {
-        BRepFilletAPI_MakeChamfer chamfer(targetShape);
+        // Heap-allocated so the chamfer's OCCT history can drive ElementMap::update().
+        auto chamfer = std::make_unique<BRepFilletAPI_MakeChamfer>(targetShape);
         std::size_t addedEdges = 0;
 
         TopTools_IndexedDataMapOfShapeListOfShape edgeFaceMap;
@@ -1406,7 +1413,7 @@ TopoDS_Shape RegenerationEngine::buildChamfer(const OperationRecord& op, std::st
             }
 
             TopoDS_Face refFace = TopoDS::Face(faces.First());
-            chamfer.Add(params.radius, params.radius, edge, refFace);
+            chamfer->Add(params.radius, params.radius, edge, refFace);
             ++addedEdges;
         }
 
@@ -1415,9 +1422,11 @@ TopoDS_Shape RegenerationEngine::buildChamfer(const OperationRecord& op, std::st
             return {};
         }
 
-        chamfer.Build();
-        if (chamfer.IsDone()) {
-            return chamfer.Shape();
+        chamfer->Build();
+        if (chamfer->IsDone()) {
+            TopoDS_Shape result = chamfer->Shape();
+            lastHistory_ = std::move(chamfer);
+            return result;
         }
 
         errorOut = "Chamfer operation failed";
@@ -1674,7 +1683,7 @@ bool RegenerationEngine::applyBodyResult(const std::string& bodyId, const TopoDS
     }
 
     if (doc_->getBodyShape(bodyId)) {
-        return doc_->updateBodyShape(bodyId, shape, true, opId, &errorOut);
+        return doc_->updateBodyShape(bodyId, shape, true, opId, &errorOut, lastHistory_.get());
     }
 
     if (!doc_->addBodyWithId(bodyId, shape, {}, &errorOut)) {

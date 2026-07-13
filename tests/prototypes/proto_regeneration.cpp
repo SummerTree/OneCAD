@@ -1220,6 +1220,96 @@ void testUpdateAttachmentRollsBackOnRegenFailure() {
     std::cout << " PASS\n";
 }
 
+void testFilletSurvivesUpstreamCutEdit() {
+    std::cout << "Test: Fillet re-resolves its cut edge after an upstream edit..." << std::flush;
+
+    app::Document doc;
+    // Base: 20x20x10 block.
+    const auto [baseSketch, baseRegion] = createSquareSketchRegion(doc, 20.0);
+    const std::string bodyId = newId();
+    app::OperationRecord base;
+    base.opId = newId();
+    base.type = app::OperationType::Extrude;
+    base.input = app::SketchRegionRef{baseSketch, baseRegion};
+    base.params = app::ExtrudeParams{10.0, 0.0, app::ExtrudeMode::Blind, app::BooleanMode::NewBody};
+    base.resultBodyIds.push_back(bodyId);
+    assert(executeAddOperation(doc, base));
+
+    // 5x5 pocket cut 4mm deep (tool grows up from z=0 through the block bottom).
+    const auto [cutSketch, cutRegion] = createSquareSketchRegion(doc, 5.0);
+    app::OperationRecord cut;
+    cut.opId = newId();
+    cut.type = app::OperationType::Extrude;
+    cut.input = app::SketchRegionRef{cutSketch, cutRegion};
+    app::ExtrudeParams cutParams;
+    cutParams.distance = 4.0;
+    cutParams.booleanMode = app::BooleanMode::Cut;
+    cutParams.targetBodyId = bodyId;
+    cut.params = cutParams;
+    cut.resultBodyIds.push_back(bodyId);
+    assert(executeAddOperation(doc, cut));
+    assert(nearlyEqual(bodyVolume(doc, bodyId), 3900.0, 1.0));  // 4000 - 100
+
+    // Pick a rim edge created by the cut: an edge whose center sits at z = 4.
+    std::string rimEdgeId;
+    for (const auto& id : doc.elementMap().ids()) {
+        const auto* entry = doc.elementMap().find(id);
+        if (!entry || entry->kind != kernel::elementmap::ElementKind::Edge ||
+            entry->shape.IsNull()) {
+            continue;
+        }
+        if (nearlyEqual(entry->descriptor.center.Z(), 4.0, 1e-6)) {
+            rimEdgeId = id.value;
+            break;
+        }
+    }
+    assert(!rimEdgeId.empty());
+
+    // Fillet that rim edge.
+    app::OperationRecord fillet;
+    fillet.opId = newId();
+    fillet.type = app::OperationType::Fillet;
+    fillet.input = app::BodyRef{bodyId};
+    app::FilletChamferParams filletParams;
+    filletParams.mode = app::FilletChamferParams::Mode::Fillet;
+    filletParams.radius = 1.0;
+    filletParams.edgeIds = {rimEdgeId};
+    filletParams.chainTangentEdges = false;
+    fillet.params = filletParams;
+    fillet.resultBodyIds.push_back(bodyId);
+    assert(executeAddOperation(doc, fillet));
+    const double filletedVolume = bodyVolume(doc, bodyId);
+    // The blend changes the volume by ~ (1 - pi/4) * r^2 * L ~= 1.07 mm^3 for
+    // r=1, L=5 (sign depends on whether the picked rim edge is concave or
+    // convex — the pocket touches the block corner).
+    assert(std::abs(filletedVolume - 3900.0) > 0.5 && std::abs(filletedVolume - 3900.0) < 5.0);
+
+    // Deepen the cut 4 -> 6mm. The rim edge moves; the fillet must re-resolve
+    // through the cut's OCCT history (or the hardened rebind) — strict regen
+    // succeeding proves the whole chain rebuilt, including the fillet.
+    app::ExtrudeParams deeper = cutParams;
+    deeper.distance = 6.0;
+    app::commands::UpdateOperationParamsCommand edit(&doc, cut.opId, deeper);
+    if (!edit.execute()) {
+        std::fprintf(stderr, "deepening the cut broke the downstream fillet\n");
+        std::exit(1);
+    }
+    if (!doc.operationFailureReason(fillet.opId).empty()) {
+        std::fprintf(stderr, "fillet failed after the upstream edit\n");
+        std::exit(1);
+    }
+    const double editedVolume = bodyVolume(doc, bodyId);
+    // 4000 - 150 = 3850 un-filleted; the surviving fillet keeps its ~1 mm^3
+    // blend on the (moved) rim edge.
+    if (!(std::abs(editedVolume - 3850.0) > 0.5 && std::abs(editedVolume - 3850.0) < 5.0)) {
+        std::fprintf(stderr, "post-edit volume %f inconsistent with a surviving fillet\n",
+                     editedVolume);
+        std::exit(1);
+    }
+
+    std::cout << " PASS\n";
+}
+
 void testDetectModeProbeClassification() {
     std::cout << "Test: Boolean mode detection classifies by probe point..." << std::flush;
 
@@ -1928,6 +2018,7 @@ int main(int argc, char* argv[]) {
     testRevolveAxisCrossingProfileFailsAsOpFailure();
     testDirtyFlagSkipsCleanBranch();
     testDetectModeProbeClassification();
+    testFilletSurvivesUpstreamCutEdit();
     testDatumPlusSketchTransactionUndoesTogether();
     testReprofileExtrudeSwapsSketchRegion();
     testReprofileToFaceRefRejected();
