@@ -336,10 +336,9 @@ PromotedSelectionTopology SelectionTopologyResolver::resolve(
             if (vertex.IsNull()) {
                 continue;
             }
-            gp_Pnt point = BRep_Tool::Pnt(vertex);
-            if (!vertex.Location().IsIdentity()) {
-                point.Transform(vertex.Location().Transformation());
-            }
+            // BRep_Tool::Pnt already returns the located (world) point; applying
+            // the vertex Location again double-transformed moved geometry.
+            const gp_Pnt point = BRep_Tool::Pnt(vertex);
             const QuantizedPoint quantizedPoint = quantizePoint(point);
             groupEndpointCounts[leaderIt->second][quantizedPoint]++;
             leadersByEndpointPosition[quantizedPoint].insert(leaderIt->second);

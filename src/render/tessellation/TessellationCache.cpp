@@ -339,11 +339,18 @@ bool TessellationCache::tryBuildMesh(const std::string& bodyId,
 
         int triCount = triangulation->NbTriangles();
         mesh.triangles.reserve(mesh.triangles.size() + triCount);
+        // Poly_Triangulation winding follows the surface's natural normal; a
+        // REVERSED face's outward normal is the opposite, so flip the winding
+        // here or every derived normal (flat and smooth) points inward.
+        const bool reversed = (face.Orientation() == TopAbs_REVERSED);
         for (int i = 1; i <= triCount; ++i) {
             int n1 = 0;
             int n2 = 0;
             int n3 = 0;
             triangulation->Triangle(i).Get(n1, n2, n3);
+            if (reversed) {
+                std::swap(n2, n3);
+            }
             SceneMeshStore::Triangle tri;
             tri.i0 = nodeOffset + static_cast<std::uint32_t>(n1 - 1);
             tri.i1 = nodeOffset + static_cast<std::uint32_t>(n2 - 1);

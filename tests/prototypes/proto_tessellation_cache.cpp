@@ -72,6 +72,27 @@ int main(int argc, char** argv) {
         }
     }
 
+    // Every triangle's winding normal must point OUT of the box (regression:
+    // TopAbs_REVERSED faces used the raw triangulation winding, producing
+    // inward normals on half the faces of every solid).
+    {
+        const QVector3D boxCenter(5.0F, 5.0F, 5.0F);
+        for (const auto& tri : mesh->triangles) {
+            const QVector3D& a = mesh->vertices[tri.i0];
+            const QVector3D& b = mesh->vertices[tri.i1];
+            const QVector3D& c = mesh->vertices[tri.i2];
+            const QVector3D normal = QVector3D::crossProduct(b - a, c - a);
+            if (normal.lengthSquared() < 1e-12F) {
+                continue;  // degenerate triangle contributes no normal
+            }
+            const QVector3D centroid = (a + b + c) / 3.0F;
+            if (QVector3D::dotProduct(normal, centroid - boxCenter) <= 0.0F) {
+                std::cerr << "Triangle winding normal points into the box.\n";
+                return 1;
+            }
+        }
+    }
+
     TopoDS_Shape cylinderShape = BRepPrimAPI_MakeCylinder(5.0, 10.0).Shape();
     std::string cylinderId = document.addBody(cylinderShape);
     if (cylinderId.empty()) {
