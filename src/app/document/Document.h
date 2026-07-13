@@ -26,8 +26,6 @@
 #include "../../render/scene/SceneMeshStore.h"
 #include "../../render/tessellation/TessellationCache.h"
 
-class BRepBuilderAPI_MakeShape;
-
 namespace onecad::app {
 
 /**
@@ -129,13 +127,9 @@ public:
     std::string addBody(const TopoDS_Shape& shape);
     bool addBodyWithId(const std::string& id, const TopoDS_Shape& shape,
                        const std::string& name = {}, std::string* errorOut = nullptr);
-    /// @param history Optional OCCT algorithm whose Modified/Generated/Deleted
-    /// history maps the old body's elements exactly (booleans, fillets,
-    /// chamfers). When provided it runs BEFORE the descriptor rebind sweep.
     bool updateBodyShape(const std::string& id, const TopoDS_Shape& shape,
                          bool emitSignal = true, const std::string& opId = {},
-                         std::string* errorOut = nullptr,
-                         BRepBuilderAPI_MakeShape* history = nullptr);
+                         std::string* errorOut = nullptr);
     const TopoDS_Shape* getBodyShape(const std::string& id) const;
     std::optional<core::sketch::SketchPlane> getSketchPlaneForFace(const std::string& bodyId,
                                                                     const std::string& faceId) const;
