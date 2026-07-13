@@ -69,6 +69,8 @@ private:
     void clearPreview();
     TopoDS_Shape buildRevolveShape(double angle) const;
     void detectBooleanMode(double angle);
+    gp_Pnt revolveProbeStart() const;
+    gp_Vec revolveProbeStep(double angleDeg) const;
 
     Viewport* viewport_ = nullptr;
     app::Document* document_ = nullptr;

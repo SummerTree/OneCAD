@@ -22,6 +22,7 @@
 #include "app/selection/SelectionManager.h"
 #include "core/loop/LoopDetector.h"
 #include "core/loop/RegionUtils.h"
+#include "core/modeling/BooleanOperation.h"
 #include "core/sketch/Sketch.h"
 #include "io/HistoryIO.h"
 
@@ -1219,6 +1220,39 @@ void testUpdateAttachmentRollsBackOnRegenFailure() {
     std::cout << " PASS\n";
 }
 
+void testDetectModeProbeClassification() {
+    std::cout << "Test: Boolean mode detection classifies by probe point..." << std::flush;
+
+    using core::modeling::BooleanOperation;
+    const TopoDS_Shape target = BRepPrimAPI_MakeBox(10.0, 10.0, 10.0).Shape();
+
+    // Pulling OUT of the top face: first material lies outside the target.
+    const TopoDS_Shape toolUp = BRepPrimAPI_MakeBox(gp_Pnt(3.0, 3.0, 10.0), 4.0, 4.0, 5.0).Shape();
+    if (BooleanOperation::detectMode(toolUp, {target}, gp_Pnt(5.0, 5.0, 10.0),
+                                     gp_Vec(0.0, 0.0, 1.0e-3)) != app::BooleanMode::Add) {
+        std::fprintf(stderr, "pull-out extrude not classified as Add\n");
+        std::exit(1);
+    }
+
+    // Pushing INTO the body: first material lies inside the target.
+    const TopoDS_Shape toolDown = BRepPrimAPI_MakeBox(gp_Pnt(3.0, 3.0, 6.0), 4.0, 4.0, 4.0).Shape();
+    if (BooleanOperation::detectMode(toolDown, {target}, gp_Pnt(5.0, 5.0, 10.0),
+                                     gp_Vec(0.0, 0.0, -1.0e-3)) != app::BooleanMode::Cut) {
+        std::fprintf(stderr, "push-in extrude not classified as Cut\n");
+        std::exit(1);
+    }
+
+    // Detached tool: new body.
+    const TopoDS_Shape toolFar = BRepPrimAPI_MakeBox(gp_Pnt(50.0, 0.0, 0.0), 4.0, 4.0, 4.0).Shape();
+    if (BooleanOperation::detectMode(toolFar, {target}, gp_Pnt(52.0, 2.0, 0.0),
+                                     gp_Vec(0.0, 0.0, 1.0e-3)) != app::BooleanMode::NewBody) {
+        std::fprintf(stderr, "detached tool not classified as NewBody\n");
+        std::exit(1);
+    }
+
+    std::cout << " PASS\n";
+}
+
 void testDatumPlusSketchTransactionUndoesTogether() {
     std::cout << "Test: Datum+sketch transaction undoes as one step..." << std::flush;
 
@@ -1847,6 +1881,7 @@ int main(int argc, char* argv[]) {
     testTemporalGuardCoversBooleanAndPattern();
     testRevolveAxisCrossingProfileFailsAsOpFailure();
     testDirtyFlagSkipsCleanBranch();
+    testDetectModeProbeClassification();
     testDatumPlusSketchTransactionUndoesTogether();
     testReprofileExtrudeSwapsSketchRegion();
     testReprofileToFaceRefRejected();

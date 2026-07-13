@@ -475,6 +475,20 @@ TopoDS_Shape RevolveTool::buildRevolveShape(double angle) const {
     }
 }
 
+gp_Pnt RevolveTool::revolveProbeStart() const {
+    return core::modeling::BooleanOperation::interiorPointOnFace(baseFace_)
+        .value_or(baseCenter_);
+}
+
+gp_Vec RevolveTool::revolveProbeStep(double angleDeg) const {
+    // Displacement of the profile's first swept material: rotate the probe
+    // point half a degree about the axis in the sweep direction.
+    gp_Trsf rotation;
+    rotation.SetRotation(axis_, ((angleDeg >= 0.0) ? 1.0 : -1.0) * (0.5 * M_PI / 180.0));
+    const gp_Pnt start = revolveProbeStart();
+    return gp_Vec(start, start.Transformed(rotation));
+}
+
 void RevolveTool::detectBooleanMode(double angle) {
     if (!document_) {
         booleanMode_ = app::BooleanMode::NewBody;
@@ -498,7 +512,7 @@ void RevolveTool::detectBooleanMode(double angle) {
             TopoDS_Shape tool = buildRevolveShape(angle);
             if (!tool.IsNull()) {
                 booleanMode_ = core::modeling::BooleanOperation::detectMode(
-                    tool, {*body}, axis_.Direction());
+                    tool, {*body}, revolveProbeStart(), revolveProbeStep(angle));
             } else {
                 booleanMode_ = app::BooleanMode::NewBody;
             }
@@ -538,7 +552,8 @@ void RevolveTool::detectBooleanMode(double angle) {
         return;
     }
 
-    booleanMode_ = core::modeling::BooleanOperation::detectMode(tool, targets, axis_.Direction());
+    booleanMode_ = core::modeling::BooleanOperation::detectMode(
+        tool, targets, revolveProbeStart(), revolveProbeStep(angle));
     qCDebug(logRevolveTool) << "detectBooleanMode:model-target"
                             << "angleDeg=" << angle
                             << "mode=" << static_cast<int>(booleanMode_)

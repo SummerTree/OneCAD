@@ -3,13 +3,17 @@
 #include <BRepAlgoAPI_Cut.hxx>
 #include <BRepAlgoAPI_Fuse.hxx>
 #include <BRepAlgoAPI_Common.hxx>
+#include <BRepClass3d_SolidClassifier.hxx>
+#include <BRepClass_FaceClassifier.hxx>
 #include <BRepExtrema_DistShapeShape.hxx>
 #include <BRepGProp.hxx>
+#include <BRepTools.hxx>
 #include <GProp_GProps.hxx>
 #include <TopExp_Explorer.hxx>
 #include <TopoDS.hxx>
 #include <TopoDS_Face.hxx>
 #include <BRepAdaptor_Surface.hxx>
+#include <gp_Pnt2d.hxx>
 
 namespace onecad::core::modeling {
 
@@ -51,56 +55,85 @@ TopoDS_Shape BooleanOperation::perform(const TopoDS_Shape& tool,
     return TopoDS_Shape();
 }
 
-app::BooleanMode BooleanOperation::detectMode(const TopoDS_Shape& tool, 
+app::BooleanMode BooleanOperation::detectMode(const TopoDS_Shape& tool,
                                               const std::vector<TopoDS_Shape>& targets,
-                                              const gp_Dir& extrudeDir) {
-    // Simple heuristic:
-    // 1. Find if tool intersects with any target.
-    // 2. If no intersection -> NewBody.
-    // 3. If intersection:
-    //    - Check direction vs normal of intersected faces? 
-    //    - For now, let's use a simpler approach similar to Shapr3D:
-    //      - If the tool was created by pulling OUT of a body -> Add.
-    //      - If the tool was created by pushing INTO a body -> Cut.
-    
-    // Determining "Pushing In" vs "Pulling Out":
-    // This requires context about the base face. 
-    // But here we only have the final shape and direction.
-    
-    // Alternative check: Volume intersection.
-    // If the tool shares significant volume with a target, it's likely a Cut (removing material) or Add.
-    // However, Extrude logic usually handles this by:
-    // - Positive extrusion from a face usually adds material.
-    // - Negative extrusion (into the body) usually removes material.
-    
-    // We can check if the tool volume overlaps significantly with any target.
-    
+                                              const gp_Pnt& probeStart,
+                                              const gp_Vec& probeStep) {
+    // Where does the tool's FIRST material live relative to the target?
+    // Inside the target solid -> the user is carving (Cut); outside -> the
+    // user is growing (Add). The previous overlap-only heuristic returned Cut
+    // for any volume overlap, misclassifying pull-out extrudes whose tool
+    // merely re-covers existing material.
+    const gp_Pnt probe = probeStart.Translated(probeStep);
+
     for (const auto& target : targets) {
-        // Quick bounding box check
+        if (target.IsNull()) {
+            continue;
+        }
         BRepExtrema_DistShapeShape dist(tool, target);
-        if (dist.Value() > 1e-6) {
-            continue; // Not touching
+        if (!dist.IsDone() || dist.Value() > 1e-6) {
+            continue;  // Not touching this target
         }
 
-        // Check for common volume
+        BRepClass3d_SolidClassifier classifier(target);
+        classifier.Perform(probe, 1e-7);
+        if (classifier.State() == TopAbs_IN) {
+            return app::BooleanMode::Cut;
+        }
+        if (classifier.State() == TopAbs_OUT) {
+            return app::BooleanMode::Add;
+        }
+
+        // ON/UNKNOWN (probe landed on the boundary): common-volume fallback.
         BRepAlgoAPI_Common common(target, tool);
         common.Build();
         if (common.IsDone() && !common.Shape().IsNull()) {
             GProp_GProps props;
             BRepGProp::VolumeProperties(common.Shape(), props);
             if (props.Mass() > 1e-6) {
-                // Significant overlap -> Likely Cut?
-                // Or user might want to Add. 
-                // Defaulting to Cut if overlap is detected is a common "Push" behavior.
-                return app::BooleanMode::Cut; 
+                return app::BooleanMode::Cut;
             }
         }
-        
-        // If touching but no volume overlap (e.g. face-to-face), it's likely an Add.
         return app::BooleanMode::Add;
     }
 
     return app::BooleanMode::NewBody;
+}
+
+std::optional<gp_Pnt> BooleanOperation::interiorPointOnFace(const TopoDS_Face& face) {
+    if (face.IsNull()) {
+        return std::nullopt;
+    }
+    Standard_Real umin = 0.0;
+    Standard_Real umax = 0.0;
+    Standard_Real vmin = 0.0;
+    Standard_Real vmax = 0.0;
+    BRepTools::UVBounds(face, umin, umax, vmin, vmax);
+    BRepAdaptor_Surface surface(face);
+
+    const auto tryUv = [&](double u, double v) -> std::optional<gp_Pnt> {
+        BRepClass_FaceClassifier classifier(face, gp_Pnt2d(u, v), 1e-7);
+        if (classifier.State() == TopAbs_IN) {
+            return surface.Value(u, v);
+        }
+        return std::nullopt;
+    };
+
+    if (auto p = tryUv((umin + umax) * 0.5, (vmin + vmax) * 0.5)) {
+        return p;
+    }
+    // Interior 7x7 grid handles annular / L-shaped profiles whose UV center
+    // falls in a hole.
+    for (int i = 1; i <= 7; ++i) {
+        for (int j = 1; j <= 7; ++j) {
+            const double u = umin + (umax - umin) * i / 8.0;
+            const double v = vmin + (vmax - vmin) * j / 8.0;
+            if (auto p = tryUv(u, v)) {
+                return p;
+            }
+        }
+    }
+    return std::nullopt;
 }
 
 } // namespace onecad::core::modeling

@@ -361,8 +361,14 @@ void ExtrudeTool::detectBooleanMode(double distance) {
             if (!targetShape_.IsNull()) {
                 TopoDS_Shape tool = buildExtrudeShape(distance);
                 if (!tool.IsNull()) {
+                    // Probe just past the profile in the growth direction.
+                    const gp_Pnt probeStart =
+                        core::modeling::BooleanOperation::interiorPointOnFace(baseFace_)
+                            .value_or(baseCenter_);
+                    const gp_Vec probeStep =
+                        gp_Vec(direction_) * ((distance >= 0.0) ? 1.0 : -1.0) * 1.0e-3;
                     booleanMode_ = core::modeling::BooleanOperation::detectMode(
-                        tool, {targetShape_}, direction_);
+                        tool, {targetShape_}, probeStart, probeStep);
                 } else {
                     booleanMode_ = app::BooleanMode::NewBody;
                 }
