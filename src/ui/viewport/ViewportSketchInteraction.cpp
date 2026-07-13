@@ -225,6 +225,9 @@ void Viewport::enterSketchMode(sketch::Sketch* sketch) {
     updateSnapGeometry();
 
     connect(m_toolManager.get(), &sketchTools::SketchToolManager::geometryCreated, this, [this]() {
+        // One undo step per created piece of geometry; the next mouse press
+        // opens the next capture, so chained line segments undo one by one.
+        endSketchToolGestureCapture(true);
         if (m_sketchRenderer) {
             m_sketchRenderer->updateGeometry();
             updateSketchRenderingState();
@@ -242,6 +245,7 @@ void Viewport::enterSketchMode(sketch::Sketch* sketch) {
 
 void Viewport::exitSketchMode() {
     if (!m_inSketchMode) return;
+    endSketchToolGestureCapture(false);
 
     if (m_activeSketch) {
         m_activeSketch->endPointDrag();
@@ -799,6 +803,7 @@ bool Viewport::pickPlaneSelection(const QPoint& screenPos, int* outIndex) const 
 
 void Viewport::activateLineTool() {
     setMoveSketchMode(false);
+    endSketchToolGestureCapture(false);
     if (m_toolManager) {
         m_toolManager->activateTool(sketchTools::ToolType::Line);
     }
@@ -806,6 +811,7 @@ void Viewport::activateLineTool() {
 
 void Viewport::activateCircleTool() {
     setMoveSketchMode(false);
+    endSketchToolGestureCapture(false);
     if (m_toolManager) {
         m_toolManager->activateTool(sketchTools::ToolType::Circle);
     }
@@ -813,6 +819,7 @@ void Viewport::activateCircleTool() {
 
 void Viewport::activateRectangleTool() {
     setMoveSketchMode(false);
+    endSketchToolGestureCapture(false);
     if (m_toolManager) {
         m_toolManager->activateTool(sketchTools::ToolType::Rectangle);
     }
@@ -820,6 +827,7 @@ void Viewport::activateRectangleTool() {
 
 void Viewport::activateArcTool() {
     setMoveSketchMode(false);
+    endSketchToolGestureCapture(false);
     if (m_toolManager) {
         m_toolManager->activateTool(sketchTools::ToolType::Arc);
     }
@@ -827,6 +835,7 @@ void Viewport::activateArcTool() {
 
 void Viewport::activateEllipseTool() {
     setMoveSketchMode(false);
+    endSketchToolGestureCapture(false);
     if (m_toolManager) {
         m_toolManager->activateTool(sketchTools::ToolType::Ellipse);
     }
@@ -834,6 +843,7 @@ void Viewport::activateEllipseTool() {
 
 void Viewport::activateTrimTool() {
     setMoveSketchMode(false);
+    endSketchToolGestureCapture(false);
     if (m_toolManager) {
         m_toolManager->activateTool(sketchTools::ToolType::Trim);
     }
@@ -841,12 +851,14 @@ void Viewport::activateTrimTool() {
 
 void Viewport::activateMirrorTool() {
     setMoveSketchMode(false);
+    endSketchToolGestureCapture(false);
     if (m_toolManager) {
         m_toolManager->activateTool(sketchTools::ToolType::Mirror);
     }
 }
 
 void Viewport::deactivateTool() {
+    endSketchToolGestureCapture(false);
     if (m_toolManager) {
         m_toolManager->deactivateTool();
     }
@@ -888,6 +900,47 @@ void Viewport::endSketchDragGestureCapture(bool commit) {
         m_sketchDragGestureCommand->cancelGesture();
     }
     m_sketchDragGestureCommand.reset();
+}
+
+void Viewport::beginSketchToolGestureCapture() {
+    if (!m_document || !m_activeSketch || m_sketchToolGestureCommand) {
+        return;
+    }
+    const std::string activeSketchId = resolveActiveSketchId();
+    if (activeSketchId.empty()) {
+        return;
+    }
+    auto command = std::make_unique<app::commands::SketchDragGestureCommand>(
+        m_document, activeSketchId, "Sketch Geometry");
+    if (!command->beginGesture()) {
+        return;
+    }
+    m_sketchToolGestureCommand = std::move(command);
+}
+
+void Viewport::endSketchToolGestureCapture(bool commit) {
+    if (!m_sketchToolGestureCommand) {
+        return;
+    }
+    if (commit) {
+        const bool finalized = m_sketchToolGestureCommand->finalizeGesture();
+        if (finalized && m_sketchToolGestureCommand->hasCapturedChange() && m_commandProcessor) {
+            m_commandProcessor->execute(std::move(m_sketchToolGestureCommand));
+            m_sketchToolGestureCommand.reset();
+            return;
+        }
+    } else if (m_sketchToolGestureCommand->restoreBeginState()) {
+        // Cancelled mid-gesture: partial tool state (e.g. a line tool's first
+        // clicked point) must not survive outside the undo stack.
+        if (m_sketchRenderer) {
+            m_sketchRenderer->updateGeometry();
+            m_sketchRenderer->updateConstraints();
+            updateSketchRenderingState();
+        }
+        update();
+        emit sketchUpdated();
+    }
+    m_sketchToolGestureCommand.reset();
 }
 
 void Viewport::notifySketchUpdated() {

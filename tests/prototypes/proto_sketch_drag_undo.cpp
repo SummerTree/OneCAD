@@ -197,6 +197,125 @@ bool runCancelledGestureTest() {
     return true;
 }
 
+bool runCreationGestureUndoRedoTest() {
+    // A creation gesture (tool adds geometry between begin and finalize) must
+    // become ONE undo step: undo removes the geometry, redo restores it.
+    onecad::app::Document document;
+    onecad::app::commands::CommandProcessor processor;
+
+    auto sketch = std::make_unique<onecad::core::sketch::Sketch>();
+    const std::string sketchId = document.addSketch(std::move(sketch));
+
+    auto gesture = std::make_unique<onecad::app::commands::SketchDragGestureCommand>(
+        &document, sketchId, "Sketch Geometry");
+    if (!gesture->beginGesture()) {
+        return false;
+    }
+    auto* active = document.getSketch(sketchId);
+    const auto p1 = active->addPoint(0.0, 0.0);
+    const auto p2 = active->addPoint(10.0, 0.0);
+    active->addLine(p1, p2);
+    if (!gesture->finalizeGesture() || !gesture->hasCapturedChange()) {
+        std::cerr << "Creation gesture did not capture the change\n";
+        return false;
+    }
+    if (gesture->label() != "Sketch Geometry") {
+        std::cerr << "Gesture label not propagated\n";
+        return false;
+    }
+    if (!processor.execute(std::move(gesture))) {
+        return false;
+    }
+
+    const std::size_t createdCount = document.getSketch(sketchId)->getAllEntities().size();
+    processor.undo();
+    if (document.getSketch(sketchId)->getAllEntities().size() >= createdCount) {
+        std::cerr << "Undo did not remove the created geometry\n";
+        return false;
+    }
+    processor.redo();
+    if (document.getSketch(sketchId)->getAllEntities().size() != createdCount) {
+        std::cerr << "Redo did not restore the created geometry\n";
+        return false;
+    }
+    return true;
+}
+
+bool runConstraintGestureUndoTest() {
+    // Constraint add/remove funnels wrap the mutation in one gesture: undo
+    // restores both the constraint count and the solved positions.
+    onecad::app::Document document;
+    onecad::app::commands::CommandProcessor processor;
+
+    auto sketch = std::make_unique<onecad::core::sketch::Sketch>();
+    const auto p1 = sketch->addPoint(0.0, 0.0);
+    const auto p2 = sketch->addPoint(10.0, 3.0);
+    const auto line = sketch->addLine(p1, p2);
+    const std::string sketchId = document.addSketch(std::move(sketch));
+    auto* active = document.getSketch(sketchId);
+    const std::size_t constraintsBefore = active->getAllConstraints().size();
+
+    auto gesture = std::make_unique<onecad::app::commands::SketchDragGestureCommand>(
+        &document, sketchId, "Add Constraint");
+    if (!gesture->beginGesture()) {
+        return false;
+    }
+    if (active->addHorizontal(line).empty()) {
+        return false;
+    }
+    active->solve();
+    if (!gesture->finalizeGesture() || !gesture->hasCapturedChange()) {
+        return false;
+    }
+    if (!processor.execute(std::move(gesture))) {
+        return false;
+    }
+
+    processor.undo();
+    active = document.getSketch(sketchId);
+    if (active->getAllConstraints().size() != constraintsBefore) {
+        std::cerr << "Undo did not remove the constraint\n";
+        return false;
+    }
+    if (!pointEquals(active, p2, 10.0, 3.0)) {
+        std::cerr << "Undo did not restore the pre-solve position\n";
+        return false;
+    }
+    return true;
+}
+
+bool runRestoreBeginStateTest() {
+    // Cancelling a tool gesture mid-way (e.g. a line tool's first click) must
+    // roll the sketch back to the begin snapshot.
+    onecad::app::Document document;
+    onecad::app::commands::CommandProcessor processor;
+
+    auto sketch = std::make_unique<onecad::core::sketch::Sketch>();
+    const std::string sketchId = document.addSketch(std::move(sketch));
+
+    auto gesture = std::make_unique<onecad::app::commands::SketchDragGestureCommand>(
+        &document, sketchId, "Sketch Geometry");
+    if (!gesture->beginGesture()) {
+        return false;
+    }
+    document.getSketch(sketchId)->addPoint(4.0, 4.0);  // orphan first click
+    if (!gesture->restoreBeginState()) {
+        std::cerr << "restoreBeginState failed\n";
+        return false;
+    }
+    gesture->cancelGesture();
+
+    if (!document.getSketch(sketchId)->getAllEntities().empty()) {
+        std::cerr << "Cancelled gesture left an orphan point behind\n";
+        return false;
+    }
+    if (stackDepthByRoundtrip(processor) != 0) {
+        std::cerr << "Cancelled gesture reached the undo stack\n";
+        return false;
+    }
+    return true;
+}
+
 }
 
 int main() {
@@ -207,6 +326,15 @@ int main() {
         return 1;
     }
     if (!runCancelledGestureTest()) {
+        return 1;
+    }
+    if (!runCreationGestureUndoRedoTest()) {
+        return 1;
+    }
+    if (!runConstraintGestureUndoTest()) {
+        return 1;
+    }
+    if (!runRestoreBeginStateTest()) {
         return 1;
     }
 

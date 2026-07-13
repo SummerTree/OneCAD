@@ -186,8 +186,15 @@ Viewport::Viewport(QWidget* parent)
         // Check if it's a dimensional constraint
         auto* dimConstraint = dynamic_cast<core::sketch::DimensionalConstraint*>(constraint);
         if (dimConstraint) {
+            auto gesture = std::make_unique<app::commands::SketchDragGestureCommand>(
+                m_document, resolveActiveSketchId(), "Edit Dimension");
+            const bool captured = gesture->beginGesture();
             dimConstraint->setValue(newValue);
             m_activeSketch->solve();
+            if (captured && gesture->finalizeGesture() && gesture->hasCapturedChange() &&
+                m_commandProcessor) {
+                m_commandProcessor->execute(std::move(gesture));
+            }
             if (m_sketchRenderer) {
                 m_sketchRenderer->updateGeometry();
                 m_sketchRenderer->setConflictingConstraints(m_activeSketch->getConflictingConstraints());
@@ -668,6 +675,9 @@ void Viewport::mousePressEvent(QMouseEvent* event) {
         if (event->button() == Qt::LeftButton || event->button() == Qt::RightButton) {
             syncSnapGridSizeFromCamera();
             sketch::Vec2d sketchPos = screenToSketch(event->pos());
+            if (event->button() == Qt::LeftButton) {
+                beginSketchToolGestureCapture();
+            }
             m_toolManager->handleMousePress(sketchPos, event->button());
             // Still allow right-click to orbit if tool is in Idle state
             if (event->button() == Qt::RightButton && !m_toolManager->activeTool()->isActive()) {

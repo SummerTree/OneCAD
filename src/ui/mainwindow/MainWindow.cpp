@@ -8,6 +8,7 @@
 #include "../../core/sketch/tools/SketchToolManager.h"
 #include "../../app/commands/AddDatumPlaneCommand.h"
 #include "../../app/commands/AddSketchCommand.h"
+#include "../../app/commands/SketchDragGestureCommand.h"
 #include "../../app/commands/UpdateSketchAttachmentCommand.h"
 #include "../../app/commands/CommandProcessor.h"
 #include "../../app/commands/DeleteBodyCommand.h"
@@ -2369,6 +2370,32 @@ void MainWindow::onConstraintPanelConstraintSelected(const QString& constraintId
     m_viewport->selectSketchConstraint(constraintId);
 }
 
+
+namespace {
+// Captures a whole-sketch snapshot around a mutation scope and pushes ONE
+// undoable command when anything actually changed (no-ops never reach the
+// undo stack). Commits on scope exit so early returns are covered.
+struct ScopedSketchGesture {
+    std::unique_ptr<onecad::app::commands::SketchDragGestureCommand> cmd;
+    onecad::app::commands::CommandProcessor* processor = nullptr;
+    bool active = false;
+
+    ScopedSketchGesture(onecad::app::Document* document, const std::string& sketchId,
+                        std::string gestureLabel,
+                        onecad::app::commands::CommandProcessor* commandProcessor)
+        : cmd(std::make_unique<onecad::app::commands::SketchDragGestureCommand>(
+              document, sketchId, std::move(gestureLabel)))
+        , processor(commandProcessor) {
+        active = cmd->beginGesture();
+    }
+    ~ScopedSketchGesture() {
+        if (active && cmd && cmd->finalizeGesture() && cmd->hasCapturedChange() && processor) {
+            processor->execute(std::move(cmd));
+        }
+    }
+};
+} // namespace
+
 void MainWindow::onConstraintPanelDeleteRequested(const QString& constraintId) {
     if (!m_viewport || !m_viewport->isInSketchMode() || constraintId.isEmpty()) {
         return;
@@ -2380,6 +2407,8 @@ void MainWindow::onConstraintPanelDeleteRequested(const QString& constraintId) {
         return;
     }
 
+    ScopedSketchGesture gesture(m_document.get(), m_activeSketchId,
+                                "Delete Constraint", m_commandProcessor.get());
     const bool removed = sketch->removeConstraint(constraintId.toStdString());
     if (!removed) {
         m_toolStatus->setText(tr("Constraint could not be removed"));
@@ -2433,6 +2462,9 @@ void MainWindow::onConstraintRequested(core::sketch::ConstraintType constraintTy
     }
 
     std::vector<core::sketch::EntityID> selected = renderer->getSelectedEntities();
+
+    ScopedSketchGesture gesture(m_document.get(), m_activeSketchId,
+                                "Add Constraint", m_commandProcessor.get());
 
     using CT = core::sketch::ConstraintType;
     CT type = constraintType;

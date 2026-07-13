@@ -13,15 +13,21 @@ namespace onecad::app::commands {
 
 class SketchDragGestureCommand : public Command {
 public:
-    SketchDragGestureCommand(Document* document, std::string sketchId);
+    SketchDragGestureCommand(Document* document, std::string sketchId,
+                             std::string label = "Sketch Drag Gesture");
 
     bool beginGesture();
     bool finalizeGesture();
     void cancelGesture();
 
+    /// Restore the sketch to the begin-snapshot. Used when a tool gesture is
+    /// cancelled after it already mutated the sketch (e.g. a line tool's first
+    /// clicked point) — the mutation must not survive outside the undo stack.
+    bool restoreBeginState();
+
     bool execute() override;
     bool undo() override;
-    std::string label() const override { return "Sketch Drag Gesture"; }
+    std::string label() const override { return label_; }
 
     [[nodiscard]] bool isReadyForExecution() const { return finalized_; }
     [[nodiscard]] bool hasCapturedChange() const { return changed_; }
@@ -36,6 +42,7 @@ private:
 
     Document* document_ = nullptr;
     std::string sketchId_;
+    std::string label_;
 
     std::string beforeJson_;
     std::string beforeName_;

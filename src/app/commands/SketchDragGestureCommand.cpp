@@ -8,9 +8,11 @@
 
 namespace onecad::app::commands {
 
-SketchDragGestureCommand::SketchDragGestureCommand(Document* document, std::string sketchId)
+SketchDragGestureCommand::SketchDragGestureCommand(Document* document, std::string sketchId,
+                                                   std::string label)
     : document_(document),
-      sketchId_(std::move(sketchId)) {
+      sketchId_(std::move(sketchId)),
+      label_(std::move(label)) {
 }
 
 bool SketchDragGestureCommand::beginGesture() {
@@ -52,6 +54,13 @@ bool SketchDragGestureCommand::finalizeGesture() {
                (beforeVisible_ != afterVisible_);
     finalized_ = true;
     return true;
+}
+
+bool SketchDragGestureCommand::restoreBeginState() {
+    if (!began_ || beforeJson_.empty()) {
+        return false;
+    }
+    return restoreSketchState(beforeJson_, beforeName_, beforeVisible_);
 }
 
 void SketchDragGestureCommand::cancelGesture() {

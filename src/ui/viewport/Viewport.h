@@ -308,6 +308,10 @@ private:
     void updateSketchHoverFromManager();
     void syncSuppressedConstraintMarkers();
     void beginSketchDragGestureCapture();
+    // Sketch TOOL gesture capture (creation tools): one undoable command per
+    // created piece of geometry; cancel restores the begin snapshot.
+    void beginSketchToolGestureCapture();
+    void endSketchToolGestureCapture(bool commit);
     void endSketchDragGestureCapture(bool commit);
     app::selection::PickResult buildSketchPickResult(const QPoint& screenPos) const;
     QStringList buildDeepSelectLabels(const std::vector<app::selection::SelectionItem>& candidates) const;
@@ -404,6 +408,7 @@ private:
     std::string m_pointDragCandidateId;
     std::string m_selectedRegionId;
     std::unique_ptr<app::commands::SketchDragGestureCommand> m_sketchDragGestureCommand;
+    std::unique_ptr<app::commands::SketchDragGestureCommand> m_sketchToolGestureCommand;
     bool m_sketchDragGestureCaptureEnabled = true;
     bool m_moveSketchModeActive = false;
     core::sketch::Vec2d m_moveSketchLastSketchPos{0.0, 0.0};

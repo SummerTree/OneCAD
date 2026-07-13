@@ -74,6 +74,12 @@ bool CommandProcessor::execute(std::unique_ptr<Command> command) {
     } else {
         undoStack_.push_back(std::move(command));
         redoStack_.clear();
+        // Bound memory: sketch gestures snapshot whole sketches, so a long
+        // session would otherwise grow without limit.
+        constexpr std::size_t kMaxUndoDepth = 200;
+        if (undoStack_.size() > kMaxUndoDepth) {
+            undoStack_.erase(undoStack_.begin());
+        }
     }
 
     emitStateChange(prevUndo, prevRedo);
