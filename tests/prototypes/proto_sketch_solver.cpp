@@ -165,6 +165,41 @@ void testNewConstraintTranslations() {
     assert(result.success);
 }
 
+void testDofDiagnosisWithRedundantConstraint() {
+    // A duplicate Horizontal is redundant, not conflicting: the naive count
+    // used to subtract it twice and misreport the sketch as tighter than it
+    // is; PlaneGCS diagnosis must ignore the redundancy.
+    Sketch sketch;
+    auto p1 = sketch.addPoint(0.0, 0.0);
+    auto p2 = sketch.addPoint(10.0, 0.0);
+    auto line = sketch.addLine(p1, p2);
+
+    const int dofBefore = sketch.getDegreesOfFreedom();
+    assert(dofBefore == 4);  // two free points
+
+    assert(!sketch.addHorizontal(line).empty());
+    const int dofOne = sketch.getDegreesOfFreedom();
+    assert(dofOne == 3);
+
+    assert(!sketch.addHorizontal(line).empty());  // redundant duplicate
+    const int dofTwo = sketch.getDegreesOfFreedom();
+    assert(dofTwo == 3);  // unchanged — redundancy removes nothing
+    assert(!sketch.isOverConstrained());
+}
+
+void testConflictingConstraintsDetected() {
+    // Two fixed points cannot satisfy an incompatible distance: a genuine
+    // conflict (unlike H+V on one line, which a degenerate line satisfies).
+    Sketch sketch;
+    auto p1 = sketch.addPoint(0.0, 0.0);
+    auto p2 = sketch.addPoint(10.0, 0.0);
+
+    assert(!sketch.addFixed(p1).empty());
+    assert(!sketch.addFixed(p2).empty());
+    assert(!sketch.addHorizontalDistance(p1, p2, 25.0).empty());
+    assert(sketch.isOverConstrained());
+}
+
 } // namespace
 
 int main() {
@@ -332,6 +367,8 @@ int main() {
     testFixedPointDragNoMovement();
     testPointOnCurveSolverTranslation();
     testNewConstraintTranslations();
+    testDofDiagnosisWithRedundantConstraint();
+    testConflictingConstraintsDetected();
 
     Sketch largeDrag;
     auto ld1 = largeDrag.addPoint(0.0, 0.0);

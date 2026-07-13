@@ -791,6 +791,23 @@ bool ConstraintSolver::isSolvable() const {
     return !gcsSystem_->hasConflicting();
 }
 
+int ConstraintSolver::diagnose() {
+    if (!gcsSystem_) {
+        return -1;
+    }
+    gcsSystem_->declareUnknowns(parameters_);
+    gcsSystem_->declareDrivenParams(drivenParameters_);
+    return gcsSystem_->diagnose(toGcsAlgorithm(config_.algorithm));
+}
+
+bool ConstraintSolver::hasConflicting() const {
+    return gcsSystem_ && gcsSystem_->hasConflicting();
+}
+
+bool ConstraintSolver::hasRedundant() const {
+    return gcsSystem_ && gcsSystem_->hasRedundant();
+}
+
 void ConstraintSolver::solveAsync(std::function<void(SolverResult)> callback) {
     if (solving_) {
         return;

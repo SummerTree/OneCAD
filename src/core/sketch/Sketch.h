@@ -471,10 +471,17 @@ public:
     /**
      * @brief Get total degrees of freedom
      *
-     * Per SPECIFICATION.md §23.8:
-     * DOF = Σ(entity DOF) - Σ(constraint DOF removed)
+     * PlaneGCS diagnosis (redundant-aware) when the sketch is fully
+     * solver-representable; naive Σ(entity DOF) − Σ(constraint DOF removed)
+     * fallback for sketches containing solver-unsupported entities (ellipses).
      */
     int getDegreesOfFreedom() const;
+
+    /// Naive static DOF count (see getDegreesOfFreedom); may go negative.
+    int naiveDegreesOfFreedom() const;
+
+    /// True when an entity type not registered with PlaneGCS is present.
+    bool hasSolverUnsupportedEntities() const;
 
     /**
      * @brief Check if sketch is fully constrained (DOF == 0)

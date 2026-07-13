@@ -306,6 +306,19 @@ public:
      */
     bool isSolvable() const;
 
+    /**
+     * @brief PlaneGCS diagnosis of the declared system.
+     * @return True degrees of freedom (redundant constraints do not reduce
+     *         DOF, unlike a naive constraint count), or -1 when unavailable.
+     */
+    int diagnose();
+
+    /// True when the last solve/diagnose found genuinely conflicting constraints.
+    bool hasConflicting() const;
+
+    /// True when the last solve/diagnose found redundant constraints.
+    bool hasRedundant() const;
+
     // ========== Threading Support ==========
 
     /**

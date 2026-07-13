@@ -27,6 +27,8 @@
 #include <BRepPrimAPI_MakeRevol.hxx>
 #include <BRep_Builder.hxx>
 #include <BRepCheck_Analyzer.hxx>
+#include <Bnd_Box.hxx>
+#include <BRepBndLib.hxx>
 #include <BRepOffsetAPI_DraftAngle.hxx>
 #include <BRepAdaptor_Curve.hxx>
 #include <BRepAdaptor_Surface.hxx>
@@ -861,8 +863,38 @@ TopoDS_Shape RegenerationEngine::buildExtrude(const OperationRecord& op, std::st
         switch (mode) {
             case ExtrudeMode::Blind:
                 return blind;
-            case ExtrudeMode::ThroughAll:
-                return blind >= 0.0 ? 1.0e5 : -1.0e5;
+            case ExtrudeMode::ThroughAll: {
+                // Extent that provably crosses the boolean target: max projection
+                // of the target's bbox corners onto refDir, plus a margin. Falls
+                // back to a large constant when no target resolves (NewBody
+                // through-all keeps prior behavior).
+                const double sign = blind >= 0.0 ? 1.0 : -1.0;
+                const std::string throughBodyId = resolveBooleanTargetBodyId(op, params.targetBodyId);
+                if (!throughBodyId.empty()) {
+                    if (auto bodyOpt = resolveBody(throughBodyId)) {
+                        Bnd_Box box;
+                        BRepBndLib::Add(*bodyOpt, box);
+                        if (!box.IsVoid()) {
+                            Standard_Real xmin = 0.0, ymin = 0.0, zmin = 0.0;
+                            Standard_Real xmax = 0.0, ymax = 0.0, zmax = 0.0;
+                            box.Get(xmin, ymin, zmin, xmax, ymax, zmax);
+                            double maxProj = 0.0;
+                            for (int corner = 0; corner < 8; ++corner) {
+                                const gp_Pnt p((corner & 1) ? xmax : xmin,
+                                               (corner & 2) ? ymax : ymin,
+                                               (corner & 4) ? zmax : zmin);
+                                maxProj = std::max(maxProj,
+                                                   gp_Vec(prismOrigin, p).Dot(gp_Vec(refDir)));
+                            }
+                            const double diag = gp_Pnt(xmin, ymin, zmin).Distance(gp_Pnt(xmax, ymax, zmax));
+                            return sign * (std::max(maxProj, kMinValue) + 0.01 * diag + 1.0);
+                        }
+                    }
+                }
+                qCWarning(logRegen) << "buildExtrude:through-all-fallback-extent"
+                                    << "opId=" << QString::fromStdString(op.opId);
+                return sign * 1.0e5;
+            }
             case ExtrudeMode::ToFace: {
                 auto faceOpt = resolveFace(faceTargetId);
                 if (!faceOpt) {

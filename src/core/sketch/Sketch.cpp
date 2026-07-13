@@ -1550,46 +1550,72 @@ SolveResult Sketch::solveWithDrag(EntityID draggedPoint, const Vec2d& targetPos)
     return result;
 }
 
+int Sketch::naiveDegreesOfFreedom() const {
+    // Static count: entity DOF minus constraint arity. Wrong in the presence
+    // of redundant constraints (each still subtracts); kept only as the
+    // fallback for sketches the solver cannot represent (ellipses).
+    int total = 0;
+    for (const auto& entity : entities_) {
+        if (entity) {
+            total += entity->degreesOfFreedom();
+        }
+    }
+    for (const auto& constraint : constraints_) {
+        if (constraint) {
+            total -= constraint->degreesRemoved();
+        }
+    }
+    return total;
+}
+
+bool Sketch::hasSolverUnsupportedEntities() const {
+    for (const auto& entity : entities_) {
+        if (entity && entity->type() == EntityType::Ellipse) {
+            return true;  // ellipses are not registered with PlaneGCS
+        }
+    }
+    return false;
+}
+
 int Sketch::getDegreesOfFreedom() const {
     if (!dofDirty_ && cachedDOF_ >= 0) {
         return cachedDOF_;
     }
 
-    int total = 0;
-    for (const auto& entity : entities_) {
-        if (entity) {
-            total += entity->degreesOfFreedom();
+    int dof = std::max(naiveDegreesOfFreedom(), 0);
+    if (!hasSolverUnsupportedEntities()) {
+        // PlaneGCS diagnosis gives the TRUE remaining DOF: redundant
+        // constraints no longer make a fully-defined sketch read as
+        // over-constrained. Solver rebuild mutates cache state only.
+        auto* self = const_cast<Sketch*>(this);
+        if (self->solverDirty_ || !self->solver_) {
+            self->rebuildSolver();
+        }
+        if (self->solver_) {
+            const int diagnosed = self->solver_->diagnose();
+            if (diagnosed >= 0) {
+                dof = diagnosed;
+            }
         }
     }
 
-    for (const auto& constraint : constraints_) {
-        if (constraint) {
-            total -= constraint->degreesRemoved();
-        }
-    }
-
-    if (total < 0) {
-        total = 0;
-    }
-
-    cachedDOF_ = total;
+    cachedDOF_ = dof;
     dofDirty_ = false;
     return cachedDOF_;
 }
 
 bool Sketch::isOverConstrained() const {
-    int total = 0;
-    for (const auto& entity : entities_) {
-        if (entity) {
-            total += entity->degreesOfFreedom();
+    if (!hasSolverUnsupportedEntities()) {
+        auto* self = const_cast<Sketch*>(this);
+        if (self->solverDirty_ || !self->solver_) {
+            self->rebuildSolver();
+        }
+        if (self->solver_) {
+            self->solver_->diagnose();
+            return self->solver_->hasConflicting();
         }
     }
-    for (const auto& constraint : constraints_) {
-        if (constraint) {
-            total -= constraint->degreesRemoved();
-        }
-    }
-    return total < 0;
+    return naiveDegreesOfFreedom() < 0;
 }
 
 std::vector<ConstraintID> Sketch::getConflictingConstraints() const {
