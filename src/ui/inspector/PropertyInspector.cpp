@@ -6,7 +6,6 @@
 #include <QFormLayout>
 #include <QLabel>
 #include <QLineEdit>
-#include <QPushButton>
 #include <QStackedWidget>
 #include <QTimer>
 #include <QVBoxLayout>
@@ -102,10 +101,6 @@ void PropertyInspector::createBodyWidget() {
 
     m_massProps = new MassPropertiesPanel;
     layout->addWidget(m_massProps);
-
-    m_bodyColorStub = new QPushButton(tr("Appearance (coming soon)"));
-    m_bodyColorStub->setEnabled(false);
-    layout->addWidget(m_bodyColorStub);
 
     layout->addStretch();
 }

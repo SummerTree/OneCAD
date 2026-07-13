@@ -1625,12 +1625,6 @@ void Viewport::keyPressEvent(QKeyEvent* event) {
         return;
     }
 
-    // G toggles Move Sketch mode when in sketch mode
-    if (m_inSketchMode && event->key() == Qt::Key_G) {
-        setMoveSketchMode(!m_moveSketchModeActive);
-        event->accept();
-        return;
-    }
 
     // Forward to sketch tool if active
     if (m_inSketchMode && m_toolManager && m_toolManager->hasActiveTool()) {

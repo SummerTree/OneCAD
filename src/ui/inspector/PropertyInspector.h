@@ -9,7 +9,6 @@ class QLabel;
 class QStackedWidget;
 class QLineEdit;
 class QCheckBox;
-class QPushButton;
 class QTimer;
 
 namespace onecad::app {
@@ -60,7 +59,6 @@ private:
     MassPropertiesPanel* m_massProps = nullptr;
     QLineEdit* m_bodyNameEdit = nullptr;
     QCheckBox* m_bodyVisibleCheck = nullptr;
-    QPushButton* m_bodyColorStub = nullptr;
     QLabel* m_opTypeLabel = nullptr;
     QLabel* m_opIdLabel = nullptr;
     QLabel* m_opParamsLabel = nullptr;

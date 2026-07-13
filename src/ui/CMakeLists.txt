@@ -40,7 +40,6 @@ add_library(onecad_ui STATIC
     dialogs/CrashRecoveryDialog.cpp
     dialogs/MeshExportDialog.cpp
     dialogs/StepExportDialog.cpp
-    tools/MeasureTool.cpp
     inspector/MassPropertiesPanel.cpp
     inspector/PropertyInspector.cpp
     palette/ActionRegistry.cpp

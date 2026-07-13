@@ -173,30 +173,19 @@ void FeatureCard::updateStyle() {
     const auto& theme = ThemeManager::instance().currentTheme();
     
     // Update background and border based on state
-    // We want 1px border. standard nav-item property might just check selection.
-    // Let's manually set the stylesheet to be precise about the 1px border and hover color
-    
-    QColor bgColor = Qt::transparent;
-    QColor borderColor = theme.ui.panelBorder; // Or transparent if not wanted always? User said "all rows have 1px border"
-    // Actually, usually lists have borders between items or around them.
-    // If "all rows have ... 1px border", likely means a border-bottom or full border.
-    // Given the screenshot, it looks like individual cards with spacing?
-    // Let's assume full border for the card.
-    
+    // Card styling mirrors the Navigator rows: full 1px border, hover tint,
+    // selection uses the navigator selection color for both fill and border.
+    QColor bgColor;
+    QColor borderColor;
     if (selected_) {
         bgColor = theme.navigator.itemSelectedBackground;
-        borderColor = theme.navigator.itemSelectedBackground; // Highlight border on select? Matching bg
+        borderColor = theme.navigator.itemSelectedBackground;
     } else if (hovered_) {
-         // "Item should be highlighted with primary color" -> usually this means text or icon, or a subtle background tint.
-         // Consistent with Navigator: itemHoverBackground.
-         bgColor = theme.navigator.itemHoverBackground;
-         // "highlighted with primary color" -> using the selection color for border to indicate "primary" highlight
-         borderColor = theme.navigator.itemSelectedBackground;
+        bgColor = theme.navigator.itemHoverBackground;
+        borderColor = theme.navigator.itemSelectedBackground;
     } else {
-        // Base state
-        // "proper and same background color for all sections"
-        bgColor = theme.ui.panelBackground; // Or a specific card background?
-        borderColor = theme.ui.panelBorder; // Default border
+        bgColor = theme.ui.panelBackground;
+        borderColor = theme.ui.panelBorder;
     }
 
     // Apply Stylesheet to self

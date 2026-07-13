@@ -13,6 +13,7 @@ struct ThemeUiColors {
     QColor windowBackground;
     QColor widgetBackground;
     QColor widgetText;
+    QColor textSecondary;  // subtitles/captions — replaces QPalette::Disabled lookups
     QColor navigatorBackground;
     QColor panelBackground;
     QColor inspectorBackground;

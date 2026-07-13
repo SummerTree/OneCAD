@@ -172,18 +172,10 @@ bool ExtrudeTool::handleMouseRelease(const QPoint& screenPos, Qt::MouseButton bu
         return false;
     }
 
-    // Re-calculate distance one last time to match mouseMove logic precisely
+    // Recompute the distance at the release position: a fast drag can release at
+    // a pixel the last mouseMove never saw, leaving currentDistance_ one event stale.
     double distance = currentDistance_;
-    // If needed we could re-run the projection logic here, but using the last cached valid distance 
-    // from mouseMove is usually safer and consistent (unless we want to support 'click-release' without move?).
-    // Just to be safe, let's re-run the basic projection if we moved.
-    
     if (screenPos != dragStart_) {
-        // ... Duplicate projection logic or assume currentDistance_ is fresh from last specific move event move?
-        // Actually, handleMouseMove updates currentDistance_. If we released at a different spot,
-        // handleMouseMove might not have been called for that *exact* pixel if dropped quickly.
-        // Let's copy the robust logic to be sure.
-        
         if (viewport_ && viewport_->camera()) {
              auto* camera = viewport_->camera();
             float aspectRatio = static_cast<float>(viewport_->width()) / static_cast<float>(viewport_->height());

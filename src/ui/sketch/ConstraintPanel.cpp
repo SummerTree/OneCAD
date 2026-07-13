@@ -202,7 +202,7 @@ void ConstraintPanel::populateContext() {
         m_subtitleLabel->setText(tr("No active sketch"));
         QPalette subtitlePalette = m_subtitleLabel->palette();
         subtitlePalette.setColor(QPalette::WindowText,
-                                 palette().color(QPalette::Disabled, QPalette::Text));
+                                 ThemeManager::instance().currentTheme().ui.textSecondary);
         m_subtitleLabel->setPalette(subtitlePalette);
         m_hintLabel->setText(tr("Enter sketch mode to inspect constraints."));
         m_listWidget->setVisible(false);
@@ -230,7 +230,7 @@ void ConstraintPanel::populateConstraintSelection() {
     m_subtitleLabel->setText(formatSelectionCount(static_cast<int>(m_selectedEntityIds.size())));
     QPalette subtitlePalette = m_subtitleLabel->palette();
     subtitlePalette.setColor(QPalette::WindowText,
-                             palette().color(QPalette::Disabled, QPalette::Text));
+                             ThemeManager::instance().currentTheme().ui.textSecondary);
     m_subtitleLabel->setPalette(subtitlePalette);
     m_listWidget->clear();
 
@@ -308,8 +308,7 @@ void ConstraintPanel::populateConstraintDetails() {
                                  .arg(icon, typeName, satisfied ? tr("Satisfied")
                                                                 : tr("Unsatisfied")));
     QPalette subtitlePalette = m_subtitleLabel->palette();
-    subtitlePalette.setColor(QPalette::WindowText, satisfied ? palette().color(QPalette::Disabled,
-                                                                                QPalette::Text)
+    subtitlePalette.setColor(QPalette::WindowText, satisfied ? ThemeManager::instance().currentTheme().ui.textSecondary
                                                              : m_unsatisfiedColor);
     m_subtitleLabel->setPalette(subtitlePalette);
 
@@ -353,8 +352,7 @@ void ConstraintPanel::populateSummaryState() {
     QPalette subtitlePalette = m_subtitleLabel->palette();
     subtitlePalette.setColor(QPalette::WindowText,
                              m_conflictCount > 0 ? m_conflictColor
-                                                 : palette().color(QPalette::Disabled,
-                                                                   QPalette::Text));
+                                                 : ThemeManager::instance().currentTheme().ui.textSecondary);
     m_subtitleLabel->setPalette(subtitlePalette);
 
     m_listWidget->setVisible(false);

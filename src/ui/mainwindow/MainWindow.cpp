@@ -455,9 +455,9 @@ void MainWindow::setupMenuBar() {
                     m_redoAction, &QAction::setEnabled);
         }
     }
-    editMenu->addSeparator();
-    editMenu->addAction(tr("&Delete"), QKeySequence::Delete, this, []() {});
-    editMenu->addAction(tr("Select &All"), QKeySequence::SelectAll, this, []() {});
+    // NOTE: no Edit>Delete / Select All entries yet — the previous no-op stubs
+    // swallowed the Delete key and polluted the command palette. Fully wired
+    // QAction versions land with the action-architecture phase.
 
     // Insert menu
     QMenu* insertMenu = menuBar->addMenu(tr("&Insert"));

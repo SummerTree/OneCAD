@@ -204,9 +204,10 @@ void HistoryPanel::rebuild() {
         }
 
         QTreeWidgetItem* parentItem = nullptr;
-        
-        // Group logic... (simplified for now to match old implementation structure)
-        // Note: The original implementation had grouping logic which we preserve
+
+        // Parent each feature under its source: sketch-region features group
+        // under their sketch header, body-input features under the producer of
+        // that body when it is already in the tree.
         if (std::holds_alternative<app::SketchRegionRef>(opRecord->input)) {
             const auto& ref = std::get<app::SketchRegionRef>(opRecord->input);
             auto sketchIt = sketchItems.find(ref.sketchId);
@@ -224,15 +225,7 @@ void HistoryPanel::rebuild() {
             } else {
                 parentItem = sketchIt->second;
             }
-        } 
-        // ... rest of parenting logic preserved implicitly by iterating sorted list ...
-        // For simplicity and robustness, I'll just append to root if parent logic gets complex,
-        // but let's try to maintain the existing logic if possible.
-        // Actually, the previous implementation had logic to find parent item based on input.
-        // We'll keep it simple for this refactor and just list them, or use the same logic if we want nesting.
-        // Let's stick to flat list or minimal nesting for now to ensure robustness unless strict hierarchy is required.
-        // The previous code had nesting logic. Let's keep it.
-        else if (std::holds_alternative<app::FaceRef>(opRecord->input)) {
+        } else if (std::holds_alternative<app::FaceRef>(opRecord->input)) {
             const auto& ref = std::get<app::FaceRef>(opRecord->input);
             auto producerIt = bodyProducers.find(ref.bodyId);
             if (producerIt != bodyProducers.end()) {

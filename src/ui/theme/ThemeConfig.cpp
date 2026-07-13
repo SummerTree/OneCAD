@@ -31,6 +31,7 @@ ThemeDefinition makeLightTheme() {
     theme.ui.windowBackground = QColor(243, 243, 243);
     theme.ui.widgetBackground = QColor(243, 243, 243);
     theme.ui.widgetText = QColor(51, 51, 51);
+    theme.ui.textSecondary = QColor(0x6E, 0x6E, 0x73);
     theme.ui.navigatorBackground = QColor(246, 246, 246);
     theme.ui.panelBackground = QColor(246, 246, 246);
     theme.ui.inspectorBackground = QColor(255, 255, 255);
@@ -193,6 +194,7 @@ ThemeDefinition makeDarkTheme() {
     theme.ui.windowBackground = QColor(30, 30, 30);
     theme.ui.widgetBackground = QColor(30, 30, 30);
     theme.ui.widgetText = QColor(204, 204, 204);
+    theme.ui.textSecondary = QColor(0x98, 0x98, 0x9D);
     theme.ui.navigatorBackground = QColor(45, 45, 48);
     theme.ui.panelBackground = QColor(45, 45, 48);
     theme.ui.inspectorBackground = QColor(45, 45, 48);

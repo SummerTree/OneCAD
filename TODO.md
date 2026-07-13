@@ -30,7 +30,7 @@
 - [x] StlExporter (binary + ASCII)
 - [x] ObjExporter (with normals, groups)
 - [x] Export dialog (MeshExportDialog)
-- [x] MeasureTool (edge length, face area, face centroid)
+- [x] ~~MeasureTool~~ (DELETED in H2 — click-to-measure was a dead stub with zero references; selection-based measurement lives in MassPropertiesPanel)
 - [x] MassPropertiesPanel (volume, surface area, CoM, bbox, topology counts)
 
 ## M5: Shell/Fillet Polish + Tool Wiring (P1)
