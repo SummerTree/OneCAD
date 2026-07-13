@@ -422,37 +422,65 @@ inline void ElementMap::rebindBody(const std::string& bodyId, const TopoDS_Shape
             }
         }
 
-        for (auto* entry : unresolved) {
+        // Global best-first assignment: score every viable (entry, candidate)
+        // pair and assign in ascending-score order with deterministic
+        // tie-breaks. Per-entry greedy matching in entry-id order let a stale
+        // entry steal another entry's exact candidate just because its id
+        // sorted first.
+        struct ScoredPair {
+            double value;
+            std::size_t entryIndex;
+            std::size_t candidateIndex;
+        };
+        std::vector<ScoredPair> pairs;
+        for (std::size_t e = 0; e < unresolved.size(); ++e) {
             // Compare as if the stale descriptor moved with the body.
-            ElementDescriptor shifted = entry->descriptor;
+            ElementDescriptor shifted = unresolved[e]->descriptor;
             shifted.center.Translate(bodyCenterDelta);
-
-            double bestScore = std::numeric_limits<double>::max();
-            int bestIndex = -1;
-            for (std::size_t i = 0; i < candidates.size(); ++i) {
-                if (candidates[i].assigned) {
+            for (std::size_t c = 0; c < candidates.size(); ++c) {
+                if (candidates[c].assigned) {
                     continue;
                 }
                 // Hard-skip cross-type candidates: the soft score penalties
                 // allowed a face id to silently migrate onto a face of a
                 // different surface type (or edge curve type) when the real
                 // geometry disappeared.
-                if (candidates[i].descriptor.surfaceType != shifted.surfaceType ||
-                    candidates[i].descriptor.curveType != shifted.curveType) {
+                if (candidates[c].descriptor.surfaceType != shifted.surfaceType ||
+                    candidates[c].descriptor.curveType != shifted.curveType) {
                     continue;
                 }
-                double currentScore = score(shifted, candidates[i].descriptor);
-                if (currentScore < bestScore) {
-                    bestScore = currentScore;
-                    bestIndex = static_cast<int>(i);
+                const double value = score(shifted, candidates[c].descriptor);
+                if (value <= maxAcceptScore) {
+                    pairs.push_back(ScoredPair{value, e, c});
                 }
             }
+        }
+        std::sort(pairs.begin(), pairs.end(),
+                  [&](const ScoredPair& a, const ScoredPair& b) {
+                      if (a.value != b.value) {
+                          return a.value < b.value;
+                      }
+                      // entries_ is unordered: ties must not be resolved by
+                      // hash iteration order.
+                      if (unresolved[a.entryIndex]->id.value != unresolved[b.entryIndex]->id.value) {
+                          return unresolved[a.entryIndex]->id.value < unresolved[b.entryIndex]->id.value;
+                      }
+                      return a.candidateIndex < b.candidateIndex;
+                  });
 
-            if (bestIndex >= 0 && bestScore <= maxAcceptScore) {
-                attachShape(entry->id, candidates[bestIndex].shape, opId);
-                candidates[bestIndex].assigned = true;
-            } else {
-                clearShape(entry->id);
+        std::vector<bool> entryAssigned(unresolved.size(), false);
+        for (const auto& pair : pairs) {
+            if (entryAssigned[pair.entryIndex] || candidates[pair.candidateIndex].assigned) {
+                continue;
+            }
+            attachShape(unresolved[pair.entryIndex]->id,
+                        candidates[pair.candidateIndex].shape, opId);
+            candidates[pair.candidateIndex].assigned = true;
+            entryAssigned[pair.entryIndex] = true;
+        }
+        for (std::size_t e = 0; e < unresolved.size(); ++e) {
+            if (!entryAssigned[e]) {
+                clearShape(unresolved[e]->id);
             }
         }
 
