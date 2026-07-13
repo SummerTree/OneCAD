@@ -6,6 +6,7 @@ add_library(onecad_app STATIC
     commands/AddBodyCommand.cpp
     commands/AddDatumPlaneCommand.cpp
     commands/AddOperationCommand.cpp
+    commands/AddSketchCommand.cpp
     commands/DeleteBodyCommand.cpp
     commands/DeleteSketchCommand.cpp
     commands/EditOperationInputCommand.cpp

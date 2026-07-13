@@ -7,6 +7,7 @@
 #include "../../core/sketch/Sketch.h"
 #include "../../core/sketch/tools/SketchToolManager.h"
 #include "../../app/commands/AddDatumPlaneCommand.h"
+#include "../../app/commands/AddSketchCommand.h"
 #include "../../app/commands/UpdateSketchAttachmentCommand.h"
 #include "../../app/commands/CommandProcessor.h"
 #include "../../app/commands/DeleteBodyCommand.h"
@@ -1564,24 +1565,40 @@ void MainWindow::onCreateDatumPlane() {
     datum.basePlaneId = "XY";
     datum.offset = offset;
 
+    if (!m_commandProcessor) {
+        return;
+    }
+
+    // Datum + its follow-up sketch are one user action: a single transaction so
+    // one Undo removes both (previously the sketch bypassed the undo stack).
+    m_commandProcessor->beginTransaction(tr("Create Datum Plane").toStdString());
+
     auto command = std::make_unique<app::commands::AddDatumPlaneCommand>(m_document.get(), datum);
-    auto* raw = command.get();
-    const bool added = m_commandProcessor
-        ? m_commandProcessor->execute(std::move(command))
-        : command->execute();
-    if (!added) {
+    auto* rawDatum = command.get();
+    if (!m_commandProcessor->execute(std::move(command))) {
+        m_commandProcessor->cancelTransaction();
         m_toolStatus->setText(tr("Failed to create datum plane"));
         return;
     }
 
     // Start a sketch on the new datum (frozen frame).
-    const app::DatumPlane* created = m_document->getDatumPlane(raw->datumId());
+    const app::DatumPlane* created = m_document->getDatumPlane(rawDatum->datumId());
     if (!created || !created->resolvedValid) {
+        m_commandProcessor->endTransaction();
         m_toolStatus->setText(tr("Datum plane created"));
         return;
     }
-    auto sketch = std::make_unique<core::sketch::Sketch>(created->resolvedPlane);
-    m_activeSketchId = m_document->addSketch(std::move(sketch));
+    auto sketchCommand = std::make_unique<app::commands::AddSketchCommand>(
+        m_document.get(), created->resolvedPlane);
+    const std::string newSketchId = sketchCommand->sketchId();
+    if (!m_commandProcessor->execute(std::move(sketchCommand))) {
+        m_commandProcessor->endTransaction();  // keep the datum; sketch add failed
+        m_toolStatus->setText(tr("Datum plane created"));
+        return;
+    }
+    m_commandProcessor->endTransaction();
+
+    m_activeSketchId = newSketchId;
     core::sketch::Sketch* sketchPtr = m_document->getSketch(m_activeSketchId);
     if (!sketchPtr) {
         m_activeSketchId.clear();

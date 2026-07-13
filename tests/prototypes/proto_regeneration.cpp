@@ -9,7 +9,10 @@
  * 4. Topology: extrude→fillet by ElementMap ID→modify extrude→regen→verify
  */
 
+#include "app/commands/AddDatumPlaneCommand.h"
 #include "app/commands/AddOperationCommand.h"
+#include "app/commands/AddSketchCommand.h"
+#include "app/commands/CommandProcessor.h"
 #include "app/commands/EditOperationInputCommand.h"
 #include "app/commands/UpdateOperationParamsCommand.h"
 #include "app/commands/UpdateSketchAttachmentCommand.h"
@@ -1216,6 +1219,60 @@ void testUpdateAttachmentRollsBackOnRegenFailure() {
     std::cout << " PASS\n";
 }
 
+void testDatumPlusSketchTransactionUndoesTogether() {
+    std::cout << "Test: Datum+sketch transaction undoes as one step..." << std::flush;
+
+    app::Document doc;
+    app::commands::CommandProcessor processor;
+
+    app::DatumPlane datum;
+    datum.name = "offset15";
+    datum.kind = app::DatumPlane::Kind::OffsetFromPlane;
+    datum.basePlaneId = "XY";
+    datum.offset = 15.0;
+
+    processor.beginTransaction("Create Datum Plane");
+    auto datumCmd = std::make_unique<app::commands::AddDatumPlaneCommand>(&doc, datum);
+    auto* rawDatum = datumCmd.get();
+    if (!processor.execute(std::move(datumCmd))) {
+        std::fprintf(stderr, "datum command failed\n");
+        std::exit(1);
+    }
+    const app::DatumPlane* created = doc.getDatumPlane(rawDatum->datumId());
+    if (!created || !created->resolvedValid) {
+        std::fprintf(stderr, "datum did not resolve\n");
+        std::exit(1);
+    }
+    auto sketchCmd = std::make_unique<app::commands::AddSketchCommand>(&doc, created->resolvedPlane);
+    const std::string sketchId = sketchCmd->sketchId();
+    if (!processor.execute(std::move(sketchCmd))) {
+        std::fprintf(stderr, "sketch command failed\n");
+        std::exit(1);
+    }
+    processor.endTransaction();
+
+    if (doc.datumPlaneCount() != 1 || !doc.getSketch(sketchId)) {
+        std::fprintf(stderr, "transaction did not create datum + sketch\n");
+        std::exit(1);
+    }
+
+    // ONE undo removes both.
+    processor.undo();
+    if (doc.datumPlaneCount() != 0 || doc.getSketch(sketchId) != nullptr) {
+        std::fprintf(stderr, "single undo did not remove datum + sketch together\n");
+        std::exit(1);
+    }
+
+    // Redo restores both with the same ids.
+    processor.redo();
+    if (doc.datumPlaneCount() != 1 || !doc.getSketch(sketchId)) {
+        std::fprintf(stderr, "redo did not restore datum + sketch\n");
+        std::exit(1);
+    }
+
+    std::cout << " PASS\n";
+}
+
 void testReprofileExtrudeSwapsSketchRegion() {
     std::cout << "Test: Re-profiling an extrude swaps its source region..." << std::flush;
 
@@ -1790,6 +1847,7 @@ int main(int argc, char* argv[]) {
     testTemporalGuardCoversBooleanAndPattern();
     testRevolveAxisCrossingProfileFailsAsOpFailure();
     testDirtyFlagSkipsCleanBranch();
+    testDatumPlusSketchTransactionUndoesTogether();
     testReprofileExtrudeSwapsSketchRegion();
     testReprofileToFaceRefRejected();
     testLinearPatternFuseAndCompound();
