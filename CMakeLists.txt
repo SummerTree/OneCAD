@@ -54,6 +54,14 @@ if(NOT OpenCASCADE_FOUND)
     message(FATAL_ERROR "OpenCASCADE not found. Please install it.")
 endif()
 
+# Drop OCCT's Draw/Test harness libraries (TKDraw, TKQADraw, TKTopTest,
+# TK*DRAW*, TKDCAF, TKOpenGlTest, ...). They are Tcl-based tooling that must
+# never be linked into the app: TKDraw's static Tcl initialization installs an
+# atexit handler that REWRITES the process exit status to 0, silently turning
+# every non-abort test failure (return 1 / std::exit(1)) into a pass.
+list(FILTER OpenCASCADE_LIBRARIES EXCLUDE REGEX "Draw|DRAW|Test|TKDCAF")
+message(STATUS "OpenCASCADE libraries (harness libs filtered): ${OpenCASCADE_LIBRARIES}")
+
 message(STATUS "Qt6 Version: ${Qt6_VERSION}")
 message(STATUS "Eigen3 Version: ${Eigen3_VERSION}")
 message(STATUS "OpenCASCADE Version: ${OpenCASCADE_VERSION}")
