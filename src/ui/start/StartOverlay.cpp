@@ -262,8 +262,10 @@ void StartOverlay::applyTheme() {
     const QString extra = QStringLiteral(
         "QLabel#brandLogo { background: transparent; font-size: 15px; font-weight: 600; color: %1; }"
         "QLabel#versionLabel { background: transparent; font-size: 12px; color: %2; }"
+        // Left padding clears the leading search icon so the placeholder never
+        // renders under it (Qt does not reserve action space once QSS padding is set).
         "QLineEdit#searchEdit { background: %3; color: %1; border: 1px solid %4;"
-        "  border-radius: 8px; padding: 5px 8px; }"
+        "  border-radius: 8px; padding: 5px 8px; padding-left: %8; }"
         "QComboBox#sortCombo { background: %3; color: %1; border: 1px solid %4;"
         "  border-radius: 8px; padding: 4px 8px; }"
         "QToolButton#importTile { background: %5; color: %1; border: 1px dashed %4;"
@@ -275,7 +277,8 @@ void StartOverlay::applyTheme() {
              toQssColor(ui.panelBorder),
              toQssColor(ui.toolButtonBackground),
              toQssColor(ui.toolButtonHoverBackground),
-             toQssColor(theme.button.accent));
+             toQssColor(theme.button.accent),
+             QString::number(theme.metrics.spacingXl + theme.metrics.spacingXs) + "px");
 
     setStyleSheet(styleSheet + extra);
 }
