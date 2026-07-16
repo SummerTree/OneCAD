@@ -6,6 +6,7 @@
 #include <QStringList>
 #include <memory>
 #include <string>
+#include <utility>
 #include <vector>
 
 class QLabel;
@@ -133,6 +134,10 @@ private:
     void setupViewControlButtons();
     void positionViewControlButtons();
     void handleRegenerationFailures();
+    // Attach a themed (two-tone) icon to a menu/shortcut action. Records the
+    // action→icon pair so updateActionIcons() can re-tint on theme/preset change.
+    QAction* registerActionIcon(QAction* action, const QString& iconPath);
+    void updateActionIcons();
     // Create a real editable sketch attached to a planar model face (host-face
     // attachment + projected boundary), WITHOUT entering sketch mode. Returns the
     // new sketch id, or empty on failure. Shared by onNewSketch and the
@@ -195,6 +200,7 @@ private:
     QLabel* m_coordStatus = nullptr;
     QAction* m_undoAction = nullptr;
     QAction* m_redoAction = nullptr;
+    std::vector<std::pair<QAction*, QString>> m_actionIcons;  // action → icon resource
     bool m_hasCachedDof = false;
     int m_cachedDof = 0;
     bool m_cachedOverConstrained = false;

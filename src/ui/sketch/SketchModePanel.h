@@ -79,8 +79,10 @@ private:
     };
 
     void setupUi();
-    QPushButton* createButton(const QString& icon, const QString& name,
+    QPushButton* createButton(const QString& iconPath, const QString& name,
                               const QString& shortcut, const QString& tooltip);
+    // Re-render constraint button icons for the current theme/preset.
+    void updateConstraintIcons();
 
     core::sketch::Sketch* m_sketch = nullptr;
     QVBoxLayout* m_layout = nullptr;

@@ -71,5 +71,23 @@
         <file alias="ic_snap.svg">icons/ic_snap.svg</file>
         <file alias="ic_grid.svg">icons/ic_grid.svg</file>
         <file alias="ic_project_placeholder.svg">icons/ic_project_placeholder.svg</file>
+        <file alias="ic_constraint_horizontal.svg">icons/ic_constraint_horizontal.svg</file>
+        <file alias="ic_constraint_vertical.svg">icons/ic_constraint_vertical.svg</file>
+        <file alias="ic_constraint_parallel.svg">icons/ic_constraint_parallel.svg</file>
+        <file alias="ic_constraint_perpendicular.svg">icons/ic_constraint_perpendicular.svg</file>
+        <file alias="ic_constraint_tangent.svg">icons/ic_constraint_tangent.svg</file>
+        <file alias="ic_constraint_concentric.svg">icons/ic_constraint_concentric.svg</file>
+        <file alias="ic_constraint_coincident.svg">icons/ic_constraint_coincident.svg</file>
+        <file alias="ic_constraint_equal.svg">icons/ic_constraint_equal.svg</file>
+        <file alias="ic_constraint_midpoint.svg">icons/ic_constraint_midpoint.svg</file>
+        <file alias="ic_constraint_symmetric.svg">icons/ic_constraint_symmetric.svg</file>
+        <file alias="ic_constraint_point_on_curve.svg">icons/ic_constraint_point_on_curve.svg</file>
+        <file alias="ic_constraint_distance.svg">icons/ic_constraint_distance.svg</file>
+        <file alias="ic_constraint_distance_h.svg">icons/ic_constraint_distance_h.svg</file>
+        <file alias="ic_constraint_distance_v.svg">icons/ic_constraint_distance_v.svg</file>
+        <file alias="ic_constraint_angle.svg">icons/ic_constraint_angle.svg</file>
+        <file alias="ic_constraint_radius.svg">icons/ic_constraint_radius.svg</file>
+        <file alias="ic_constraint_diameter.svg">icons/ic_constraint_diameter.svg</file>
+        <file alias="ic_constraint_fix.svg">icons/ic_constraint_fix.svg</file>
     </qresource>
 </RCC>

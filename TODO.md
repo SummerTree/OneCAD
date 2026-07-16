@@ -1,5 +1,12 @@
 # OneCAD Maturity Roadmap
 
+Updated: 2026-07-13 · Handoff context: HANDOFF.md · Snapshot: CURRENT_STATE.md
+
+## Now
+
+- [ ] Manual visual pass of everything landed since UI A–D (theme/⌘K/Inspector/Fit-Home/sketch→extrude→edit loop) — most UI work has only headless-smoke coverage
+- [ ] Start **H7** (edit-dialog coverage + pickers + failure recovery) — full spec in `~/.claude/plans/act-as-senior-c-floating-fountain.md` Phase 7
+
 ## M1: Renderer & 3D Interaction Bug Fixes (P0)
 
 - [x] 1a. Transform light directions to view space in BodyRenderer

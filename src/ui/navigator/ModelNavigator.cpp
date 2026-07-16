@@ -1,6 +1,7 @@
 #include "ModelNavigator.h"
 #include "../../app/document/Document.h"
 #include "../theme/ThemeManager.h"
+#include "../components/IconLoader.h"
 #include <QFrame>
 #include <QHeaderView>
 #include <QHBoxLayout>
@@ -416,12 +417,15 @@ void ModelNavigator::showContextMenu(const QPoint& pos, QTreeWidgetItem* item) {
         return;
     }
 
+    const QColor mc = ThemeManager::instance().currentTheme().ui.menuText;
     QMenu menu(this);
-    QAction* renameAction = menu.addAction(tr("Rename"));
-    QAction* isolateAction = menu.addAction(tr("Isolate"));
-    QAction* deleteAction = menu.addAction(tr("Delete"));
+    QAction* renameAction = menu.addAction(IconLoader::load(":/icons/ic_edit.svg", mc, 16), tr("Rename"));
+    QAction* isolateAction = menu.addAction(IconLoader::load(":/icons/ic_isolate.svg", mc, 16), tr("Isolate"));
+    QAction* deleteAction = menu.addAction(IconLoader::load(":/icons/ic_delete.svg", mc, 16), tr("Delete"));
     menu.addSeparator();
-    QAction* visibilityAction = menu.addAction(entry->visible ? tr("Hide") : tr("Show"));
+    QAction* visibilityAction = menu.addAction(
+        IconLoader::load(entry->visible ? ":/icons/ic_eye_off.svg" : ":/icons/ic_eye_on.svg", mc, 16),
+        entry->visible ? tr("Hide") : tr("Show"));
 
     QAction* chosen = menu.exec(pos);
     if (!chosen) {

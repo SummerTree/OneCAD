@@ -1,4 +1,5 @@
 #include "ThemeManager.h"
+#include "../components/IconLoader.h"
 #include <QApplication>
 #include <QStyleHints>
 #include <QGuiApplication>
@@ -66,6 +67,10 @@ void ThemeManager::loadSettings() {
         m_mode = ThemeMode::System;
         m_themeId.clear();
     }
+
+    // Icon preset — two-tone is the shipping default.
+    const bool twoTone = settings.value("icons/twoTone", true).toBool();
+    IconLoader::setStyle(twoTone ? IconLoader::Style::TwoTone : IconLoader::Style::Monochrome);
 }
 
 void ThemeManager::saveSettings() {
@@ -73,6 +78,7 @@ void ThemeManager::saveSettings() {
     
     settings.setValue("theme/mode", m_mode == ThemeMode::Fixed ? "Fixed" : "System");
     settings.setValue("theme/id", m_themeId);
+    settings.setValue("icons/twoTone", IconLoader::style() == IconLoader::Style::TwoTone);
     settings.sync(); // Force immediate write
 }
 
@@ -132,6 +138,22 @@ void ThemeManager::applyTheme() {
     emit themeChanged();
 }
 
+void ThemeManager::setIconTwoTone(bool twoTone) {
+    const auto style = twoTone ? IconLoader::Style::TwoTone : IconLoader::Style::Monochrome;
+    if (IconLoader::style() == style) {
+        return;
+    }
+    IconLoader::setStyle(style);
+    saveSettings();
+    // Re-applying the stylesheet triggers StyleChange on tool buttons (which reload
+    // their icons) and themeChanged() for the tint-based/constraint widgets.
+    applyTheme();
+}
+
+bool ThemeManager::iconTwoTone() const {
+    return IconLoader::style() == IconLoader::Style::TwoTone;
+}
+
 // ============================================================================
 // Internal Implementation
 // ============================================================================
@@ -141,8 +163,11 @@ void ThemeManager::updateAppStyle() {
         // Safety check - should never happen in normal operation
         return;
     }
-    
-    qApp->setStyleSheet(buildStyleSheet(resolveTheme()));
+
+    const ThemeDefinition& theme = resolveTheme();
+    // Feed the two-tone icon accent (theme-adaptive; falls back to the button accent).
+    IconLoader::setAccent(theme.iconAccent.isValid() ? theme.iconAccent : theme.button.accent);
+    qApp->setStyleSheet(buildStyleSheet(theme));
 }
 
 const ThemeDefinition& ThemeManager::resolveTheme() const {
