@@ -74,12 +74,15 @@ void ModelNavigator::setupUi() {
     m_treeWidget = new QTreeWidget(m_panel);
     m_treeWidget->setObjectName("NavigatorTree");
     m_treeWidget->setHeaderHidden(true);
-    m_treeWidget->setIndentation(12);
+    // Flat rows: no indent gutter and no disclosure column. Sections are always
+    // expanded (see setupRoots), so the branch/indent region only ever painted a
+    // stray selection fragment to the left of the row's rounded highlight.
+    m_treeWidget->setIndentation(0);
     m_treeWidget->setAnimated(true);
     m_treeWidget->setExpandsOnDoubleClick(false);
     m_treeWidget->setSelectionMode(QAbstractItemView::SingleSelection);
     m_treeWidget->setSelectionBehavior(QAbstractItemView::SelectRows);
-    m_treeWidget->setRootIsDecorated(true);
+    m_treeWidget->setRootIsDecorated(false);
     m_treeWidget->setUniformRowHeights(true);
     m_treeWidget->setContextMenuPolicy(Qt::CustomContextMenu);
     m_treeWidget->setFocusPolicy(Qt::NoFocus);
