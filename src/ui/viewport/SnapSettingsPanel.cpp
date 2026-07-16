@@ -117,9 +117,11 @@ void SnapSettingsPanel::updateTheme() {
             .arg(c.blue(), 2, 16, QChar('0'));
     };
 
-    const QString bgColor = toHex(theme.ui.sidebarButtonBackground);
-    const QString borderColor = toHex(theme.ui.sidebarButtonBorder);
-    const QString headerColor = toHex(theme.ui.sidebarButtonText);
+    // Popover surface uses the panel tokens; section headers are muted 11px labels
+    // with NO background bar (were dark sidebar-button text on a near-black bar).
+    const QString bgColor = toHex(theme.ui.panelBackground);
+    const QString borderColor = toHex(theme.ui.panelBorder);
+    const QString headerColor = toHex(theme.ui.textSecondary);
 
     setStyleSheet(QString(R"(
         #SnapSettingsPanel {
@@ -128,15 +130,15 @@ void SnapSettingsPanel::updateTheme() {
             border-radius: 12px;
         }
         #SnapSettingsPanel QLabel {
-            font-size: 12px;
+            font-size: 11px;
             color: %3;
             font-weight: 600;
-            letter-spacing: 0.6px;
-            margin-bottom: 6px;
+            letter-spacing: 0.5px;
+            margin-bottom: 4px;
             background-color: transparent;
         }
         #SnapSettingsPanel QFrame {
-            background-color: #333;
+            background-color: %2;
             max-height: 1px;
             border: none;
         }
