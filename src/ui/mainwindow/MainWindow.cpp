@@ -1725,6 +1725,18 @@ void MainWindow::onSketchModeChanged(bool inSketchMode) {
 
         updateDofStatus(activeSketch);
 
+        // Suppress the model-context right panels while sketching. The sketch's name
+        // and constraint status are surfaced by the constraint/sketch panels below;
+        // leaving History/Inspector up would show stale feature info (e.g. "Extrude").
+        if (m_historyPanel) {
+            m_historyPanel->hide();
+        }
+        if (m_propertyInspector) {
+            m_inspectorVisibleBeforeSketch = m_propertyInspector->isVisible();
+            m_propertyInspector->showEmptyState();
+            m_propertyInspector->hide();
+        }
+
         if (m_constraintPanel) {
             m_constraintPanel->setSketch(activeSketch);
             m_constraintPanel->setVisible(true);
@@ -1744,6 +1756,15 @@ void MainWindow::onSketchModeChanged(bool inSketchMode) {
 
         if (m_sketchModePanel) {
             m_sketchModePanel->setVisible(false);
+        }
+
+        // Restore the model-context right panels to their pre-sketch state.
+        if (m_historyPanel) {
+            m_historyPanel->setVisible(!m_historyPanel->isCollapsed());
+        }
+        if (m_propertyInspector && m_inspectorVisibleBeforeSketch) {
+            m_propertyInspector->setVisible(true);
+            m_inspectorVisibleBeforeSketch = false;
         }
     }
 }

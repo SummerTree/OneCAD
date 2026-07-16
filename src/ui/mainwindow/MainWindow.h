@@ -181,6 +181,7 @@ private:
     PropertyInspector* m_propertyInspector = nullptr;
     QAction* m_inspectorAction = nullptr;        // View > Inspector toggle
     bool m_inspectorUserHidden = false;          // respects an explicit user hide
+    bool m_inspectorVisibleBeforeSketch = false; // restore right-panel state on sketch exit
     CommandPalette* m_commandPalette = nullptr;
     QHBoxLayout* m_centralLayout = nullptr;
 
