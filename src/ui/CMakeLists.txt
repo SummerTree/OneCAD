@@ -1,6 +1,7 @@
 # UI module - Qt Widgets UI components
 add_library(onecad_ui STATIC
     components/SidebarToolButton.cpp
+    components/IconLoader.cpp
     components/ToggleSwitch.cpp
     components/ModalOverlay.cpp
     mainwindow/MainWindow.cpp

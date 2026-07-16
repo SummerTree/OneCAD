@@ -1,12 +1,11 @@
 #include "SidebarToolButton.h"
+#include "IconLoader.h"
 
 #include <QPainter>
 #include <QPalette>
 #include <QEvent>
 #include <QFont>
 #include <QSizePolicy>
-#include <QSvgRenderer>
-#include <QFile>
 
 namespace onecad {
 namespace ui {
@@ -80,59 +79,9 @@ QIcon SidebarToolButton::iconFromSymbol(const QString& symbol) const {
 }
 
 QIcon SidebarToolButton::loadSvgIcon(const QString& svgPath) const {
-    // First, try to load the SVG file from Qt resources
-    QFile file(svgPath);
-    if (!file.exists()) {
-        qWarning() << "SVG file does not exist:" << svgPath;
-        return QIcon();
-    }
-    
-    if (!file.open(QIODevice::ReadOnly)) {
-        qWarning() << "Cannot open SVG file:" << svgPath << "Error:" << file.errorString();
-        return QIcon();
-    }
-    
-    // Read SVG data
-    QByteArray svgData = file.readAll();
-    file.close();
-    
-    // Get the button text color from palette for theme integration
-    QColor iconColor = palette().color(QPalette::ButtonText);
-    
-    // Convert to QString for manipulation
-    QString svgString = QString::fromUtf8(svgData);
-    
-    // Replace currentColor with actual color (in case SVG uses it)
-    // This allows the SVG to adapt to the palette
-    svgString.replace("currentColor", iconColor.name());
-    
-    // Also handle white color replacement for legacy SVGs
-    svgString.replace("#FFFFFF", iconColor.name());
-    svgString.replace("#ffffff", iconColor.name());
-    
-    // Convert back to QByteArray
-    QByteArray modifiedSvg = svgString.toUtf8();
-    
-    // Create SVG renderer with modified data
-    QSvgRenderer renderer(modifiedSvg);
-    
-    if (!renderer.isValid()) {
-        qWarning() << "SVG renderer is invalid for:" << svgPath;
-        return QIcon();
-    }
-    
-   // Render to pixmap
-    const int size = 28;
-    QPixmap pixmap(size, size);
-    pixmap.fill(Qt::transparent);
-    
-    QPainter painter(&pixmap);
-    painter.setRenderHint(QPainter::Antialiasing);
-    painter.setRenderHint(QPainter::SmoothPixmapTransform);
-    renderer.render(&painter);
-    painter.end();
-    
-    return QIcon(pixmap);
+    // Primary color comes from the palette (theme-integrated); IconLoader applies
+    // the active mono/two-tone preset + accent. Re-runs on PaletteChange/StyleChange.
+    return IconLoader::load(svgPath, palette().color(QPalette::ButtonText), 28);
 }
 
 } // namespace ui

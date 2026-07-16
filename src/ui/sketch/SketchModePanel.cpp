@@ -1,6 +1,8 @@
 #include "SketchModePanel.h"
 #include "../../core/sketch/Sketch.h"
 #include "../../core/sketch/SketchTypes.h"
+#include "../components/IconLoader.h"
+#include "../theme/ThemeManager.h"
 
 #include <QVBoxLayout>
 #include <QHBoxLayout>
@@ -9,8 +11,38 @@
 #include <QPushButton>
 #include <QFrame>
 #include <QWheelEvent>
+#include <QIcon>
+#include <QPalette>
 
 namespace onecad::ui {
+
+namespace {
+// Constraint type → two-tone SVG icon resource (see resources/icons/DESIGN.md).
+QString constraintIconPath(core::sketch::ConstraintType t) {
+    using CT = core::sketch::ConstraintType;
+    switch (t) {
+        case CT::Horizontal:         return QStringLiteral(":/icons/ic_constraint_horizontal.svg");
+        case CT::Vertical:           return QStringLiteral(":/icons/ic_constraint_vertical.svg");
+        case CT::Parallel:           return QStringLiteral(":/icons/ic_constraint_parallel.svg");
+        case CT::Perpendicular:      return QStringLiteral(":/icons/ic_constraint_perpendicular.svg");
+        case CT::Tangent:            return QStringLiteral(":/icons/ic_constraint_tangent.svg");
+        case CT::Concentric:         return QStringLiteral(":/icons/ic_constraint_concentric.svg");
+        case CT::Coincident:         return QStringLiteral(":/icons/ic_constraint_coincident.svg");
+        case CT::Equal:              return QStringLiteral(":/icons/ic_constraint_equal.svg");
+        case CT::Midpoint:           return QStringLiteral(":/icons/ic_constraint_midpoint.svg");
+        case CT::Symmetric:          return QStringLiteral(":/icons/ic_constraint_symmetric.svg");
+        case CT::OnCurve:            return QStringLiteral(":/icons/ic_constraint_point_on_curve.svg");
+        case CT::Distance:           return QStringLiteral(":/icons/ic_constraint_distance.svg");
+        case CT::HorizontalDistance: return QStringLiteral(":/icons/ic_constraint_distance_h.svg");
+        case CT::VerticalDistance:   return QStringLiteral(":/icons/ic_constraint_distance_v.svg");
+        case CT::Angle:              return QStringLiteral(":/icons/ic_constraint_angle.svg");
+        case CT::Radius:             return QStringLiteral(":/icons/ic_constraint_radius.svg");
+        case CT::Diameter:           return QStringLiteral(":/icons/ic_constraint_diameter.svg");
+        case CT::Fixed:              return QStringLiteral(":/icons/ic_constraint_fix.svg");
+        default:                     return QString();
+    }
+}
+} // namespace
 
 SketchModePanel::SketchModePanel(QWidget* parent)
     : QWidget(parent)
@@ -94,27 +126,28 @@ void SketchModePanel::setupUi() {
 
     using CT = core::sketch::ConstraintType;
 
-    // Define constraint buttons
-    std::vector<std::tuple<CT, QString, QString, QString>> geometricConstraints = {
-        {CT::Horizontal, QString::fromUtf8("\u22A3"), tr("Horizontal"), "H"},
-        {CT::Vertical, QString::fromUtf8("\u22A4"), tr("Vertical"), "V"},
-        {CT::Parallel, QString::fromUtf8("\u2225"), tr("Parallel"), "P"},
-        {CT::Perpendicular, QString::fromUtf8("\u22A5"), tr("Perpendicular"), "N"},
-        {CT::Tangent, QString::fromUtf8("\u25CB"), tr("Tangent"), "T"},
-        {CT::Concentric, QString::fromUtf8("\u25CE"), tr("Concentric"), ""},
-        {CT::Coincident, QString::fromUtf8("\u25CF"), tr("Coincident"), "C"},
-        {CT::Equal, QString::fromUtf8("="), tr("Equal"), "E"},
-        {CT::Midpoint, QString::fromUtf8("\u22C2"), tr("Midpoint"), "M"},
-        {CT::Symmetric, QString::fromUtf8("\u2016"), tr("Symmetric"), ""},
-        {CT::OnCurve, QString::fromUtf8("\u25CB\u2192"), tr("Point On Curve"), ""},
+    // Define constraint buttons (type, name, shortcut). Icons resolve from type.
+    std::vector<std::tuple<CT, QString, QString>> geometricConstraints = {
+        {CT::Horizontal, tr("Horizontal"), "H"},
+        {CT::Vertical, tr("Vertical"), "V"},
+        {CT::Parallel, tr("Parallel"), "P"},
+        {CT::Perpendicular, tr("Perpendicular"), "N"},
+        {CT::Tangent, tr("Tangent"), "T"},
+        {CT::Concentric, tr("Concentric"), ""},
+        {CT::Coincident, tr("Coincident"), "C"},
+        {CT::Equal, tr("Equal"), "E"},
+        {CT::Midpoint, tr("Midpoint"), "M"},
+        {CT::Symmetric, tr("Symmetric"), ""},
+        {CT::OnCurve, tr("Point On Curve"), ""},
     };
 
-    for (const auto& [type, icon, name, shortcut] : geometricConstraints) {
+    for (const auto& [type, name, shortcut] : geometricConstraints) {
         const QString tooltip = shortcut.isEmpty()
             ? tr("Apply %1 constraint").arg(name)
             : tr("Apply %1 constraint [%2]").arg(name, shortcut);
-        QPushButton* btn = createButton(icon, name, shortcut, tooltip);
-        m_constraintButtons.push_back({type, icon, name, shortcut, tooltip, btn});
+        const QString iconPath = constraintIconPath(type);
+        QPushButton* btn = createButton(iconPath, name, shortcut, tooltip);
+        m_constraintButtons.push_back({type, iconPath, name, shortcut, tooltip, btn});
         m_layout->addWidget(btn);
 
         connect(btn, &QPushButton::clicked, this, [this, type]() {
@@ -133,21 +166,22 @@ void SketchModePanel::setupUi() {
     dimLabel->setObjectName("section");
     m_layout->addWidget(dimLabel);
 
-    std::vector<std::tuple<CT, QString, QString, QString>> dimensionalConstraints = {
-        {CT::Distance, QString::fromUtf8("\u2194"), tr("Distance"), "D"},
-        {CT::HorizontalDistance, QString::fromUtf8("\u2194"), tr("H-Distance"), ""},
-        {CT::VerticalDistance, QString::fromUtf8("\u2195"), tr("V-Distance"), ""},
-        {CT::Angle, QString::fromUtf8("\u2220"), tr("Angle"), "A"},
-        {CT::Radius, QString::fromUtf8("R"), tr("Radius"), "R"},
-        {CT::Diameter, QString::fromUtf8("\u2300"), tr("Diameter"), ""},
+    std::vector<std::tuple<CT, QString, QString>> dimensionalConstraints = {
+        {CT::Distance, tr("Distance"), "D"},
+        {CT::HorizontalDistance, tr("H-Distance"), ""},
+        {CT::VerticalDistance, tr("V-Distance"), ""},
+        {CT::Angle, tr("Angle"), "A"},
+        {CT::Radius, tr("Radius"), "R"},
+        {CT::Diameter, tr("Diameter"), ""},
     };
 
-    for (const auto& [type, icon, name, shortcut] : dimensionalConstraints) {
+    for (const auto& [type, name, shortcut] : dimensionalConstraints) {
         QString tooltip = shortcut.isEmpty()
             ? tr("Apply %1 constraint").arg(name)
             : tr("Apply %1 constraint [%2]").arg(name, shortcut);
-        QPushButton* btn = createButton(icon, name, shortcut, tooltip);
-        m_constraintButtons.push_back({type, icon, name, shortcut, tooltip, btn});
+        const QString iconPath = constraintIconPath(type);
+        QPushButton* btn = createButton(iconPath, name, shortcut, tooltip);
+        m_constraintButtons.push_back({type, iconPath, name, shortcut, tooltip, btn});
         m_layout->addWidget(btn);
 
         connect(btn, &QPushButton::clicked, this, [this, type]() {
@@ -162,11 +196,10 @@ void SketchModePanel::setupUi() {
     m_layout->addWidget(sep2);
 
     // Fixed constraint
-    QPushButton* fixBtn = createButton(
-        QString::fromUtf8("\xF0\x9F\x94\x92"), // Lock emoji
-        tr("Lock/Fix"), "F",
-        tr("Fix selected point [F]"));
-    m_constraintButtons.push_back({CT::Fixed, QString::fromUtf8("\xF0\x9F\x94\x92"),
+    const QString fixPath = constraintIconPath(CT::Fixed);
+    QPushButton* fixBtn = createButton(fixPath, tr("Lock/Fix"), "F",
+                                       tr("Fix selected point [F]"));
+    m_constraintButtons.push_back({CT::Fixed, fixPath,
                                    tr("Lock/Fix"), "F", tr("Fix selected point [F]"), fixBtn});
     m_layout->addWidget(fixBtn);
 
@@ -175,11 +208,15 @@ void SketchModePanel::setupUi() {
     });
 
     m_layout->addStretch();
+
+    // Recolor constraint icons when the theme or icon preset changes.
+    connect(&ThemeManager::instance(), &ThemeManager::themeChanged,
+            this, &SketchModePanel::updateConstraintIcons, Qt::UniqueConnection);
 }
 
-QPushButton* SketchModePanel::createButton(const QString& icon, const QString& name,
+QPushButton* SketchModePanel::createButton(const QString& iconPath, const QString& name,
                                             const QString& shortcut, const QString& tooltip) {
-    QString text = QString("%1  %2").arg(icon, name);
+    QString text = name;
     if (!shortcut.isEmpty()) {
         text += QString("  [%1]").arg(shortcut);
     }
@@ -187,7 +224,20 @@ QPushButton* SketchModePanel::createButton(const QString& icon, const QString& n
     QPushButton* btn = new QPushButton(text, this);
     btn->setToolTip(tooltip);
     btn->setCursor(Qt::PointingHandCursor);
+    if (!iconPath.isEmpty()) {
+        btn->setIcon(IconLoader::load(iconPath, palette().color(QPalette::ButtonText), 18));
+        btn->setIconSize(QSize(18, 18));
+    }
     return btn;
+}
+
+void SketchModePanel::updateConstraintIcons() {
+    const QColor primary = palette().color(QPalette::ButtonText);
+    for (auto& cb : m_constraintButtons) {
+        if (cb.button && !cb.icon.isEmpty()) {
+            cb.button->setIcon(IconLoader::load(cb.icon, primary, 18));
+        }
+    }
 }
 
 void SketchModePanel::setSketch(core::sketch::Sketch* sketch) {

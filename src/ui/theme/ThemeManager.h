@@ -98,11 +98,23 @@ public:
 
     /**
      * @brief Force re-application of the current theme.
-     * 
+     *
      * Useful for manual refresh or after widget tree changes.
      * Emits themeChanged() signal.
      */
     void applyTheme();
+
+    /**
+     * @brief Toggle the two-tone vs monochrome icon preset (persisted).
+     *
+     * Re-applies the stylesheet so icon buttons re-render, and emits themeChanged().
+     */
+    void setIconTwoTone(bool twoTone);
+
+    /**
+     * @brief Whether the two-tone icon preset is active.
+     */
+    bool iconTwoTone() const;
 
 signals:
     /**

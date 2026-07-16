@@ -1,5 +1,6 @@
 #include "MainWindow.h"
 #include "../theme/ThemeManager.h"
+#include "../components/IconLoader.h"
 #include "../viewport/Viewport.h"
 #include "../viewport/RenderDebugPanel.h"
 #include "../viewport/SnapSettingsPanel.h"
@@ -415,31 +416,31 @@ void MainWindow::setupMenuBar() {
     
     // File menu
     QMenu* fileMenu = menuBar->addMenu(tr("&File"));
-    fileMenu->addAction(tr("&New"), QKeySequence::New, this, &MainWindow::onNewDocument);
-    fileMenu->addAction(tr("&Open..."), QKeySequence::Open, this, &MainWindow::onOpenDocument);
+    registerActionIcon(fileMenu->addAction(tr("&New"), QKeySequence::New, this, &MainWindow::onNewDocument), ":/icons/paper_pencil.svg");
+    registerActionIcon(fileMenu->addAction(tr("&Open..."), QKeySequence::Open, this, &MainWindow::onOpenDocument), ":/icons/ic_folder.svg");
     fileMenu->addSeparator();
-    fileMenu->addAction(tr("&Save"), QKeySequence::Save, this, &MainWindow::onSaveDocument);
-    fileMenu->addAction(tr("Save &As..."), QKeySequence::SaveAs, this, &MainWindow::onSaveDocumentAs);
+    registerActionIcon(fileMenu->addAction(tr("&Save"), QKeySequence::Save, this, &MainWindow::onSaveDocument), ":/icons/ic_save.svg");
+    registerActionIcon(fileMenu->addAction(tr("Save &As..."), QKeySequence::SaveAs, this, &MainWindow::onSaveDocumentAs), ":/icons/ic_save.svg");
     fileMenu->addSeparator();
-    fileMenu->addAction(tr("&Import STEP..."), this, &MainWindow::onImport);
+    registerActionIcon(fileMenu->addAction(tr("&Import STEP..."), this, &MainWindow::onImport), ":/icons/ic_import.svg");
     fileMenu->addAction(tr("&Export STEP..."), this, &MainWindow::onExportStep);
     fileMenu->addAction(tr("Export &Mesh (STL/OBJ)..."), this, &MainWindow::onExportMesh);
     fileMenu->addSeparator();
     // Route Quit through close() so closeEvent runs the unsaved-changes guard.
-    fileMenu->addAction(tr("&Quit"), QKeySequence::Quit, this, &QWidget::close);
+    registerActionIcon(fileMenu->addAction(tr("&Quit"), QKeySequence::Quit, this, &QWidget::close), ":/icons/ic_close.svg");
     
     // Edit menu
     QMenu* editMenu = menuBar->addMenu(tr("&Edit"));
-    m_undoAction = editMenu->addAction(tr("&Undo"), QKeySequence::Undo, this, [this]() {
+    m_undoAction = registerActionIcon(editMenu->addAction(tr("&Undo"), QKeySequence::Undo, this, [this]() {
         if (m_commandProcessor) {
             m_commandProcessor->undo();
         }
-    });
-    m_redoAction = editMenu->addAction(tr("&Redo"), QKeySequence::Redo, this, [this]() {
+    }), ":/icons/ic_undo.svg");
+    m_redoAction = registerActionIcon(editMenu->addAction(tr("&Redo"), QKeySequence::Redo, this, [this]() {
         if (m_commandProcessor) {
             m_commandProcessor->redo();
         }
-    });
+    }), ":/icons/ic_redo.svg");
     if (m_undoAction) {
         m_undoAction->setEnabled(false);
     }
@@ -462,43 +463,44 @@ void MainWindow::setupMenuBar() {
 
     // Insert menu
     QMenu* insertMenu = menuBar->addMenu(tr("&Insert"));
-    insertMenu->addAction(tr("&Datum Plane..."), this, &MainWindow::onCreateDatumPlane);
-    insertMenu->addAction(tr("&Update Sketch Attachment"), this,
-                          &MainWindow::onUpdateSketchAttachment);
+    registerActionIcon(insertMenu->addAction(tr("&Datum Plane..."), this, &MainWindow::onCreateDatumPlane),
+                       ":/icons/ic_plane.svg");
+    registerActionIcon(insertMenu->addAction(tr("&Update Sketch Attachment"), this,
+                          &MainWindow::onUpdateSketchAttachment), ":/icons/ic_sketch.svg");
 
     // View menu
     QMenu* viewMenu = menuBar->addMenu(tr("&View"));
-    viewMenu->addAction(tr("Zoom to &Fit"), QKeySequence(Qt::Key_0), this, [this]() {
+    registerActionIcon(viewMenu->addAction(tr("Zoom to &Fit"), QKeySequence(Qt::Key_0), this, [this]() {
         m_viewport->fitToView();
-    });
+    }), ":/icons/ic_fit.svg");
     viewMenu->addSeparator();
-    viewMenu->addAction(tr("&Front"), QKeySequence(Qt::Key_1), this, [this]() {
+    registerActionIcon(viewMenu->addAction(tr("&Front"), QKeySequence(Qt::Key_1), this, [this]() {
         m_viewport->setFrontView();
-    });
+    }), ":/icons/ic_view_front.svg");
     viewMenu->addAction(tr("&Back"), QKeySequence(Qt::Key_2), this, [this]() {
         m_viewport->setBackView();
     });
     viewMenu->addAction(tr("&Left"), QKeySequence(Qt::Key_3), this, [this]() {
         m_viewport->setLeftView();
     });
-    viewMenu->addAction(tr("&Right"), QKeySequence(Qt::Key_4), this, [this]() {
+    registerActionIcon(viewMenu->addAction(tr("&Right"), QKeySequence(Qt::Key_4), this, [this]() {
         m_viewport->setRightView();
-    });
-    viewMenu->addAction(tr("&Top"), QKeySequence(Qt::Key_5), this, [this]() {
+    }), ":/icons/ic_view_right.svg");
+    registerActionIcon(viewMenu->addAction(tr("&Top"), QKeySequence(Qt::Key_5), this, [this]() {
         m_viewport->setTopView();
-    });
+    }), ":/icons/ic_view_top.svg");
     viewMenu->addAction(tr("Botto&m"), QKeySequence(Qt::Key_6), this, [this]() {
         m_viewport->setBottomView();
     });
-    viewMenu->addAction(tr("&Isometric"), QKeySequence(Qt::Key_7), this, [this]() {
+    registerActionIcon(viewMenu->addAction(tr("&Isometric"), QKeySequence(Qt::Key_7), this, [this]() {
         m_viewport->setIsometricView();
-    });
+    }), ":/icons/ic_view_iso.svg");
 
     viewMenu->addSeparator();
 
-    viewMenu->addAction(tr("Toggle &Grid"), QKeySequence(Qt::Key_G), this, [this]() {
+    registerActionIcon(viewMenu->addAction(tr("Toggle &Grid"), QKeySequence(Qt::Key_G), this, [this]() {
         m_viewport->toggleGrid();
-    });
+    }), ":/icons/ic_grid.svg");
     viewMenu->addSeparator();
 
     // Theme Submenu
@@ -538,6 +540,15 @@ void MainWindow::setupMenuBar() {
         checkedAction->setChecked(true);
     }
 
+    // Icon preset toggle (two-tone accent vs monochrome).
+    themeMenu->addSeparator();
+    QAction* twoToneAction = themeMenu->addAction(tr("&Two-tone icons"));
+    twoToneAction->setCheckable(true);
+    twoToneAction->setChecked(ThemeManager::instance().iconTwoTone());
+    connect(twoToneAction, &QAction::triggered, this, [](bool checked) {
+        ThemeManager::instance().setIconTwoTone(checked);
+    });
+
     viewMenu->addSeparator();
 
     // Inspector toggle. Checkmark stays in sync with the dock's own visibility
@@ -565,13 +576,13 @@ void MainWindow::setupMenuBar() {
 
     // Help menu
     QMenu* helpMenu = menuBar->addMenu(tr("&Help"));
-    helpMenu->addAction(tr("&About OneCAD"), this, [this]() {
+    registerActionIcon(helpMenu->addAction(tr("&About OneCAD"), this, [this]() {
         QMessageBox::about(this, tr("About OneCAD"),
             tr("<h3>OneCAD</h3>"
                "<p>Version 0.1.0</p>"
                "<p>A beginner-friendly 3D CAD for makers.</p>"
                "<p>Built with Qt 6 + OpenCASCADE + Eigen3</p>"));
-    });
+    }), ":/icons/ic_help.svg");
 
     // Sketch mode keyboard shortcuts (global, work when viewport has focus)
     QAction* lineAction = new QAction(tr("Line Tool"), this);
@@ -582,6 +593,7 @@ void MainWindow::setupMenuBar() {
         }
     });
     addAction(lineAction);
+    registerActionIcon(lineAction, ":/icons/ic_line.svg");
 
     QAction* rectAction = new QAction(tr("Rectangle Tool"), this);
     rectAction->setShortcut(Qt::Key_R);
@@ -591,6 +603,7 @@ void MainWindow::setupMenuBar() {
         }
     });
     addAction(rectAction);
+    registerActionIcon(rectAction, ":/icons/ic_rectangle.svg");
 
     QAction* circleAction = new QAction(tr("Circle Tool"), this);
     circleAction->setShortcut(Qt::Key_C);
@@ -600,6 +613,7 @@ void MainWindow::setupMenuBar() {
         }
     });
     addAction(circleAction);
+    registerActionIcon(circleAction, ":/icons/ic_circle.svg");
 
     QAction* arcAction = new QAction(tr("Arc Tool"), this);
     arcAction->setShortcut(Qt::Key_A);
@@ -609,6 +623,7 @@ void MainWindow::setupMenuBar() {
         }
     });
     addAction(arcAction);
+    registerActionIcon(arcAction, ":/icons/ic_arc.svg");
 
     // NOTE: ellipse creation is intentionally hidden — SketchEllipse is not
     // registered with the PlaneGCS solver, so created ellipses could not be
@@ -623,6 +638,7 @@ void MainWindow::setupMenuBar() {
         }
     });
     addAction(trimAction);
+    registerActionIcon(trimAction, ":/icons/ic_trim.svg");
 
     QAction* mirrorAction = new QAction(tr("Mirror Tool"), this);
     mirrorAction->setShortcut(Qt::Key_M);
@@ -632,6 +648,7 @@ void MainWindow::setupMenuBar() {
         }
     });
     addAction(mirrorAction);
+    registerActionIcon(mirrorAction, ":/icons/ic_mirror.svg");
 
     QAction* escAction = new QAction(tr("Cancel/Exit"), this);
     escAction->setShortcut(Qt::Key_Escape);
@@ -650,6 +667,28 @@ void MainWindow::setupMenuBar() {
         }
     });
     addAction(escAction);
+
+    // Paint two-tone icons onto the registered menu/shortcut actions and keep them
+    // in sync with theme / icon-preset changes.
+    updateActionIcons();
+    connect(&ThemeManager::instance(), &ThemeManager::themeChanged,
+            this, &MainWindow::updateActionIcons, Qt::UniqueConnection);
+}
+
+QAction* MainWindow::registerActionIcon(QAction* action, const QString& iconPath) {
+    if (action && !iconPath.isEmpty()) {
+        m_actionIcons.emplace_back(action, iconPath);
+    }
+    return action;
+}
+
+void MainWindow::updateActionIcons() {
+    const QColor color = ThemeManager::instance().currentTheme().ui.menuText;
+    for (const auto& [action, path] : m_actionIcons) {
+        if (action) {
+            action->setIcon(IconLoader::load(path, color, 18));
+        }
+    }
 }
 
 void MainWindow::registerMenuActions() {

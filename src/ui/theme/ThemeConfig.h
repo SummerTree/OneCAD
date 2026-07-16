@@ -242,6 +242,9 @@ struct ThemeDefinition {
     ThemeViewCubeColors viewCube;
     ThemeViewportColors viewport;
     ThemeSketchColors sketch;
+    // Accent color for two-tone icons (the operation-verb element). Invalid by
+    // default → IconLoader falls back to button.accent. See resources/icons/DESIGN.md.
+    QColor iconAccent;
 };
 
 struct ThemeCatalog {

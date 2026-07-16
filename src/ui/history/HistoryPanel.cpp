@@ -9,6 +9,7 @@
 #include "../../app/history/DependencyGraph.h"
 #include "../viewport/Viewport.h"
 #include "../theme/ThemeManager.h"
+#include "../components/IconLoader.h"
 
 #include <QTreeWidget>
 #include <QTreeWidgetItem>
@@ -521,33 +522,35 @@ void HistoryPanel::showContextMenu(const QPoint& pos, QTreeWidgetItem* item) {
     if (!opRecord) return;
 
     QMenu menu;
+    const QColor mc = ThemeManager::instance().currentTheme().ui.menuText;
 
     if (isEditableType(opRecord->type) && !isReplayOnly(opId) && !isDirty(opId)) {
-        QAction* editAction = menu.addAction(tr("Edit Parameters..."));
+        QAction* editAction = menu.addAction(IconLoader::load(":/icons/ic_edit.svg", mc, 16), tr("Edit Parameters..."));
         connect(editAction, &QAction::triggered, this, [this, opId]() {
             showEditDialog(opId);
         });
     } else if (isDirty(opId)) {
-        QAction* pendingAction = menu.addAction(tr("Edit Parameters (Pending Regeneration)"));
+        QAction* pendingAction = menu.addAction(IconLoader::load(":/icons/ic_edit.svg", mc, 16), tr("Edit Parameters (Pending Regeneration)"));
         pendingAction->setEnabled(false);
     }
 
     menu.addSeparator();
 
-    QAction* rollbackAction = menu.addAction(tr("Rollback to Here"));
+    QAction* rollbackAction = menu.addAction(IconLoader::load(":/icons/ic_undo.svg", mc, 16), tr("Rollback to Here"));
     connect(rollbackAction, &QAction::triggered, this, [this, opId]() {
         emit rollbackRequested(QString::fromStdString(opId));
     });
 
     QString suppressText = suppressed ? tr("Unsuppress") : tr("Suppress");
-    QAction* suppressAction = menu.addAction(suppressText);
+    QAction* suppressAction = menu.addAction(
+        IconLoader::load(suppressed ? ":/icons/ic_eye_on.svg" : ":/icons/ic_eye_off.svg", mc, 16), suppressText);
     connect(suppressAction, &QAction::triggered, this, [this, opId, suppressed]() {
         emit suppressRequested(QString::fromStdString(opId), !suppressed);
     });
 
     menu.addSeparator();
 
-    QAction* deleteAction = menu.addAction(tr("Delete"));
+    QAction* deleteAction = menu.addAction(IconLoader::load(":/icons/ic_delete.svg", mc, 16), tr("Delete"));
     deleteAction->setShortcut(QKeySequence::Delete);
     connect(deleteAction, &QAction::triggered, this, [this, opId]() {
         emit deleteRequested(QString::fromStdString(opId));
