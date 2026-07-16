@@ -1482,7 +1482,6 @@ void MainWindow::onNewSketch() {
             core::sketch::Sketch* sketchPtr = m_document->getSketch(m_activeSketchId);
             if (sketchPtr) {
                 m_viewport->enterSketchMode(sketchPtr);
-                m_toolStatus->setText(tr("Sketch Mode - Selected Face"));
                 m_toolbar->setContext(ContextToolbar::Context::Sketch);
                 qCInfo(logMainWindow) << "onNewSketch:entered-face-sketch-mode"
                                       << "sketchId=" << QString::fromStdString(m_activeSketchId);
@@ -1571,7 +1570,6 @@ void MainWindow::onSketchPlanePicked(int planeIndex) {
     }
 
     m_viewport->enterSketchMode(sketchPtr);
-    m_toolStatus->setText(tr("Sketch Mode - %1 Plane").arg(planeName));
     m_toolbar->setContext(ContextToolbar::Context::Sketch);
     qCInfo(logMainWindow) << "onSketchPlanePicked:entered-sketch-mode"
                           << "plane=" << planeName
@@ -1643,7 +1641,6 @@ void MainWindow::onCreateDatumPlane() {
     m_viewport->setReferenceSketch(QString::fromStdString(m_activeSketchId));
     m_viewport->enterSketchMode(sketchPtr);
     m_toolbar->setContext(ContextToolbar::Context::Sketch);
-    m_toolStatus->setText(tr("Sketch Mode - Datum Plane"));
 }
 
 void MainWindow::onUpdateSketchAttachment() {
@@ -1690,8 +1687,6 @@ void MainWindow::openSketchForEdit(const QString& sketchId) {
         return;
     }
     m_viewport->enterSketchMode(sketchPtr);
-    QString sketchName = QString::fromStdString(m_document->getSketchName(id));
-    m_toolStatus->setText(tr("Sketch Mode - %1").arg(sketchName));
     m_toolbar->setContext(ContextToolbar::Context::Sketch);
 }
 
@@ -1718,6 +1713,12 @@ void MainWindow::onSketchModeChanged(bool inSketchMode) {
     }
 
     if (inSketchMode && activeSketch) {
+        // Single source of truth for the sketch-mode label: always the sketch that
+        // is actually being edited. Creation paths no longer set provisional text.
+        m_toolStatus->setText(
+            tr("Sketch Mode - %1")
+                .arg(QString::fromStdString(m_document->getSketchName(m_activeSketchId))));
+
         if (m_viewport && m_snapSettingsPanel) {
             m_viewport->updateSnapSettings(m_snapSettingsPanel->settings());
         }
